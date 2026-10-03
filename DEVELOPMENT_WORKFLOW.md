@@ -99,39 +99,42 @@ Database/runtime dependency:
 - If persistent DB storage is later introduced, update ARCHITECTURE.md first when it changes durable ownership
 
 Development start command:
-- TBD — establish and record during PLAN Phase 0
+- pnpm tauri dev
 
 Development stop command:
-- TBD — establish and record during PLAN Phase 0
+- Ctrl+C or kill Tauri dev process
 
 Development restart command:
-- TBD — establish and record during PLAN Phase 0
+- Terminate process and rerun `pnpm tauri dev`
 
 Frontend dev command:
-- TBD — establish from the selected Phase 0 toolchain
+- pnpm dev
 
 Backend dev command:
 - N/A as a separate service unless implementation later introduces one
 
 Targeted test command:
-- TBD — establish during Phase 0
+- Frontend: pnpm test
+- Native core: cargo test --manifest-path src-tauri/Cargo.toml
 
 Typecheck command:
-- TBD — establish during Phase 0
+- pnpm run typecheck
 
 Lint command:
-- TBD — establish during Phase 0
+- cargo clippy --manifest-path src-tauri/Cargo.toml
 
 Build command:
-- TBD — establish during Phase 0
+- Frontend: pnpm run build
+- Native: cargo build --manifest-path src-tauri/Cargo.toml
+- Full desktop app: pnpm tauri build
 
 Full test command:
-- TBD — establish during Phase 0
+- pnpm run test:all
 
 Health check:
-- Desktop runtime readiness, not an assumed HTTP endpoint
+- Desktop runtime readiness via typed Tauri command `app_health_check`
 - App window loads
-- Rust core initializes
+- Rust core initializes and returns `HealthStatus`
 - required local media capability is available when the current phase depends on it
 - no fatal startup error
 - latest code/revision is active
