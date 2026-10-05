@@ -2,19 +2,27 @@
 //! Architecture Invariant: Automation is a client of the editor, NOT UI mouse/keyboard simulation
 //! and NOT a second project reducer. It routes exclusively through the Command Service.
 
+pub mod mcp;
+
 use crate::modules::command::{
     CommandEnvelope, CommandError, CommandReceipt, CommandService, DiffReport,
 };
 use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{MediaKind, Project, TrackKind};
 use crate::modules::export::{ExportEngine, ExportError, ExportProfile, ExportReport};
+use crate::modules::job::{JobKind, JobManager, JobStatus};
 use crate::modules::persistence::{load_project, save_project_atomic};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutomationError {
+    #[error("No project is currently open in the session")]
+    ProjectNotOpen,
+
     #[error("Failed to load project: {0}")]
     ProjectLoad(String),
 
@@ -24,11 +32,68 @@ pub enum AutomationError {
     #[error("Export render error: {0}")]
     Export(String),
 
+    #[error("Job not found: {0}")]
+    JobNotFound(String),
+
     #[error("Serialization error: {0}")]
     Serialization(String),
 
     #[error("CLI argument error: {0}")]
     Cli(String),
+}
+
+impl AutomationError {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            AutomationError::ProjectNotOpen => "PROJECT_NOT_OPEN",
+            AutomationError::ProjectLoad(_) => "PROJECT_LOAD_FAILED",
+            AutomationError::Command(CommandError::StaleRevision { .. }) => "STALE_REVISION",
+            AutomationError::Command(CommandError::IdempotencyCollision { .. }) => {
+                "IDEMPOTENCY_COLLISION"
+            }
+            AutomationError::Command(CommandError::SchemaVersionMismatch { .. }) => {
+                "SCHEMA_VERSION_MISMATCH"
+            }
+            AutomationError::Command(CommandError::ProjectIdMismatch { .. }) => {
+                "PROJECT_ID_MISMATCH"
+            }
+            AutomationError::Command(CommandError::UnsupportedTransition { .. }) => {
+                "UNSUPPORTED_TRANSITION"
+            }
+            AutomationError::Command(CommandError::OperationValidationFailed { .. }) => {
+                "OPERATION_VALIDATION_FAILED"
+            }
+            AutomationError::Command(CommandError::OperationAlreadyCommitted { .. }) => {
+                "OPERATION_ALREADY_COMMITTED"
+            }
+            AutomationError::Command(CommandError::ClientRegistryFull { .. }) => {
+                "CLIENT_REGISTRY_FULL"
+            }
+            AutomationError::Command(CommandError::ClientEpochExpired { .. }) => {
+                "CLIENT_EPOCH_EXPIRED"
+            }
+            AutomationError::Command(CommandError::SequenceGapDetected { .. }) => {
+                "SEQUENCE_GAP_DETECTED"
+            }
+            AutomationError::Command(CommandError::LegacyReceiptUnverifiable { .. }) => {
+                "LEGACY_RECEIPT_UNVERIFIABLE"
+            }
+            AutomationError::Command(CommandError::InsufficientTransitionHandle { .. }) => {
+                "INSUFFICIENT_TRANSITION_HANDLE"
+            }
+            AutomationError::Command(CommandError::TransitionHandleUnverifiable { .. }) => {
+                "TRANSITION_HANDLE_UNVERIFIABLE"
+            }
+            AutomationError::Command(CommandError::UnsupportedTransitionMedia { .. }) => {
+                "UNSUPPORTED_TRANSITION_MEDIA"
+            }
+            AutomationError::Command(_) => "COMMAND_FAILED",
+            AutomationError::Export(_) => "EXPORT_FAILED",
+            AutomationError::JobNotFound(_) => "JOB_NOT_FOUND",
+            AutomationError::Serialization(_) => "SERIALIZATION_ERROR",
+            AutomationError::Cli(_) => "CLI_ERROR",
+        }
+    }
 }
 
 impl From<ExportError> for AutomationError {
@@ -38,15 +103,19 @@ impl From<ExportError> for AutomationError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TrackSummary {
     pub track_id: String,
     pub name: String,
     pub kind: TrackKind,
     pub muted: bool,
     pub items_count: usize,
+    #[serde(default)]
+    pub transitions_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AssetSummary {
     pub asset_id: String,
     pub name: String,
@@ -57,6 +126,7 @@ pub struct AssetSummary {
 
 /// Structured inspection report returned by the Inspect API
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectInspectReport {
     pub project_id: String,
     pub name: String,
@@ -68,52 +138,534 @@ pub struct ProjectInspectReport {
     pub tracks_count: usize,
     pub clips_count: usize,
     pub assets_count: usize,
+    #[serde(default)]
+    pub transitions_count: usize,
     pub tracks: Vec<TrackSummary>,
     pub assets: Vec<AssetSummary>,
     pub supported_operations: Vec<String>,
+    pub supported_transitions: Vec<String>,
+    #[serde(default = "default_schema_version_3")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub supported_keyframe_properties: Vec<String>,
+    #[serde(default)]
+    pub supported_keyframe_easings: Vec<String>,
+    #[serde(default = "default_custom_cubic_bounds")]
+    pub custom_cubic_bounds: (f32, f32),
+}
+
+fn default_schema_version_3() -> u32 {
+    crate::modules::domain::CURRENT_SCHEMA_VERSION
+}
+
+fn default_custom_cubic_bounds() -> (f32, f32) {
+    (0.0, 1.0)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilitiesReport {
+    pub supported_operations: Vec<String>,
+    pub supported_transitions: Vec<String>,
+    pub supported_export_codecs: Vec<String>,
+    pub protocol_version: u32,
+    #[serde(default = "default_schema_version_3")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub supported_keyframe_properties: Vec<String>,
+    #[serde(default)]
+    pub supported_keyframe_easings: Vec<String>,
+    #[serde(default = "default_custom_cubic_bounds")]
+    pub custom_cubic_bounds: (f32, f32),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStartReceipt {
+    pub job_id: String,
+    pub status: String,
+    pub output_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportJobStatusReport {
+    pub job_id: String,
+    pub status: String, // "queued", "running", "completed", "failed", "cancelled"
+    pub progress: f32,
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Protocol Framing DTOs (JSONL)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolSuccessResponse<T> {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub ok: bool,
+    pub result: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolErrorDetail {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolErrorResponse {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub ok: bool,
+    pub error: ProtocolErrorDetail,
+}
+
+// ---------------------------------------------------------------------------
+// Headless Application Session
+// ---------------------------------------------------------------------------
+
+pub struct AutomationSession {
+    pub service: Option<CommandService>,
+    pub jobs: Arc<Mutex<JobManager>>,
+    pub current_project_path: Option<PathBuf>,
+}
+
+impl Default for AutomationSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AutomationSession {
+    pub fn new() -> Self {
+        Self {
+            service: None,
+            jobs: Arc::new(Mutex::new(JobManager::new(4))),
+            current_project_path: None,
+        }
+    }
+
+    pub fn open_project(&mut self, path: &Path) -> Result<ProjectInspectReport, AutomationError> {
+        let project =
+            load_project(path).map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+        let report = AutomationAdapter::inspect_project(&project);
+        self.service = Some(CommandService::new(project));
+        self.current_project_path = Some(path.to_path_buf());
+        Ok(report)
+    }
+
+    pub fn close_project(&mut self) -> Result<(), AutomationError> {
+        self.service = None;
+        self.current_project_path = None;
+        Ok(())
+    }
+
+    pub fn save_project(&mut self, target_path: Option<&Path>) -> Result<String, AutomationError> {
+        let service = self
+            .service
+            .as_ref()
+            .ok_or(AutomationError::ProjectNotOpen)?;
+        let path = match target_path {
+            Some(p) => p.to_path_buf(),
+            None => self.current_project_path.clone().ok_or_else(|| {
+                AutomationError::Cli("No path specified for project save".to_string())
+            })?,
+        };
+        save_project_atomic(service.project(), &path)
+            .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+        self.current_project_path = Some(path.clone());
+        Ok(path.to_string_lossy().to_string())
+    }
+
+    pub fn inspect(&self) -> Result<ProjectInspectReport, AutomationError> {
+        let service = self
+            .service
+            .as_ref()
+            .ok_or(AutomationError::ProjectNotOpen)?;
+        Ok(AutomationAdapter::inspect_project(service.project()))
+    }
+
+    pub fn capabilities(&self) -> Result<CapabilitiesReport, AutomationError> {
+        Ok(CapabilitiesReport {
+            supported_operations: AutomationAdapter::supported_operations(),
+            supported_transitions: AutomationAdapter::supported_transitions(),
+            supported_export_codecs: vec![
+                "libx264".to_string(),
+                "h264_nvenc".to_string(),
+                "h264_qsv".to_string(),
+                "h264_amf".to_string(),
+            ],
+            protocol_version: 1,
+            schema_version: crate::modules::domain::CURRENT_SCHEMA_VERSION,
+            supported_keyframe_properties: AutomationAdapter::supported_keyframe_properties(),
+            supported_keyframe_easings: AutomationAdapter::supported_keyframe_easings(),
+            custom_cubic_bounds: (0.0, 1.0),
+        })
+    }
+
+    pub fn dry_run(&self, envelope: &CommandEnvelope) -> Result<DiffReport, AutomationError> {
+        let service = self
+            .service
+            .as_ref()
+            .ok_or(AutomationError::ProjectNotOpen)?;
+        let diff = service.dry_run(envelope)?;
+        Ok(diff)
+    }
+
+    pub fn apply(
+        &mut self,
+        mut envelope: CommandEnvelope,
+        save_after: bool,
+    ) -> Result<CommandReceipt, AutomationError> {
+        let service = self
+            .service
+            .as_mut()
+            .ok_or(AutomationError::ProjectNotOpen)?;
+
+        // Stdio session automatically injects client_id: "session" (ADR-001 v3 Section 6.2)
+        if envelope.client_id.is_none() {
+            let cur_epoch = service.project().client_registry.current_epoch;
+            let next_seq = service
+                .project()
+                .client_registry
+                .clients
+                .get("session")
+                .map(|c| c.highest_sequence + 1)
+                .unwrap_or(1);
+            envelope.client_id = Some("session".to_string());
+            envelope.client_epoch = Some(cur_epoch);
+            envelope.sequence_number = Some(next_seq);
+        }
+
+        let receipt = service.execute(envelope)?;
+        if save_after {
+            if let Some(ref path) = self.current_project_path {
+                save_project_atomic(service.project(), path)
+                    .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+            }
+        }
+        Ok(receipt)
+    }
+
+    pub fn export_start(
+        &mut self,
+        output_path: &Path,
+        profile: Option<ExportProfile>,
+    ) -> Result<ExportStartReceipt, AutomationError> {
+        let service = self
+            .service
+            .as_ref()
+            .ok_or(AutomationError::ProjectNotOpen)?;
+        let snapshot = service.project().clone(); // Snapshot isolation
+
+        let job_id = format!("job_export_{}", uuid::Uuid::new_v4().simple());
+        let dedupe_key = format!("export:{}:{}", snapshot.project_id, snapshot.revision);
+
+        let (jid, _) = {
+            let mut jm = self.jobs.lock().unwrap();
+            jm.submit_job(job_id.clone(), JobKind::Export, dedupe_key, 100)
+        };
+
+        let cancel_flag = {
+            let mut jm = self.jobs.lock().unwrap();
+            jm.start_job(&jid).map_err(AutomationError::Export)?
+        };
+
+        let target_path = output_path.to_path_buf();
+        let prof = profile.unwrap_or_default();
+        let jobs_arc = Arc::clone(&self.jobs);
+        let active_jid = jid.clone();
+
+        std::thread::spawn(move || {
+            let render_res =
+                ExportEngine::render_snapshot(&snapshot, &target_path, &prof, Some(cancel_flag));
+
+            if let Ok(mut jm) = jobs_arc.lock() {
+                match render_res {
+                    Ok(_) => jm.mark_completed(&active_jid),
+                    Err(ExportError::Cancelled) => {
+                        // Already handled by cancellation
+                    }
+                    Err(e) => jm.mark_failed(&active_jid, e.to_string()),
+                }
+            }
+        });
+
+        Ok(ExportStartReceipt {
+            job_id: jid,
+            status: "running".to_string(),
+            output_path: output_path.to_string_lossy().to_string(),
+        })
+    }
+
+    pub fn export_status(&self, job_id: &str) -> Result<ExportJobStatusReport, AutomationError> {
+        let jm = self.jobs.lock().unwrap();
+        let job = jm
+            .get_job(job_id)
+            .ok_or_else(|| AutomationError::JobNotFound(job_id.to_string()))?;
+        let (status_str, err_str) = match &job.status {
+            JobStatus::Queued => ("queued".to_string(), None),
+            JobStatus::Running => ("running".to_string(), None),
+            JobStatus::Completed => ("completed".to_string(), None),
+            JobStatus::Cancelled => ("cancelled".to_string(), None),
+            JobStatus::Failed(reason) => ("failed".to_string(), Some(reason.clone())),
+        };
+        Ok(ExportJobStatusReport {
+            job_id: job.id.clone(),
+            status: status_str,
+            progress: job.progress,
+            error: err_str,
+        })
+    }
+
+    pub fn export_cancel(&mut self, job_id: &str) -> Result<bool, AutomationError> {
+        let mut jm = self.jobs.lock().unwrap();
+        Ok(jm.cancel_job(job_id))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Method Dispatcher & Stdio Loop
+// ---------------------------------------------------------------------------
+
+pub fn dispatch_method(
+    session: &mut AutomationSession,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, AutomationError> {
+    match method {
+        "session.open" => {
+            let path_str = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                AutomationError::Cli("Missing 'path' parameter in session.open".to_string())
+            })?;
+            let report = session.open_project(Path::new(path_str))?;
+            serde_json::to_value(report).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "session.close" => {
+            session.close_project()?;
+            Ok(serde_json::json!({ "closed": true }))
+        }
+        "project.inspect" => {
+            let report = session.inspect()?;
+            serde_json::to_value(report).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "project.capabilities" => {
+            let caps = session.capabilities()?;
+            serde_json::to_value(caps).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "project.save" => {
+            let path_opt = params.get("path").and_then(|v| v.as_str()).map(Path::new);
+            let saved = session.save_project(path_opt)?;
+            Ok(serde_json::json!({ "savedPath": saved }))
+        }
+        "command.dryRun" => {
+            let envelope: CommandEnvelope = if params.get("envelope").is_some() {
+                serde_json::from_value(params.get("envelope").unwrap().clone())
+            } else {
+                serde_json::from_value(params)
+            }
+            .map_err(|e| AutomationError::Serialization(format!("Invalid CommandEnvelope: {e}")))?;
+
+            let diff = session.dry_run(&envelope)?;
+            serde_json::to_value(diff).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "command.apply" => {
+            let (envelope, save_after): (CommandEnvelope, bool) =
+                if params.get("envelope").is_some() {
+                    let env = serde_json::from_value(params.get("envelope").unwrap().clone())
+                        .map_err(|e| {
+                            AutomationError::Serialization(format!("Invalid CommandEnvelope: {e}"))
+                        })?;
+                    let save = params
+                        .get("saveAfter")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    (env, save)
+                } else {
+                    let env = serde_json::from_value(params).map_err(|e| {
+                        AutomationError::Serialization(format!("Invalid CommandEnvelope: {e}"))
+                    })?;
+                    (env, false)
+                };
+
+            let receipt = session.apply(envelope, save_after)?;
+            serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "export.start" => {
+            let output_path = params
+                .get("outputPath")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AutomationError::Cli(
+                        "Missing 'outputPath' parameter in export.start".to_string(),
+                    )
+                })?;
+            let profile: Option<ExportProfile> = params
+                .get("profile")
+                .and_then(|p| serde_json::from_value(p.clone()).ok());
+            let receipt = session.export_start(Path::new(output_path), profile)?;
+            serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "export.status" => {
+            let job_id = params
+                .get("jobId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AutomationError::Cli("Missing 'jobId' parameter in export.status".to_string())
+                })?;
+            let status = session.export_status(job_id)?;
+            serde_json::to_value(status).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "export.cancel" => {
+            let job_id = params
+                .get("jobId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AutomationError::Cli("Missing 'jobId' parameter in export.cancel".to_string())
+                })?;
+            let cancelled = session.export_cancel(job_id)?;
+            Ok(serde_json::json!({ "cancelled": cancelled }))
+        }
+        other => Err(AutomationError::Cli(format!("Unknown method '{other}'"))),
+    }
+}
+
+pub fn run_stdio_session<R: BufRead, W: Write, E: Write>(
+    reader: R,
+    mut writer: W,
+    mut err_writer: E,
+) {
+    let mut session = AutomationSession::new();
+
+    for line_result in reader.lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = writeln!(err_writer, "[tinixcut:session] Read error: {e}");
+                break;
+            }
+        };
+
+        let trimmed = line.trim().trim_start_matches('\u{feff}');
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let req: ProtocolRequest = match serde_json::from_str(trimmed) {
+            Ok(r) => r,
+            Err(e) => {
+                let err_resp = ProtocolErrorResponse {
+                    protocol_version: 1,
+                    request_id: "unknown".to_string(),
+                    ok: false,
+                    error: ProtocolErrorDetail {
+                        code: "INVALID_JSON".to_string(),
+                        message: format!("Malformed JSON request line: {e}"),
+                        details: None,
+                    },
+                };
+                if let Ok(json) = serde_json::to_string(&err_resp) {
+                    let _ = writeln!(writer, "{json}");
+                    let _ = writer.flush();
+                }
+                continue;
+            }
+        };
+
+        if req.protocol_version != 1 {
+            let err_resp = ProtocolErrorResponse {
+                protocol_version: 1,
+                request_id: req.request_id,
+                ok: false,
+                error: ProtocolErrorDetail {
+                    code: "UNSUPPORTED_PROTOCOL_VERSION".to_string(),
+                    message: format!(
+                        "Protocol version {} is not supported (expected 1)",
+                        req.protocol_version
+                    ),
+                    details: None,
+                },
+            };
+            if let Ok(json) = serde_json::to_string(&err_resp) {
+                let _ = writeln!(writer, "{json}");
+                let _ = writer.flush();
+            }
+            continue;
+        }
+
+        let req_id = req.request_id.clone();
+        let method = req.method.as_str();
+
+        if method == "session.shutdown" {
+            let success_resp = ProtocolSuccessResponse {
+                protocol_version: 1,
+                request_id: req_id,
+                ok: true,
+                result: serde_json::json!({ "shutdown": true }),
+            };
+            if let Ok(json) = serde_json::to_string(&success_resp) {
+                let _ = writeln!(writer, "{json}");
+                let _ = writer.flush();
+            }
+            break;
+        }
+
+        let dispatch_result = dispatch_method(&mut session, method, req.params);
+        match dispatch_result {
+            Ok(result_value) => {
+                let success_resp = ProtocolSuccessResponse {
+                    protocol_version: 1,
+                    request_id: req_id,
+                    ok: true,
+                    result: result_value,
+                };
+                if let Ok(json) = serde_json::to_string(&success_resp) {
+                    let _ = writeln!(writer, "{json}");
+                    let _ = writer.flush();
+                }
+            }
+            Err(err) => {
+                let err_resp = ProtocolErrorResponse {
+                    protocol_version: 1,
+                    request_id: req_id,
+                    ok: false,
+                    error: ProtocolErrorDetail {
+                        code: err.error_code().to_string(),
+                        message: err.to_string(),
+                        details: None,
+                    },
+                };
+                if let Ok(json) = serde_json::to_string(&err_resp) {
+                    let _ = writeln!(writer, "{json}");
+                    let _ = writer.flush();
+                }
+            }
+        }
+    }
 }
 
 pub struct AutomationAdapter;
 
 impl AutomationAdapter {
-    /// Inspect an in-memory Project
-    pub fn inspect_project(project: &Project) -> ProjectInspectReport {
-        let mut total_duration = RationalTime::zero(project.settings.frame_rate);
-        let mut clips_count = 0;
-
-        let tracks = project
-            .tracks
-            .iter()
-            .map(|t| {
-                clips_count += t.items.len();
-                for item in &t.items {
-                    if item.timeline_range.end().value > total_duration.value {
-                        total_duration = item.timeline_range.end();
-                    }
-                }
-                TrackSummary {
-                    track_id: t.track_id.clone(),
-                    name: t.name.clone(),
-                    kind: t.kind,
-                    muted: t.muted,
-                    items_count: t.items.len(),
-                }
-            })
-            .collect();
-
-        let assets = project
-            .assets
-            .iter()
-            .map(|a| AssetSummary {
-                asset_id: a.asset_id.clone(),
-                name: a.name.clone(),
-                path: a.path.clone(),
-                media_kind: a.media_kind,
-                duration: a.duration,
-            })
-            .collect();
-
-        let supported_operations = vec![
+    pub fn supported_operations() -> Vec<String> {
+        vec![
             "TrackCreate".to_string(),
             "TrackDelete".to_string(),
             "TrackReorder".to_string(),
@@ -133,8 +685,85 @@ impl AutomationAdapter {
             "ClipTransitionSet".to_string(),
             "ClipKeyframeAdd".to_string(),
             "ClipKeyframeRemove".to_string(),
+            "ClipKeyframeMove".to_string(),
+            "ClipKeyframeEasingSet".to_string(),
             "AssetImport".to_string(),
-        ];
+            "CutTransitionCreate".to_string(),
+            "CutTransitionUpdateDuration".to_string(),
+            "CutTransitionRemove".to_string(),
+        ]
+    }
+
+    pub fn supported_transitions() -> Vec<String> {
+        vec![
+            "FadeIn".to_string(),
+            "FadeOut".to_string(),
+            "FadeBlack".to_string(),
+            "CrossDissolve".to_string(),
+        ]
+    }
+
+    pub fn supported_keyframe_properties() -> Vec<String> {
+        vec![
+            "Opacity".to_string(),
+            "PositionX".to_string(),
+            "PositionY".to_string(),
+            "ScaleX".to_string(),
+            "ScaleY".to_string(),
+            "Rotation".to_string(),
+            "Volume".to_string(),
+        ]
+    }
+
+    pub fn supported_keyframe_easings() -> Vec<String> {
+        vec![
+            "Linear".to_string(),
+            "EaseIn".to_string(),
+            "EaseOut".to_string(),
+            "EaseInOut".to_string(),
+            "CubicBezier".to_string(),
+        ]
+    }
+
+    /// Inspect an in-memory Project
+    pub fn inspect_project(project: &Project) -> ProjectInspectReport {
+        let mut total_duration = RationalTime::zero(project.settings.frame_rate);
+        let mut clips_count = 0;
+        let mut transitions_count = 0;
+
+        let tracks = project
+            .tracks
+            .iter()
+            .map(|t| {
+                clips_count += t.items.len();
+                transitions_count += t.transitions.len();
+                for item in &t.items {
+                    if item.timeline_range.end() > total_duration {
+                        total_duration = item.timeline_range.end();
+                    }
+                }
+                TrackSummary {
+                    track_id: t.track_id.clone(),
+                    name: t.name.clone(),
+                    kind: t.kind,
+                    muted: t.muted,
+                    items_count: t.items.len(),
+                    transitions_count: t.transitions.len(),
+                }
+            })
+            .collect();
+
+        let assets = project
+            .assets
+            .iter()
+            .map(|a| AssetSummary {
+                asset_id: a.asset_id.clone(),
+                name: a.name.clone(),
+                path: a.path.clone(),
+                media_kind: a.media_kind,
+                duration: a.duration,
+            })
+            .collect();
 
         ProjectInspectReport {
             project_id: project.project_id.clone(),
@@ -147,17 +776,22 @@ impl AutomationAdapter {
             tracks_count: project.tracks.len(),
             clips_count,
             assets_count: project.assets.len(),
+            transitions_count,
             tracks,
             assets,
-            supported_operations,
+            supported_operations: Self::supported_operations(),
+            supported_transitions: Self::supported_transitions(),
+            schema_version: project.schema_version,
+            supported_keyframe_properties: Self::supported_keyframe_properties(),
+            supported_keyframe_easings: Self::supported_keyframe_easings(),
+            custom_cubic_bounds: (0.0, 1.0),
         }
     }
 
     /// Headless Inspect API for project files
     pub fn inspect_file(project_path: &Path) -> Result<ProjectInspectReport, AutomationError> {
-        let project =
-            load_project(project_path).map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
-        Ok(Self::inspect_project(&project))
+        let mut session = AutomationSession::new();
+        session.open_project(project_path)
     }
 
     /// Headless Diff / Dry-run API for project files
@@ -165,11 +799,9 @@ impl AutomationAdapter {
         project_path: &Path,
         envelope: &CommandEnvelope,
     ) -> Result<DiffReport, AutomationError> {
-        let project =
-            load_project(project_path).map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
-        let service = CommandService::new(project);
-        let diff = service.dry_run(envelope)?;
-        Ok(diff)
+        let mut session = AutomationSession::new();
+        session.open_project(project_path)?;
+        session.dry_run(envelope)
     }
 
     /// Headless Apply API for project files
@@ -204,7 +836,7 @@ impl AutomationAdapter {
     pub fn handle_cli(args: &[String]) -> Result<String, AutomationError> {
         if args.is_empty() {
             return Err(AutomationError::Cli(
-                "Usage: tinixcut [inspect|diff|apply|render] <args...>".to_string(),
+                "Usage: tinixcut [inspect|diff|apply|render|session] <args...>".to_string(),
             ));
         }
 
@@ -245,8 +877,21 @@ impl AutomationAdapter {
                 let mut service = CommandService::new(project);
                 let env_content = std::fs::read_to_string(&args[2])
                     .map_err(|e| AutomationError::Cli(format!("Cannot read envelope file: {e}")))?;
-                let envelope: CommandEnvelope = serde_json::from_str(&env_content)
+                let mut envelope: CommandEnvelope = serde_json::from_str(&env_content)
                     .map_err(|e| AutomationError::Serialization(e.to_string()))?;
+                if envelope.client_id.is_none() {
+                    let cur_epoch = service.project().client_registry.current_epoch;
+                    let next_seq = service
+                        .project()
+                        .client_registry
+                        .clients
+                        .get("cli")
+                        .map(|c| c.highest_sequence + 1)
+                        .unwrap_or(1);
+                    envelope.client_id = Some("cli".to_string());
+                    envelope.client_epoch = Some(cur_epoch);
+                    envelope.sequence_number = Some(next_seq);
+                }
                 let receipt = Self::apply_file(project_path, &mut service, envelope, true)?;
                 serde_json::to_string_pretty(&receipt)
                     .map_err(|e| AutomationError::Serialization(e.to_string()))
@@ -261,8 +906,15 @@ impl AutomationAdapter {
                 serde_json::to_string_pretty(&report)
                     .map_err(|e| AutomationError::Serialization(e.to_string()))
             }
+            "session" | "--stdio" => {
+                let stdin = std::io::stdin().lock();
+                let stdout = std::io::stdout();
+                let stderr = std::io::stderr();
+                run_stdio_session(stdin, stdout, stderr);
+                Ok("Session ended".to_string())
+            }
             "help" | "--help" | "-h" => Ok(
-                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  help, --help                               Show this help message".to_string()
+                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render|session] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  session, --stdio                           Start long-lived machine-readable JSONL stdio session\n  help, --help                               Show this help message".to_string()
             ),
             other => Err(AutomationError::Cli(format!("Unknown command '{}'", other))),
         }
@@ -273,13 +925,14 @@ impl AutomationAdapter {
 pub mod tests {
     use super::*;
     use crate::modules::command::{CommandOperation, OperationEnvelope};
-    use crate::modules::domain::time::{FrameRate, RationalTime};
+    use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
     use crate::modules::domain::{
-        Asset, ItemKind, MediaKind, Project, ProjectSettings, TrackKind, CURRENT_SCHEMA_VERSION,
+        Asset, ItemKind, MediaKind, Project, ProjectSettings, TimelineItem, Track, TrackKind,
+        Transition, TransitionKind, CURRENT_SCHEMA_VERSION,
     };
+    use crate::modules::media::resolver::MediaBinaryResolver;
     use std::fs;
     use std::path::PathBuf;
-    use std::process::Command;
 
     fn get_fixture_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("tinixcut_test_fixtures_phase10");
@@ -291,33 +944,35 @@ pub mod tests {
         if path.exists() {
             return;
         }
-        let output = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                &format!("color=c={}:s=640x360:r=30:d={}", color, duration_secs),
-                "-f",
-                "lavfi",
-                "-i",
-                &format!("sine=frequency=440:duration={}", duration_secs),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                &path.to_string_lossy(),
-            ])
-            .output();
+        if let Ok(mut cmd) = MediaBinaryResolver::command("ffmpeg") {
+            let output = cmd
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &format!("color=c={}:s=640x360:r=30:d={}", color, duration_secs),
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &format!("sine=frequency=440:duration={}", duration_secs),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    &path.to_string_lossy(),
+                ])
+                .output();
 
-        if let Ok(res) = output {
-            if !res.status.success() {
-                eprintln!(
-                    "FFmpeg synthetic generator warning: {}",
-                    String::from_utf8_lossy(&res.stderr)
-                );
+            if let Ok(res) = output {
+                if !res.status.success() {
+                    eprintln!(
+                        "FFmpeg synthetic generator warning: {}",
+                        String::from_utf8_lossy(&res.stderr)
+                    );
+                }
             }
         }
     }
@@ -366,6 +1021,9 @@ pub mod tests {
             schema_version: CURRENT_SCHEMA_VERSION,
             project_id: initial_project.project_id.clone(),
             base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
             dry_run: false,
             transaction_id: Some("tx_auto_01".to_string()),
             operations: vec![
@@ -421,29 +1079,61 @@ pub mod tests {
         assert_eq!(receipt.new_revision, 1);
         assert_eq!(receipt.operations_applied, 2);
 
-        // 5. Save/reopen: confirm committed state
+        // 5. Save/reopen: confirm committed state and drop in-memory service
+        drop(service);
         let reopened = load_project(&project_path).unwrap();
         assert_eq!(reopened.revision, 1);
         assert_eq!(reopened.tracks.len(), 1);
         assert_eq!(reopened.tracks[0].items.len(), 1);
         assert_eq!(reopened.tracks[0].items[0].item_id, "clip_auto_1");
+        assert_eq!(reopened.command_ledger.len(), 2);
 
-        // 6. Retry same operation ID: test idempotency deduplication
-        let retry_receipt = service.execute(plan_envelope.clone()).unwrap();
+        // 6. Retry same operation ID after reopen: test durable idempotency deduplication across save/reopen boundary
+        let mut reopened_service = CommandService::new(reopened);
+        let retry_receipt = reopened_service.execute(plan_envelope.clone()).unwrap();
         assert_eq!(retry_receipt.operations_applied, 0);
         for r in &retry_receipt.receipts {
             assert_eq!(r.status, "deduplicated_noop");
         }
 
         // 7. Confirm no duplicate edit: revision and item count are unchanged
-        assert_eq!(service.project().revision, 1);
-        assert_eq!(service.project().tracks[0].items.len(), 1);
+        assert_eq!(reopened_service.project().revision, 1);
+        assert_eq!(reopened_service.project().tracks[0].items.len(), 1);
 
-        // 8. Attempt stale base revision: submit new edit with baseRevision = 0 when project is at 1
+        // 7b. Attempt ID collision: reuse op_auto_clip1 with different payload
+        let collision_envelope = CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: initial_project.project_id.clone(),
+            base_revision: 1,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_coll".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_auto_clip1".to_string(), // Same ID!
+                operation: CommandOperation::TrackCreate {
+                    track_id: Some("trk_coll".to_string()),
+                    name: "Collided Track".to_string(),
+                    kind: TrackKind::Audio,
+                },
+            }],
+        };
+        let coll_res = reopened_service.execute(collision_envelope);
+        assert!(matches!(
+            coll_res,
+            Err(CommandError::IdempotencyCollision { .. })
+        ));
+        assert_eq!(reopened_service.project().revision, 1);
+
+        // 8. Attempt stale base revision: submit unseen edit with baseRevision = 0 when project is at 1
         let stale_envelope = CommandEnvelope {
             schema_version: CURRENT_SCHEMA_VERSION,
             project_id: initial_project.project_id.clone(),
             base_revision: 0, // Stale! Current is 1
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
             dry_run: false,
             transaction_id: Some("tx_stale".to_string()),
             operations: vec![OperationEnvelope {
@@ -455,7 +1145,7 @@ pub mod tests {
         };
 
         // 9. Confirm explicit conflict: StaleRevision error returned deterministically
-        let stale_result = service.execute(stale_envelope);
+        let stale_result = reopened_service.execute(stale_envelope);
         assert_eq!(
             stale_result,
             Err(CommandError::StaleRevision {
@@ -476,5 +1166,310 @@ pub mod tests {
         assert!(output_render.exists());
         assert_eq!(export_report.duration_secs, 2.0);
         assert!(export_report.file_size_bytes > 0);
+    }
+
+    #[test]
+    fn test_phase10_automation_session_and_stdio_protocol() {
+        let fixture_dir = get_fixture_dir();
+        let project_path = fixture_dir.join("session_test.tcproj");
+        let rate = FrameRate::FPS_30;
+        let mut proj = Project::new("Session Test Proj".to_string());
+        proj.settings.frame_rate = rate;
+        save_project_atomic(&proj, &project_path).unwrap();
+
+        let path_escaped = project_path.to_string_lossy().replace('\\', "/");
+        let jsonl_input = format!(
+            "{{\"protocolVersion\":1,\"requestId\":\"req-1\",\"method\":\"session.open\",\"params\":{{\"path\":\"{path_escaped}\"}}}}\n\
+             {{\"protocolVersion\":1,\"requestId\":\"req-2\",\"method\":\"project.inspect\",\"params\":{{}}}}\n\
+             {{\"protocolVersion\":1,\"requestId\":\"req-3\",\"method\":\"project.capabilities\",\"params\":{{}}}}\n\
+             {{malformed json line here\n\
+             {{\"protocolVersion\":1,\"requestId\":\"req-5\",\"method\":\"unknown.invalidMethod\",\"params\":{{}}}}\n\
+             {{\"protocolVersion\":1,\"requestId\":\"req-6\",\"method\":\"session.shutdown\",\"params\":{{}}}}\n"
+        );
+
+        let input_cursor = std::io::Cursor::new(jsonl_input.into_bytes());
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+
+        run_stdio_session(input_cursor, &mut stdout_buf, &mut stderr_buf);
+
+        let stdout_str = String::from_utf8(stdout_buf).unwrap();
+        let lines: Vec<&str> = stdout_str.lines().collect();
+
+        // 6 valid single-line JSON responses
+        assert_eq!(lines.len(), 6, "Expected 6 JSON response lines");
+
+        let resp1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(resp1["requestId"], "req-1");
+        assert_eq!(resp1["ok"], true);
+        assert_eq!(resp1["result"]["name"], "Session Test Proj");
+
+        let resp2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(resp2["requestId"], "req-2");
+        assert_eq!(resp2["ok"], true);
+        assert_eq!(resp2["result"]["revision"], 0);
+
+        let resp3: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+        assert_eq!(resp3["requestId"], "req-3");
+        assert_eq!(resp3["ok"], true);
+        assert_eq!(resp3["result"]["protocolVersion"], 1);
+
+        let resp4: serde_json::Value = serde_json::from_str(lines[3]).unwrap();
+        assert_eq!(resp4["requestId"], "unknown");
+        assert_eq!(resp4["ok"], false);
+        assert_eq!(resp4["error"]["code"], "INVALID_JSON");
+
+        let resp5: serde_json::Value = serde_json::from_str(lines[4]).unwrap();
+        assert_eq!(resp5["requestId"], "req-5");
+        assert_eq!(resp5["ok"], false);
+        assert_eq!(resp5["error"]["code"], "CLI_ERROR");
+
+        let resp6: serde_json::Value = serde_json::from_str(lines[5]).unwrap();
+        assert_eq!(resp6["requestId"], "req-6");
+        assert_eq!(resp6["ok"], true);
+        assert_eq!(resp6["result"]["shutdown"], true);
+    }
+
+    #[test]
+    fn test_phase10_export_automation_job_lifecycle() {
+        let fixture_dir = get_fixture_dir();
+        let project_path = fixture_dir.join("export_auto_test.tcproj");
+        let media_file = fixture_dir.join("export_auto_media.mp4");
+        generate_synthetic_mp4(&media_file, 2, "blue");
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Export Auto Test".to_string());
+        project.settings.frame_rate = rate;
+        project.assets.push(Asset {
+            asset_id: "ast_exp_1".to_string(),
+            name: "media.mp4".to_string(),
+            path: media_file.to_string_lossy().to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(60, rate)),
+            file_size: 1024,
+        });
+        let mut track = Track::new("V1".to_string(), TrackKind::Video);
+        let time_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(30, rate),
+        );
+        let item = TimelineItem::new(
+            Some("ast_exp_1".to_string()),
+            "Clip 1".to_string(),
+            ItemKind::Video,
+            time_range,
+            time_range,
+        )
+        .unwrap();
+        track.items.push(item);
+        project.tracks.push(track);
+        save_project_atomic(&project, &project_path).unwrap();
+
+        let mut session = AutomationSession::new();
+        session.open_project(&project_path).unwrap();
+
+        let out_target = fixture_dir.join("export_job_output.mp4");
+        let mut profile = ExportProfile::default();
+        profile.width = 640;
+        profile.height = 360;
+
+        // 1. Start export job asynchronously
+        let receipt = session.export_start(&out_target, Some(profile)).unwrap();
+        assert_eq!(receipt.status, "running");
+        assert!(!receipt.job_id.is_empty());
+
+        // 2. Poll export status
+        let mut completed = false;
+        for _ in 0..100 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let status = session.export_status(&receipt.job_id).unwrap();
+            if status.status == "completed" {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "Export job must complete successfully");
+        assert!(out_target.exists());
+    }
+
+    #[test]
+    fn test_phase13_automation_transition_capability_discovery_and_crossdissolve() {
+        let fixture_dir = get_fixture_dir();
+        let project_path = fixture_dir.join("automation_transition_test.tcproj");
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Transition Capability Test".to_string());
+        project.settings.frame_rate = rate;
+        project.assets.push(Asset {
+            asset_id: "ast_t1".to_string(),
+            name: "test.mp4".to_string(),
+            path: "test.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(120, rate)),
+            file_size: 1024,
+        });
+
+        let mut track = Track::new("V1".to_string(), TrackKind::Video);
+        let time_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(60, rate),
+        );
+        let item = TimelineItem::new(
+            Some("ast_t1".to_string()),
+            "Clip 1".to_string(),
+            ItemKind::Video,
+            time_range,
+            time_range,
+        )
+        .unwrap();
+        let item_id = item.item_id.clone();
+        track.items.push(item);
+        project.tracks.push(track);
+
+        save_project_atomic(&project, &project_path).unwrap();
+
+        // 1. Capability discovery test: inspect report
+        let report = AutomationAdapter::inspect_file(&project_path).unwrap();
+        assert!(report.supported_transitions.contains(&"FadeIn".to_string()));
+        assert!(report
+            .supported_transitions
+            .contains(&"FadeOut".to_string()));
+        assert!(report
+            .supported_transitions
+            .contains(&"FadeBlack".to_string()));
+        assert!(report
+            .supported_transitions
+            .contains(&"CrossDissolve".to_string()));
+        assert!(report
+            .supported_operations
+            .contains(&"CutTransitionCreate".to_string()));
+
+        // 2. Direct attempt to apply CrossDissolve via item-level command (MUST fail with UnsupportedTransition)
+        let cross_dissolve_envelope = CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: project.project_id.clone(),
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_auto_crossdissolve".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_crossdissolve".to_string(),
+                operation: CommandOperation::ClipTransitionSet {
+                    item_id: item_id.clone(),
+                    transition: Some(Transition {
+                        kind: TransitionKind::CrossDissolve,
+                        duration: RationalTime::from_frames(15, rate),
+                    }),
+                },
+            }],
+        };
+
+        let mut service = CommandService::new(project);
+        let result = AutomationAdapter::apply_file(
+            &project_path,
+            &mut service,
+            cross_dissolve_envelope,
+            true,
+        );
+        match result {
+            Err(AutomationError::Command(CommandError::UnsupportedTransition {
+                operation_id,
+                transition,
+            })) => {
+                assert_eq!(operation_id, "op_crossdissolve");
+                assert_eq!(transition, "CrossDissolve");
+            }
+            other => panic!(
+                "Expected CommandError::UnsupportedTransition, got {:?}",
+                other
+            ),
+        }
+
+        // Verify disk state remains intact and revision 0
+        let unmutated = load_project(&project_path).unwrap();
+        assert_eq!(unmutated.revision, 0);
+        assert!(unmutated.tracks[0].items[0].transition.is_none());
+
+        // 3. Add adjacent clip and create CutTransition via automation
+        let time_range_2 = TimeRange::new(
+            RationalTime::from_frames(60, rate),
+            RationalTime::from_frames(60, rate),
+        );
+        let item_2 = TimelineItem::new(
+            Some("ast_t1".to_string()),
+            "Clip 2".to_string(),
+            ItemKind::Video,
+            time_range_2,
+            time_range_2,
+        )
+        .unwrap();
+        let item_id_2 = item_2.item_id.clone();
+        let track_id = service.project().tracks[0].track_id.clone();
+
+        let add_clip_envelope = CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: service.project().project_id.clone(),
+            base_revision: service.revision(),
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_add_clip2".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_add_clip2".to_string(),
+                operation: CommandOperation::ClipCreate {
+                    track_id: track_id.clone(),
+                    item_id: Some(item_id_2.clone()),
+                    name: "Clip 2".to_string(),
+                    kind: ItemKind::Video,
+                    asset_id: Some("ast_t1".to_string()),
+                    timeline_start: RationalTime::from_frames(60, rate),
+                    duration: RationalTime::from_frames(60, rate),
+                    source_start: Some(RationalTime::from_frames(60, rate)),
+                },
+            }],
+        };
+        AutomationAdapter::apply_file(&project_path, &mut service, add_clip_envelope, true)
+            .unwrap();
+
+        // 4. Apply CutTransitionCreate via automation
+        let cut_trans_envelope = CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: service.project().project_id.clone(),
+            base_revision: service.revision(),
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_auto_cut_trans".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_cut_trans".to_string(),
+                operation: CommandOperation::CutTransitionCreate {
+                    track_id,
+                    transition_id: Some("auto_tr1".to_string()),
+                    kind: TransitionKind::CrossDissolve,
+                    left_item_id: item_id,
+                    right_item_id: item_id_2,
+                    duration: RationalTime::from_frames(20, rate),
+                },
+            }],
+        };
+
+        // Test dry-run
+        let diff = AutomationAdapter::dry_run_file(&project_path, &cut_trans_envelope).unwrap();
+        assert_eq!(diff.changes.len(), 1);
+
+        // Test apply and atomic save
+        let receipt =
+            AutomationAdapter::apply_file(&project_path, &mut service, cut_trans_envelope, true)
+                .unwrap();
+        assert_eq!(receipt.new_revision, 2);
+
+        // Verify reloaded project has cut transition in Schema v2
+        let reloaded = load_project(&project_path).unwrap();
+        assert_eq!(reloaded.schema_version, 3);
+        assert_eq!(reloaded.tracks[0].transitions.len(), 1);
+        assert_eq!(reloaded.tracks[0].transitions[0].transition_id, "auto_tr1");
     }
 }

@@ -368,22 +368,27 @@ Initially implemented using FFmpeg where practical.
 
 ### 7.10 Automation Adapters
 
-Future CLI/MCP/built-in agent adapters are transports only.
+Automation adapters are external transports only, operating strictly as clients of the editor rather than a second editor engine.
+
+- **Initial transport**: CLI-first (`tinixcut inspect`, `diff`, `apply`, `render`).
+- **Machine session**: Long-lived JSONL stdio session (`tinixcut session` / `--stdio`), maintaining in-memory `CommandService` and `JobManager` to eliminate repeated process startup and project re-parsing overhead.
+- **Protocol streams**: Standard output (`stdout`) is strictly reserved for machine-readable protocol frames (JSONL or MCP); standard error (`stderr`) is reserved exclusively for diagnostic and logging output.
+- **MCP**: Model Context Protocol (MCP) server support is governed by ADR-005; MCP serves as a thin local stdio transport adapter (`tinixcut mcp`, primary protocol `2026-07-28`, Tools-only) over the identical underlying `CommandService`, `JobManager`, and persistence APIs. Remote HTTP/OAuth is deferred.
 
 They may:
 
-- inspect project
-- request dry-run/diff
-- apply typed plans
-- start render/export jobs
-- read structured results
+- inspect project state and discover capability schemas
+- request dry-run/diff validation
+- apply typed transactional command plans
+- start, query, and cancel export/render jobs
+- read structured receipts and reports
 
 They may not:
 
-- mutate project files directly
-- construct unrestricted shell commands
-- bypass the command registry
-- maintain a parallel timeline reducer
+- mutate project files directly (all mutations must pass through `CommandService`)
+- construct unrestricted shell commands or access arbitrary filesystems
+- bypass the command registry or validation rules
+- maintain a parallel timeline reducer or divergent mutation path
 
 ---
 
@@ -403,9 +408,13 @@ Project
 ├── timeline
 │   └── tracks[]
 │       └── items[]
+├── client_registry (ClientRegistry tracking monotonic sequence watermarks; max 64 clients; ADR-001)
+├── command_ledger[] (active receipt window; K=5,000; ADR-001)
 ├── markers / metadata
 └── supported project-owned extension data
 ```
+
+The `client_registry` and `command_ledger` represent canonical correctness state owned by the Project domain model and persisted directly into `.tcproj` (structured into a bounded client registry tracking monotonic sequences per client in $O(1)$ space and an active receipt window $K=5,000$, capping total idempotency document overhead to $\le 1.65 \text{ MB}$; see ADR-001). Durable idempotency is guaranteed for Structured Operation Identities (`client_id:client_epoch:sequence_number`), mathematically proving that committed operations can never become fresh, while individual tombstone arrays are eliminated in favor of constant-sized sequence watermarks. It is not disposable or rebuildable cache; clearing derived caches must never delete replay protection. Idempotency receipts survive process lifetimes and canonical save/reopen cycles.
 
 ### 8.2 Project settings
 
@@ -443,6 +452,7 @@ Minimum logical fields:
 - ordering
 - enabled/muted/locked state as supported
 - items
+- `transitions`: track-level cut-transition collection (`Vec<CutTransition>` in Schema v2)
 
 ### 8.5 Timeline item / clip
 
@@ -457,7 +467,8 @@ Minimum concepts:
 - opacity
 - audio properties when applicable
 - text/caption properties when applicable
-- transitions/effects/keyframes only when formally supported
+- single-clip fades (`fade_in`, `fade_out`, and item-level `FadeIn`/`FadeOut` variants) for head/tail clip opacity ramps; adjacent-clip transitions are strictly cut-owned and stored on `Track.transitions` (item-level fade semantics are preserved losslessly)
+- keyframes only when formally supported
 
 ### 8.6 Stable identifiers
 
@@ -479,9 +490,22 @@ Approved representations:
 1. integer ticks with declared project timebase; or
 2. rational `{ value, rate }`.
 
-A single representation must be selected during Phase 1 and used consistently.
+A single representation was selected during Phase 1 and is used consistently: `RationalTime` (`{ value: i64, rate: u64 }`).
 
 Seconds, milliseconds, SMPTE-like display, and frame numbers are boundary/display representations only.
+
+#### Representation Equality vs. Semantic Timeline-Time Invariant
+
+A durable architectural invariant discovered and enforced during Phase 13:
+
+1. **Exact Representation Equality**: `RationalTime` derived `PartialEq/Eq` represents exact stored `(value, rate)` representation equality. This is critical for exact round-trip serialization, hashing, deterministic ledger deduplication, and structural diffs.
+2. **Semantic Comparison Rule**: Semantic timeline-time equality **MUST NOT** rely on raw `==` / `!=` when different rates can represent the same instant (e.g. `{ value: 100, rate: 1000 }` and `{ value: 3, rate: 30 }` both represent $0.1\,\text{s}$, but raw `PartialEq` evaluates to `false`).
+3. **Canonical Semantic Helpers**: Semantic comparison must use canonical domain helpers:
+   - `RationalTime::is_same_time` / `semantic_eq` for point-in-time equivalence across different rates;
+   - `TimeRange::is_adjacent_to` for rate-independent timeline boundary adjacency;
+   - `TimeRange::is_adjacent_to_with_rate` where project-frame tick alignment is required.
+4. **Rescaling & Arithmetic**: Timeline duration, ordering, and arithmetic must normalize/rescale to a common rate appropriately rather than compare raw `.value` across mismatched rates.
+5. **Preservation of Global Semantics**: Global `PartialEq/Eq` semantics on `RationalTime` remain exact representation equality by design and are NOT altered.
 
 ### 8.8 Source range vs timeline range
 
@@ -502,6 +526,47 @@ Rules:
 - migrations are deterministic and tested
 - old project versions are never silently interpreted under new semantics
 - migration failure must not overwrite the original project
+- **Schema v2 (ADR-003)**: Introduces track-level `CutTransition` collection (`Track.transitions: Vec<CutTransition>`). Production-supported clip-owned Fade semantics currently on `TimelineItem` (`fade_in`, `fade_out`, and item-level `FadeIn`/`FadeOut` variants) are retained and must NOT be cleared, dropped, or re-homed. Existing v1 item-level Fade behavior survives v1→v2 migration losslessly. Migration initializes `Track.transitions: Vec::new()`. No `CrossDissolve` is invented from v1. Malformed v1 containing unsupported `CrossDissolve` placeholder is rejected explicitly per migration/error policy; never silently activated. `TimelineItem.transition` is not deprecated in any manner that implies field removal in Phase 13 while existing supported Fade variants still depend on it.
+- **Schema v3 (ADR-004)**: Introduces keyframe `outgoing_easing: KeyframeEasing` on `Keyframe` (`Linear`, `EaseIn`, `EaseOut`, `EaseInOut`, `CubicBezier`). Schema v3 is implemented and current in production. Promoting to `schema_version = 3` protects projects from silent loss of easing data when opened in older Schema v2 binaries. Forward migration from v2 to v3 is lossless: all v2 fields, `CutTransition` on tracks, item-level Fades, and keyframe values/offsets are preserved identically; every migrated keyframe is initialized with `outgoing_easing = Linear`. Old readers reject v3 with an explicit unsupported schema version error.
+
+### 8.10 Cut-Owned Transition Model (ADR-003)
+
+Transitions between clips adhere to strict domain invariants:
+
+1. **Cut-Owned Topology**: CrossDissolve is owned by the cut boundary $C$ between two immediately adjacent video clips on the same track (`left.timeline_range.end() == right.timeline_range.start == C`), not by an individual clip.
+2. **Timeline Duration Invariance**: Adding, modifying, or removing a CutTransition strictly preserves total track and project duration ($\Delta T_{\text{project}} = 0$). Canonical timeline does not persist overlap; clips remain abutted edge-to-edge.
+3. **Exact RationalTime Odd-Duration Rule**: Transition duration and cut offsets use exact `RationalTime` (`{ value, rate }`). Rescaling $D$ to project timeline rate gives $D_{\text{ticks}}$. Tick division is exact: $L_{\text{ticks}} = \lfloor D_{\text{ticks}} / 2 \rfloor$, $R_{\text{ticks}} = D_{\text{ticks}} - L_{\text{ticks}}$. The cut window boundaries are $T_0 = C - L$ and $T_1 = C + R$. The transition interval is strictly half-open: $[T_0, T_1)$. Phase 13 CrossDissolve provides centered cut semantics exclusively; no persisted `CutAlignment` field is added in Schema v2 (future alignment extensibility is deferred).
+4. **Mandatory Provable Handles & Editorial Extents**:
+   - Outgoing left clip: postroll handle $\ge R$ and outgoing editorial extent $\ge L$.
+   - Incoming right clip: preroll handle $\ge L$ and incoming editorial extent $\ge R$.
+   - Available handles must be verified against source media asset bounds prior to transition creation.
+5. **Stable Machine-Readable Error Contract**:
+   Transition validation produces stable error codes:
+   - `INSUFFICIENT_TRANSITION_HANDLE`: Source duration is known, but available postroll handle $< R$, available preroll handle $< L$, or editorial extent is insufficient.
+   - `TRANSITION_HANDLE_UNVERIFIABLE`: Media duration or stream handle availability cannot be proven (e.g. unprobed media, stream duration missing, or asset unavailable).
+   - `UNSUPPORTED_TRANSITION_MEDIA`: Participant is an image, synthetic graphic, text, or non-video item (Phase 13 supports video/video cuts exclusively).
+   The engine strictly rejects invalid requests and never silently clamps duration, auto-shortens the transition, or synthesizes freeze-frames.
+
+### 8.11 Canonical Keyframe Easing, Addressing & Lifecycle (ADR-004)
+
+Keyframes adhere to strict domain ownership, mathematical precision, and clip lifecycle invariants:
+
+1. **Clip-Local Ownership**: Keyframes belong strictly to `TimelineItem.keyframes`. No stable keyframe IDs are introduced in Phase 14; keyframes are addressed exclusively by `(property, semantic RationalTime offset)`.
+2. **Supported Channels**: Exactly 7 properties are keyframe-capable: `PositionX`, `PositionY`, `ScaleX`, `ScaleY`, `Rotation`, `Opacity`, `Volume`. The same canonical scalar evaluator evaluates all channels. Rotation interpolates numerically in degrees without shortest-path angle wrapping. No implicit clamping occurs in the interpolation layer.
+3. **Semantic RationalTime Ordering & Equality**: Semantic time comparison MUST evaluate cross-multiplied equality ($v_1 \cdot r_2 == v_2 \cdot r_1$) rather than comparing raw `.offset.value`. Global `RationalTime PartialEq/Eq` remains representation equality. Keyframes with equivalent rational offsets address the same keyframe.
+4. **Canonical 32-Iteration Bisection Solver**:
+   - A fixed 32-iteration bisection loop in Rust/core solves $x(q) = u$ for parameter $q \in [0, 1]$, then evaluates $e = y(q)$.
+   - Control points $(x_1, y_1, x_2, y_2) \in [0.0, 1.0]^4$ are finite `f64`. No overshoot is permitted in Phase 14.
+   - Endpoints $u \le 0$ and $u \ge 1$ bypass the solver and return exact keyframe values.
+   - No browser CSS, renderer, or FFmpeg solver is canonical truth.
+5. **Split Subdivision Semantics**:
+   - At split offset $S$, keyframes with $K < S$ stay left; $K > S$ migrate right rebased by $-S$; $K == S$ duplicates onto both fragments (left outgoing Linear, right inherits easing).
+   - When a split crosses an interpolation segment ($K_i < S < K_{i+1}$), boundary value $V(S)$ is evaluated via the canonical solver, boundary keys are synthesized, and the easing curve is subdivided via solver parameter $q_S$ and de Casteljau's algorithm, normalizing subcurve control points to $[0, 1]^2$. Presets become `CubicBezier`.
+   - Left fragment preserves original `item_id`; right fragment receives newly generated `item_id`.
+6. **Trim Semantics & Hidden Keyframes**:
+   - Tail trim shortens duration; keyframes beyond new duration persist as hidden state. Extending tail restores them.
+   - Head trim by $H$ shifts all keyframe offsets by $-H$. Negative keyframe offsets are valid persisted domain state (hidden preroll keyframes). Extending head shifts offsets back by $+H$, preserving visible animation alignment with source media.
+   - Trim and keyframe offset updates execute atomically in a single command transaction. Silent deletion of keyframes during trim is prohibited.
 
 ---
 
@@ -551,11 +616,39 @@ The system must not silently rebase an automation plan onto newer project state.
 
 The caller must inspect again and regenerate/reconfirm the plan.
 
-### 9.4 Idempotency
+### 9.4 Idempotency and Durable Command Ledger (ADR-001)
 
-If the same `operationId` is retried after an uncertain response, it must not apply the mutation twice.
+Idempotency guarantees that retrying an operation or transaction identity never duplicates mutations or state transitions:
 
-The service should return or reconstruct the prior receipt when valid.
+```text
+inspect -> propose -> dry-run -> apply -> receipt
+successful apply
+  -> durable command ledger entry (`CommandLedgerEntry`)
+  -> canonical save (`save_project_atomic`)
+  -> reopen (`load_project`)
+  -> exact replay recognized
+  -> prior receipt returned (`deduplicated_noop`)
+  -> no duplicate mutation / no revision bump
+```
+
+- **Project-owned durable ledger**: Successful operations persist entries in the project's canonical `command_ledger`. The ledger is part of the project document (`.tcproj`), not transient transport or session memory, surviving canonical save/reopen across process lifetimes.
+- **Cache independence**: The command ledger is canonical correctness state, not disposable/rebuildable cache. Deleting derivative cache does not remove replay protection.
+- **Staged transaction isolation**: Pre-commit transaction staging simulates only the editorial timeline state (`tracks`, `assets`, `settings`), isolating the command ledger from expensive transaction cloning and guaranteeing sub-microsecond in-memory staging clone latency (verified at 601 nanoseconds on reference hardware, algorithmic complexity bounded to $O(\text{editorial items})$).
+- **Structured operation identity authority**: Durable idempotency across unbounded horizons is governed exclusively by **Structured Scoped Identity** (`client_id:client_epoch:sequence_number`), where sequence numbers are strictly monotonic integers per registered client. By information-theoretic proof, arbitrary unscoped string IDs cannot guarantee durable idempotency across unbounded horizons within bounded storage.
+- **Mathematical proof of monotonic sequence correctness**: For any registered client, the committed history is a contiguous sequence prefix $\{1, \dots, W(c)\}$. Storing all historical committed operations requires exactly one integer $W(c)$ (8 bytes). For any incoming sequence $s \le W(c)$, the engine proves with $100\%$ certainty that the operation was already committed, preventing duplicate execution even if `base_revision` is refreshed. Individual operation tombstones are completely eliminated.
+- **Client lifecycle & bounded capacity contract (`ClientRegistry`)**:
+  - The project maintains a bounded client registry (`max_active_clients = 64`), capping client tracking overhead to $\le 3.5 \text{ KB}$ in `.tcproj`.
+  - Clients register or use well-known identifiers (`"gui"`, `"cli"`, `"session"`). When registry capacity is reached, unregistered requests are rejected (`CLIENT_REGISTRY_FULL`).
+  - Inactive clients can be retired by advancing `min_accepted_epoch`. Any command presenting an expired epoch is rejected with `CLIENT_EPOCH_EXPIRED` via an $O(1)$ scalar check.
+- **Legacy & unscoped operation ID semantics**: Bare string IDs (e.g. legacy Phase 10 `"op_xxx"`, UUIDs) without `client_id:seq` are treated as **Ephemeral Window Operations**. Deduplication is guaranteed strictly within the Active Window ($K = 5,000$). Evicted unscoped IDs are expired; durable long-term idempotency is reserved for structured identities. Automation CLI and stdio tools automatically wrap operations with structured client identities.
+- **Direct empirical benchmark validation ($K = 5,000$)**: Direct empirical benchmarks on reference hardware (Windows 11, NVMe) validate the 5-point performance budget: 1.635 MB project file overhead, 3.11 MB `CommandService` RAM, 601 ns staging clone, 8.5–22.7 µs deduplicated lookup, ~6.5 ms autosave write, and ~24.0 ms project load (with disk latencies subject to standard OS scheduling and filesystem sync conditions).
+- **Cryptographic fingerprint baseline**: Operation payload semantic equality is established using standard SHA-256 (`fp_sha256_<64hex>`) on canonical serialized payload bytes, providing $\sim 2^{128}$ collision resistance (Birthday bound) and $\sim 2^{256}$ preimage resistance.
+- **Conservative legacy FNV migration protocol**: Stored Phase 10 entries (`fp_<16hex>`) are treated as unverified legacy receipts. Because FNV-1a lacks cryptographic collision resistance and raw payloads are not retained, replay attempts against legacy entries are strictly rejected with `LEGACY_RECEIPT_UNVERIFIABLE`. The command is NOT executed as fresh (zero project mutation, no revision increment), eliminating adversarial collision spoofing.
+- **Exact replay semantics**: When an operation with an already-committed `operationId` and identical semantic payload fingerprint is submitted within the retention horizon, the Command Service returns or reconstructs the prior `CommandReceipt` with zero operations applied, no revision increment, and no new history entry.
+- **Collision rejection**: Submitting an existing `operationId` with a different semantic payload fingerprint is rejected explicitly with `IdempotencyCollision` (`IDEMPOTENCY_COLLISION`).
+- **Atomic transaction isolation**: A failed transaction persists no entries to the command ledger, ensuring all-or-nothing ledger integrity.
+- **Dry-run isolation**: Dry-run validations do not append to or alter the command ledger.
+- **Transport reuse**: Future automation transports (such as MCP) inherit these exact durable idempotency guarantees via the shared `CommandService`.
 
 ### 9.5 Dry-run / diff
 
@@ -795,6 +888,32 @@ Silent approximation is prohibited for final export.
 
 Preview approximation, if ever allowed for performance, must be explicit and visually indicated/documented by feature policy.
 
+### 14.4 Normalized Two-Input TransitionPlan & Premultiplied Parity Semantics (ADR-003)
+
+For adjacent-cut CrossDissolve transitions:
+
+1. **Two-Input Transition Segment**:
+   The half-open transition interval $[T_0, T_1)$ (where $T_0 = C - L, T_1 = C + R$ per the exact RationalTime odd-duration rule) is normalized into an explicit `TransitionPlan` segment referencing:
+   - `left_item_id` with evaluated source time $S_A(t) = \text{source\_start}_A + (t - \text{timeline\_start}_A)$
+   - `right_item_id` with evaluated source time $S_B(t) = \text{source\_start}_B - (C - t)$
+   - Normalized progress $p(t) = (t - T_0) / D \in [0.0, 1.0)$.
+
+2. **Canonical Premultiplied RGBA Blend Invariant**:
+   Dual backends must strictly evaluate the blend in premultiplied linear/sRGB space:
+   $$C_{\text{blend}}^* = (1 - p) C_A^* + p C_B^*$$
+   $$\alpha_{\text{blend}} = (1 - p) \alpha_A + p \alpha_B$$
+
+3. **Prohibition of Ordinary Source-Over Opacity**:
+   Standard two-layer `source-over` opacity compositing ($\text{Layer}_B$ over $\text{Layer}_A$) produces an unphysical non-linear alpha drop ($\Delta \alpha = p(1 - p)\alpha_A\alpha_B$, resulting in a $25\%$ transparency dip at $p = 0.5$). Ordinary two-layer `source-over` opacity is strictly forbidden for CrossDissolve across both preview and export engines.
+
+### 14.5 Normalized Keyframe Animation & ExportAutomationSchedule (ADR-004)
+
+Keyframe animation adheres strictly to a decoupled evaluation pattern (implemented in Phase 14):
+1. **Canonical Evaluator**: Project keyframes are evaluated in Rust/core at the target timeline frame or sample rate using the implemented 32-iteration bisection cubic Bézier solver.
+2. **Derived Schedule**: Rust compiles an ephemeral, in-memory `ExportAutomationSchedule` containing pre-calculated literal property values for video frames and audio sample intervals.
+3. **Zero Formula Leakage**: `ExportAutomationSchedule` is a build-time execution artifact, never persisted in project JSON.
+4. **Backend Parity**: Preview (DOM / React) and export (FFmpeg) both consume canonical scalar evaluations from the same Rust evaluator, guaranteeing zero curve drift.
+
 ---
 
 ## 15. Preview Architecture
@@ -829,6 +948,16 @@ Regardless of implementation:
 ### 15.4 Preview acceptance gate
 
 POC 1 must decide the initial backend using measurable workload tests before deep playback implementation.
+
+### 15.5 Preview TransitionGroup Architecture (ADR-003)
+
+In the preview backend (WebView2 / DOM):
+- Authoritative preview path is an explicit `PreviewTransitionGroup` container (`<div class="preview-transition-group">`) forming an isolated DOM stacking/compositing group for the transition interval $[T_0, T_1)$.
+- Left and right layers render weighted A/B contributions with handle-extended frames, opacity modulated by $1 - p$ and $p$.
+- The two layers are composited additively via `mix-blend-mode: plus-lighter` (additive premultiplied mixing) strictly inside the group, completely eliminating the non-linear opacity hole.
+- The blended group output is then composited via standard `source-over` onto the normal stack.
+- Canvas/offscreen compositor is NOT an authorized alternative Phase 13 implementation.
+- Silent fallback to ordinary `source-over` is strictly prohibited.
 
 ---
 
@@ -867,22 +996,82 @@ FFmpeg CLI/filter syntax is generated by trusted backend code from typed render-
 
 Raw agent/user text must never become an executable FFmpeg/shell command string.
 
+### 16.5 Export Filtergraph Transition Mapping (ADR-003)
+
+In the export engine (FFmpeg filtergraph), the authoritative sequence is:
+`normalized full-canvas RGBA A/B`
+$\to$ `premultiply`
+$\to$ bounded aligned `xfade=transition=fade`
+$\to$ `unpremultiply`
+$\to$ one transition-result contribution
+$\to$ existing overlay chain.
+
+- Adjacent-cut CrossDissolve segments $[T_0, T_1)$ are extracted with their required preroll/postroll handle trims.
+- Inside $[T_0, T_1)$, ordinary unblended A and B contributions on the track must be strictly suppressed.
+- The resulting unpremultiplied RGBA stream represents the single contribution for that track interval in the existing overlay chain.
+- Video-only for Phase 13; audio cut transitions remain exact butt-cuts (audio crossfade is deferred).
+- Transition easing curves and spectral waveform enhancements remain deferred; keyframe Bézier interpolation is resolved by ADR-004.
+
+### 16.6 Full Export Keyframe Automation via Literal Commands and Audio Envelopes (ADR-004)
+
+ADR-004 and `ExportAutomationSchedule` are implemented and verified in Phase 14:
+
+1. **Video Runtime Command Dispatch**:
+   - Rust samples animated visual properties (`PositionX`, `PositionY`, `ScaleX`, `ScaleY`, `Rotation`, `Opacity`) at each output frame RationalTime grid ($t_n = n / \text{fps}$).
+   - Initial values at frame 0 are embedded as static initial filter options.
+   - For frames $n \ge 1$, runtime command scripts (`sendcmd`) dispatch literal values at frame midpoints $t_{\text{mid}} = (t_{n-1} + t_n) / 2$.
+   - Literal filter mappings:
+     - `PositionX`, `PositionY` $\to$ `overlay` filter commands (`x`, `y`).
+     - `ScaleX`, `ScaleY` $\to$ `scale` filter commands (`w`, `h`).
+     - `Rotation` $\to$ `rotate` filter commands (`a` in radians).
+     - `Opacity` $\to$ `colorchannelmixer` filter commands (`aa`).
+   - Zero interpolation or Bézier math executes in FFmpeg filter expressions.
+2. **Audio Sample-Accurate Volume Envelope**:
+   - Volume keyframes are evaluated across the exact audio sample rate grid using the canonical Rust evaluator.
+   - The audio sample-rate contract derives from the export profile; currently supported profile rates are 48,000 Hz and 44,100 Hz (arbitrary additional sample rates remain unsupported unless separately planned).
+   - Rust streams an ephemeral mono 32-bit floating point PCM (`f32le`) binary gain envelope file in $O(1)$ memory buffer chunks.
+   - The filtergraph applies volume modulation via the `amultiply` filter.
+   - Preflight disk space verification is required before generation ($\approx 691.2 \text{ MB}$ for 60 min at 48kHz). The file is reliably cleaned up on export completion, failure, or cancellation.
+3. **ADR-003 Transition Branch Coexistence**:
+   - Runtime animation commands target ordinary clip filter branches outside $[T_0, T_1)$, and target transition participant branches inside $[T_0, T_1)$ prior to the premultiplied `xfade` stage.
+   - Preserves ADR-003 adjacent-cut topology, zero persisted overlap, duration invariance, and premultiplied blend invariant $(1-p)A^* + pB^*$. ADR-003 transition compositing remains unchanged.
+
 ---
 
 ## 17. Preview / Export Parity Contract
 
 For every feature considered production-supported, define canonical semantics and parity tolerance.
 
-Examples:
+### 17.1 Canonical Transform & Geometry Pipeline
 
-- exact timeline boundary at canonical tick
-- transform geometry within defined pixel tolerance
-- deterministic layer order
-- crop rectangle semantics
-- opacity evaluation
-- keyframe interpolation
-- font identity and text layout rules
-- audio start/end/fade tolerance
+Both the preview backend (WebView2) and the export backend (FFmpeg) strictly consume the same normalized composition semantics:
+
+1. **Coordinate System**:
+   - Canvas has dimensions $W \times H$.
+   - Coordinate origin $(0, 0)$ is the canvas center.
+   - Position offset: `(position_x, position_y)` in canvas pixels.
+   - Layer center on canvas is at $(\frac{W}{2} + \text{position\_x}, \frac{H}{2} + \text{position\_y})$.
+
+2. **Transform Evaluation Order**:
+   $$\text{Source Media} \longrightarrow \text{Crop Insets} \longrightarrow \text{Scale} \longrightarrow \text{Rotate} \longrightarrow \text{Translate/Center} \longrightarrow \text{Opacity}$$
+   - **Crop**: Normalized fractional insets from source edges (`crop.left`, `crop.right`, `crop.top`, `crop.bottom`).
+   - **Scale**: Multipliers `(scale_x, scale_y)` applied to the cropped media dimensions.
+   - **Rotate**: Rotation around layer center by `rotation` degrees.
+   - **Position**: Overlay placed such that the layer's center is at $(\frac{W}{2} + \text{pos\_x}, \frac{H}{2} + \text{pos\_y})$. In FFmpeg, this is evaluated as `overlay=x='(W-w)/2+pos_x':y='(H-h)/2+pos_y'`.
+   - **Opacity**: Alpha multiplier applied via CSS opacity in preview and `colorchannelmixer=aa=opacity` in export.
+
+3. **Timeline Boundary Semantics**:
+   - Timeline intervals are strictly half-open $[start, end)$.
+   - An item is active at timeline time $t$ if $start \le t < end$.
+   - The export filtergraph strictly enforces this half-open interval using `enable='between(t, start, end - 0.0005)'` so that boundary frames do not overlap adjacent clips.
+
+### 17.2 POC 2 Parity Suite Verification
+
+Preview and export parity is validated across 12 deterministic test fixtures (P7-F01 through P7-F12):
+- **Level 1 (Semantic Parity)**: Exact equality of normalized layer snapshots and source timestamps.
+- **Level 2 (Geometry/Timing Parity)**: Bounding rectangles match within $< 0.1$px tolerance; layer activation matches exactly.
+- **Level 3 (Raster Diff)**: Pixel deltas remain within documented tolerances (MAE $\le 4.0$, Exceeded Ratio $\le 3\%$ for video; MAE $\le 10.0$ for text glyph rasterization).
+- **Gate Sensitivity (Negative Control)**: An intentional offset (e.g. $+120$px position shift) is verified to fail the parity gate, ensuring the gate cannot pass trivially.
 
 A feature must not be considered fully supported until parity tests exist at an appropriate level.
 
@@ -892,47 +1081,85 @@ A feature must not be considered fully supported until parity tests exist at an 
 
 ### 18.1 Automation is a client, not a second editor
 
-Automation performs:
+Automation is an external client adapter to the editor. It does not contain an independent editing engine, does not manipulate project files directly, and does not maintain a second project reducer.
+
+All mutations route strictly through the authoritative `CommandService`, and all background tasks route through the local `JobManager`.
+
+Automation execution loop:
 
 ```text
 inspect -> propose plan -> diff/dry-run -> apply -> receipt
+successful apply
+  -> durable command ledger entry (`CommandLedgerEntry`)
+  -> canonical save (`save_project_atomic`)
+  -> reopen (`load_project`)
+  -> exact replay recognized
+  -> no duplicate mutation
 ```
 
-### 18.2 Initial automation capabilities
+### 18.2 Transport and Session Model
 
-When added, the first surface should expose only reviewed domain operations and queries.
+```text
+Manual UI
+CLI / JSONL
+MCP stdio
+      │
+      ▼
+existing application/automation service seam
+      │
+CommandService / JobManager / Persistence
+```
 
-Recommended groups:
+- **Initial transport: CLI-first**. A standalone CLI entrypoint exposes headless commands (`inspect`, `diff`, `apply`, `render`) for one-shot execution without UI dependencies.
+- **Machine session: long-lived JSONL stdio (Phase 10)**. Automation supports a long-lived interactive session (`tinixcut session` / `--stdio`) communicating via line-delimited JSON (JSONL). The session maintains in-memory `CommandService` and `JobManager` instances, avoiding the overhead of re-spawning processes and re-parsing `.tcproj` files for sequential edits.
+- **Protocol streams**: Standard output (`stdout`) is strictly reserved for protocol frames (JSONL responses or MCP JSON-RPC frames). Standard error (`stderr`) is strictly reserved for diagnostic logs, warnings, and error traces.
+- **MCP local stdio adapter (Phase 15, ADR-005 — Implemented)**:
+  - **Implemented Automation Transport**: The MCP local stdio adapter is implemented; `tinixcut mcp` is a supported headless automation entrypoint before GUI startup.
+  - **Transport Only**: MCP is strictly an external transport adapter; it introduces no second reducer, no second command registry, no second persistence format, and no project mutation bypass.
+  - **Primary Protocol**: MCP `2026-07-28` is the primary protocol target with modern stateless lifecycle (no `initialize` / `notifications/initialized`, stateless protocol core, discovery via `server/discover`, and SDK-only `2025-11-25` fallback).
+  - **Tools-Only Primitive Scope**: MCP remains Tools-only, exposing exactly eight (8) authoritative tools (`tinixcut_inspect`, `tinixcut_capabilities`, `tinixcut_dry_run`, `tinixcut_apply`, `tinixcut_save`, `tinixcut_export_start`, `tinixcut_export_status`, `tinixcut_export_cancel`). Resources, Prompts, Tasks extension, MCP Apps, Sampling, Roots, Subscriptions, and MRTR are not in scope.
+  - **Explicit Project Addressing**: Explicit `projectPath` addressing is implemented for all project-scoped tools; no hidden MCP project session, global active project, or project-handle manager exists.
+  - **Authoritative Apply**: Authoritative mutations (`tinixcut_apply`) route through the canonical `CommandService` and commit durably to disk via atomic persistence (`save_project_atomic`) before returning success. No hidden unsaved state exists across MCP calls.
+  - **Process-Local Write Serialization**: One process-local async authoritative-write gate is shared by the MCP server; Phase-15 authoritative writes serialize across all project paths to prevent concurrent read-modify-write races. Per-path locking optimization is not implemented and remains deferred future work if ever justified by measurement; no distributed/cross-process locking exists.
+  - **Durable Identity**: Authoritative `tinixcut_apply` requires caller-supplied `(client_id, client_epoch, sequence_number)` per ADR-001 v3. Server never auto-generates sequences on retry, preventing duplicate edits on lost-response retries.
+  - **Export Lifecycle**: Existing `JobManager` backs the export lifecycle (`tinixcut_export_start`, `tinixcut_export_status`, `tinixcut_export_cancel`) with snapshot isolation, process-local `jobId` handles, and graceful cancellation on stdin EOF.
+  - **Schema Stability**: Project schema remains Schema v3 unchanged.
+  - **Stdout Protocol Purity**: Subprocess stdio transport guarantees 100% stdout protocol cleanliness; all diagnostics, media resolver messages, and panic hooks route to `stderr`.
+  - **Deferred Scope**: Remote Streamable HTTP, OAuth 2.0 / authorization servers, bearer-token infrastructure, and remote hosting remain deferred.
 
-- project inspect
-- track/item inspect
-- supported operation schema discovery
-- dry-run/diff
-- apply transaction
-- job start/status/cancel for export
+### 18.3 Initial automation capabilities
 
-### 18.3 Capability model
+The automation surface exposes only reviewed domain operations and queries:
 
-Automation must not automatically receive:
+- **Project inspection (`project.inspect`)**: Project metadata, tracks, items, assets, revision, timebase, duration.
+- **Capability discovery (`project.capabilities`)**: Supported operations, transition types, export codecs, protocol version.
+- **Dry-run validation (`command.dryRun`)**: Evaluates operations against current revision, returning structured changes/warnings without mutating project state.
+- **Transactional apply (`command.apply`)**: Executes atomic command envelopes with base revision enforcement and durable idempotency.
+- **Export job lifecycle (`export.start`, `export.status`, `export.cancel`)**: Snapshot-isolated asynchronous render jobs through the shared Job Manager.
+- **Session management (`session.open`, `session.close`, `session.shutdown`, `project.save`)**: Atomic lifecycle controls.
 
-- unrestricted filesystem enumeration
-- arbitrary shell access
-- arbitrary process spawn
-- project-file direct write permission
+### 18.4 Capability model and security boundaries
 
-### 18.4 Audit/receipts
+Automation operates under least privilege and must not receive:
 
-Automation apply should return structured receipts including at least:
+- unrestricted filesystem enumeration or access outside approved project boundaries
+- arbitrary shell command construction or execution
+- arbitrary native process spawning
+- direct project-file write bypasses (all saves pass through atomic persistence validation)
 
-- transaction/operation IDs
-- project revision before/after
-- applied/no-op status
-- errors/warnings
-- changed entity IDs or summary where useful
+### 18.5 Audit, receipts, and durable idempotency
 
-### 18.5 UI and automation equivalence
+Automation apply returns structured receipts (`CommandReceipt`) including:
 
-If a normal edit can be performed manually and is exposed to automation, both paths must invoke equivalent domain semantics.
+- transaction and operation IDs
+- project revision before and after
+- applied vs. `deduplicated_noop` status
+- errors, warnings, and affected entity IDs
+- durable persistence into `Project.command_ledger` preserving replay deduplication across save/reopen cycles
+
+### 18.6 UI and automation equivalence
+
+If an edit can be performed manually in the UI and is exposed to automation, both paths invoke the exact same underlying `CommandService` operations and validate against the exact same domain invariants.
 
 ---
 
@@ -1010,19 +1237,28 @@ A future plugin system requires a separate security/capability design and should
 
 ---
 
-## 21. FFmpeg Distribution and Licensing Boundary
+## 21. FFmpeg Distribution, Process Isolation, and Packaging Boundary (ADR-002)
 
-Before public/commercial packaging:
+TinixCut is designed and scoped for **personal use (non-commercial / non-public distribution)**.
 
-- pin exact FFmpeg version
-- pin/document build configuration
-- record enabled libraries/codecs
-- verify intended application license compatibility
-- maintain required notices/source obligations
-- test software fallback where hardware acceleration is unavailable
-- document unsupported formats clearly
-
-Do not auto-update to arbitrary “latest FFmpeg” without qualification.
+1. **Process Isolation Boundary**:
+   - FFmpeg and ffprobe execute strictly as independent OS child processes via `std::process::Command` with typed arguments.
+   - Core application logic never statically or dynamically links to `libavcodec`/`libavformat`.
+2. **Distribution & Version Pinning**:
+   - Pinned distribution: **FFmpeg 9.0.2 Gyan Release Essentials** (`ffmpeg-9.0.2-essentials_build.zip`, x86_64 Windows).
+   - Artifact provenance (version, upstream URL, SHA-256 digests) is tracked in `ffmpeg_provenance.json` for technical reproducibility and debugging.
+   - Legal/commercial distribution reviews, GPL/LGPL EULA declarations, and patent licensing are explicitly **OUT OF SCOPE** for personal-use builds.
+3. **Packaging Mechanism (Tauri `bundle.resources`)**:
+   - Packaged builds bundle `ffmpeg.exe` and `ffprobe.exe` via Tauri `bundle.resources: ["resources/bin/*"]`.
+   - `MediaBinaryResolver` resolves binaries with strict priority:
+     - Packaged production: must resolve app-owned pinned binary from resource directory; fails if missing.
+     - System `PATH`: strictly forbidden in packaged production; permitted only in explicit dev/test mode (`cfg!(debug_assertions)` or `TINIX_DEV_ALLOW_SYSTEM_PATH=1`).
+4. **WebView2 Strategy**:
+   - NSIS Windows installer uses `downloadBootstrapper` (minimal installer size; leverages system-wide Evergreen WebView2 preinstalled on Windows 10/11).
+5. **Hardware Fallback Strategy**:
+   - Baseline reference: `libx264` software encoding.
+   - Hardware acceleration: `h264_nvenc`, `h264_qsv`, `h264_amf`.
+   - Automatic fallback: If hardware acceleration fails due to driver/device unavailability, the export automatically falls back to `libx264`. Non-hardware errors fail immediately without retry.
 
 ---
 
@@ -1184,10 +1420,10 @@ Future optional components such as cloud sync, remote render, provider APIs, tel
 **When:** immediately after a candidate preview path and basic render plan exist.  
 **Pass condition:** POC 2.
 
-### Gate F — FFmpeg distribution/hardware fallback
+### Gate F — FFmpeg distribution/hardware fallback (ADR-002)
 
 **When:** before packaging/release qualification.  
-**Pass condition:** POC 5.
+**Pass condition:** POC 5 (Pinned FFmpeg 9.0.2 Gyan Release Essentials bundled via Tauri `bundle.resources`; deterministic resolution via `MediaBinaryResolver` with packaged production isolation; hardware fallback to `libx264` validated; installer generated via NSIS with `downloadBootstrapper`; personal-use build scope).
 
 ---
 
@@ -1198,10 +1434,10 @@ These rules are considered non-negotiable unless `ARCHITECTURE.md` is explicitly
 1. Canonical project state is application-owned and versioned.
 2. UI and automation use one authoritative Command Service.
 3. Stable entity IDs are used; array position is not identity.
-4. Canonical time is integer/rational, not arbitrary float seconds.
+4. Canonical time is integer/rational (`RationalTime`), not arbitrary float seconds. Derived `PartialEq/Eq` represents exact stored representation equality; semantic timeline-time equality across rates must use canonical semantic helpers (`is_same_time`/`semantic_eq`, `is_adjacent_to`, `is_adjacent_to_with_rate`) and appropriate rate rescaling rather than raw equality or raw `.value` comparison.
 5. Failed atomic mutations leave project state unchanged.
 6. Stale automation revision is rejected explicitly.
-7. Retried idempotent operation cannot duplicate mutation.
+7. Retried idempotent operation cannot duplicate mutation; durable automation idempotency is project-owned (`command_ledger` active window bounded to $K=5,000$ operations plus bounded `client_registry` $C_{\max}=64$; ADR-001) and survives canonical save/reopen across process lifetimes; durable idempotency requires Structured Operation Identity (`client_id:client_epoch:sequence_number`), mathematically proving that committed operations can never become fresh even under refreshed revisions (`OPERATION_ALREADY_COMMITTED`); operation fingerprints use cryptographic digest (SHA-256 baseline with $\sim 2^{128}$ collision resistance and $\sim 2^{256}$ preimage resistance); replay against unverified legacy FNV-1a entries is conservatively rejected (`LEGACY_RECEIPT_UNVERIFIABLE`) without fresh execution; transport-local memory is not the source of truth for committed operation receipts.
 8. High-frequency gesture events do not each become canonical history/persistence/IPC mutations.
 9. Cache is rebuildable and not required for project correctness.
 10. Missing media does not delete editorial state.
@@ -1275,7 +1511,7 @@ These are intentionally unresolved and must not be guessed deep inside implement
 1. Exact canonical time representation.
 2. Exact preview backend after POC 1.
 3. Exact text layout/rendering strategy needed for preview/export parity.
-4. Exact initial transition/keyframe subset.
+4. Exact initial transition/keyframe subset (Resolved for Phase 13 CrossDissolve via ADR-003: Video CrossDissolve on adjacent cuts via track-level CutTransition, Schema v2, RationalTime, provable handles, and premultiplied RGBA blend. Resolved for Phase 14 Keyframe Easing via ADR-004: Schema v3 clip-local keyframes, canonical Rust 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle, and ExportAutomationSchedule. Audio crossfade, transition easing, and generalized transition frameworks remain open/deferred).
 5. Asset fingerprint strength and when full hashing is required.
 6. Exact FFmpeg build configuration and hardware acceleration matrix.
 7. Whether linked libav/native compositor becomes necessary after preview/render measurements.
@@ -1313,6 +1549,6 @@ Implementation convenience alone is not sufficient reason to bypass an architect
 **Jobs:** bounded local Job Manager.  
 **Preview:** backend abstraction; final choice gated by POC.  
 **Export:** normalized composition plan → deterministic backend, initially FFmpeg-centered.  
-**Automation:** inspect → diff/dry-run → transactional apply through the same Command Service.  
+**Automation:** CLI-first long-lived JSONL stdio and local stdio MCP adapter (ADR-005) over shared Command Service/Job Manager; durable project-owned idempotency surviving save/reopen with bounded retention horizon and SHA-256 fingerprint baseline (ADR-001); remote MCP/HTTP deferred.  
 **Security:** least privilege; no raw shell/file authority from UI or agent.  
 **Scaling:** local-first; no Redis/microservices until a real distributed requirement exists.

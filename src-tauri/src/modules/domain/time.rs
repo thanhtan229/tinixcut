@@ -146,6 +146,31 @@ impl RationalTime {
         let hh = total_minutes / 60;
         format!("{:02}:{:02}:{:02}:{:02}", hh, mm, ss, ff)
     }
+
+    /// Checks whether two `RationalTime` instances represent the exact same semantic temporal instant,
+    /// regardless of differences in frame rate representation.
+    ///
+    /// Uses exact 128-bit cross-multiplication without floating-point drift or truncation.
+    pub fn is_same_time(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+
+    /// Alias for [`is_same_time`].
+    pub fn semantic_eq(&self, other: &Self) -> bool {
+        self.is_same_time(other)
+    }
+}
+
+impl std::fmt::Display for RationalTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}/{} ({:.3}s)",
+            self.value,
+            self.rate.as_f64(),
+            self.to_seconds()
+        )
+    }
 }
 
 impl PartialOrd for RationalTime {
@@ -254,6 +279,20 @@ impl TimeRange {
             start: self.start.rescaled_to(rate),
             duration: self.duration.rescaled_to(rate),
         }
+    }
+
+    /// Checks whether this time range is immediately adjacent to `other` (self.end == other.start).
+    /// Uses exact semantic time equality, safe across mixed frame rates.
+    pub fn is_adjacent_to(&self, other: &Self) -> bool {
+        self.end().is_same_time(&other.start)
+    }
+
+    /// Checks whether this time range is adjacent to `other` either via exact semantic time
+    /// or via frame-tick equality when rescaled to `target_rate`.
+    pub fn is_adjacent_to_with_rate(&self, other: &Self, target_rate: FrameRate) -> bool {
+        self.end().is_same_time(&other.start)
+            || self.end().rescaled_to(target_rate).value
+                == other.start.rescaled_to(target_rate).value
     }
 }
 
@@ -369,5 +408,34 @@ mod tests {
     fn test_gate_a_timecode_formatting() {
         let t = RationalTime::from_frames(3665, FrameRate::FPS_30); // 3665 frames at 30 fps = 122 sec + 5 frames = 2m 2s 5f
         assert_eq!(t.to_timecode(), "00:02:02:05");
+    }
+
+    #[test]
+    fn test_semantic_equality_across_rates() {
+        let t_30fps = RationalTime::from_frames(60, FrameRate::FPS_30); // 2.0s
+        let t_60fps = RationalTime::from_frames(120, FrameRate::FPS_60); // 2.0s
+        let t_24fps = RationalTime::from_frames(48, FrameRate::FPS_24); // 2.0s
+
+        // Raw derived PartialEq fails because (value, rate) tuples differ
+        assert_ne!(t_30fps, t_60fps);
+        assert_ne!(t_30fps, t_24fps);
+
+        // Semantic equality succeeds
+        assert!(t_30fps.is_same_time(&t_60fps));
+        assert!(t_30fps.is_same_time(&t_24fps));
+        assert!(t_60fps.is_same_time(&t_24fps));
+        assert!(t_30fps.semantic_eq(&t_60fps));
+
+        // Range adjacency across mixed rates
+        let r1 = TimeRange::new(
+            RationalTime::zero(FrameRate::FPS_30),
+            RationalTime::from_frames(60, FrameRate::FPS_30), // ends at 2.0s (60@30fps)
+        );
+        let r2 = TimeRange::new(
+            RationalTime::from_frames(120, FrameRate::FPS_60), // starts at 2.0s (120@60fps)
+            RationalTime::from_frames(60, FrameRate::FPS_60),
+        );
+        assert!(r1.is_adjacent_to(&r2));
+        assert!(r1.is_adjacent_to_with_rate(&r2, FrameRate::FPS_30));
     }
 }

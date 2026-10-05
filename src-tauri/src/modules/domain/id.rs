@@ -27,6 +27,10 @@ pub fn generate_operation_id() -> String {
     format!("op_{}", Uuid::new_v4().simple())
 }
 
+pub fn generate_transition_id() -> String {
+    format!("trans_{}", Uuid::new_v4().simple())
+}
+
 pub fn is_valid_id(id: &str) -> bool {
     !id.trim().is_empty() && id.len() <= 64
 }

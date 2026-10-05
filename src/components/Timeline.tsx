@@ -1,17 +1,23 @@
-import React, { useState, useRef } from "react";
-import { Project, TimelineItem } from "../types/project";
+import React, { useState, useRef, useEffect } from "react";
+import { isRangeAdjacent, Keyframe, KeyframeProperty, Project, TimelineItem } from "../types/project";
+import { WaveformData } from "../types/preview";
+import { editorApi } from "../services/editorApi";
 
 interface TimelineProps {
   project: Project | null;
   selectedItemId: string | null;
+  selectedTransitionId?: string | null;
   playheadFrame: number;
   onSelectItem: (itemId: string | null) => void;
+  onSelectTransition?: (transitionId: string | null) => void;
   onPlayheadChange: (frame: number) => void;
   onMoveClip: (itemId: string, newStartFrame: number) => void;
-  onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number) => void;
+  onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number, newSourceStartFrame?: number) => void;
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDeleteClip: (itemId: string) => void;
   onDuplicateClip: (itemId: string) => void;
+  onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
+  onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
 }
 
 const HEADER_WIDTH = 110; // Fixed width for track header column and ruler origin in pixels
@@ -20,17 +26,22 @@ const RULER_HEIGHT = 28; // Height of the time ruler in pixels
 export const Timeline: React.FC<TimelineProps> = ({
   project,
   selectedItemId,
+  selectedTransitionId,
   playheadFrame,
   onSelectItem,
+  onSelectTransition,
   onPlayheadChange,
   onMoveClip,
   onTrimClip,
   onSplitClip,
   onDeleteClip,
   onDuplicateClip,
+  onMoveKeyframe,
+  onCreateCutTransition,
 }) => {
   const [zoom, setZoom] = useState<number>(3); // pixels per frame
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
 
   // Transient gesture state (Workstream 3.4: local ephemeral state during drag)
   const [transientDrag, setTransientDrag] = useState<{
@@ -39,10 +50,48 @@ export const Timeline: React.FC<TimelineProps> = ({
     initialPointerX: number;
     initialStartFrame: number;
     initialDurationFrames: number;
+    initialSourceStartFrame: number;
     currentDeltaFrames: number;
   } | null>(null);
 
+  // Transient keyframe drag state (Section B6)
+  const [transientKfDrag, setTransientKfDrag] = useState<{
+    itemId: string;
+    property: KeyframeProperty;
+    initialOffset: number;
+    currentOffset: number;
+    initialPointerX: number;
+    maxDuration: number;
+  } | null>(null);
+
   const tracksContainerRef = useRef<HTMLDivElement>(null);
+
+  // Load disposable waveform cache for referenced media assets
+  useEffect(() => {
+    if (!project) return;
+    const assetIds = new Set<string>();
+    for (const track of project.tracks) {
+      for (const item of track.items) {
+        if (item.asset_id && (item.kind === "Audio" || item.kind === "Video")) {
+          assetIds.add(item.asset_id);
+        }
+      }
+    }
+    for (const assetId of assetIds) {
+      if (!waveforms[assetId]) {
+        editorApi
+          .getWaveform(assetId)
+          .then((res) => {
+            if (res.status === "Ready") {
+              setWaveforms((prev) => ({ ...prev, [assetId]: res.payload }));
+            }
+          })
+          .catch(() => {
+            // Graceful non-blocking degradation if asset has no audio or is missing
+          });
+      }
+    }
+  }, [project, waveforms]);
 
   // Find currently selected item
   let selectedItem: TimelineItem | null = null;
@@ -165,6 +214,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialPointerX: e.clientX,
       initialStartFrame: item.timeline_range.start.value,
       initialDurationFrames: item.timeline_range.duration.value,
+      initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
     });
   };
@@ -188,43 +238,168 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialPointerX: e.clientX,
       initialStartFrame: item.timeline_range.start.value,
       initialDurationFrames: item.timeline_range.duration.value,
+      initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
     });
   };
 
+  const handleKfPointerDown = (
+    e: React.PointerEvent,
+    item: TimelineItem,
+    kf: Keyframe
+  ) => {
+    e.stopPropagation();
+    onSelectItem(item.item_id);
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore
+    }
+
+    setTransientKfDrag({
+      itemId: item.item_id,
+      property: kf.property,
+      initialOffset: kf.offset.value,
+      currentOffset: kf.offset.value,
+      initialPointerX: e.clientX,
+      maxDuration: item.timeline_range.duration.value,
+    });
+  };
+
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!transientDrag) return;
-    const deltaPixels = e.clientX - transientDrag.initialPointerX;
-    const deltaFrames = Math.round(deltaPixels / zoom);
-    setTransientDrag((prev) => (prev ? { ...prev, currentDeltaFrames: deltaFrames } : null));
+    if (transientDrag) {
+      const deltaPixels = e.clientX - transientDrag.initialPointerX;
+      const deltaFrames = Math.round(deltaPixels / zoom);
+      setTransientDrag((prev) => (prev ? { ...prev, currentDeltaFrames: deltaFrames } : null));
+    } else if (transientKfDrag) {
+      const deltaPixels = e.clientX - transientKfDrag.initialPointerX;
+      const deltaFrames = Math.round(deltaPixels / zoom);
+      const proposedOffset = Math.max(
+        0,
+        Math.min(transientKfDrag.maxDuration, transientKfDrag.initialOffset + deltaFrames)
+      );
+      setTransientKfDrag((prev) => (prev ? { ...prev, currentOffset: proposedOffset } : null));
+    }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (!transientDrag) return;
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // Ignore if not captured
-    }
-
-    const { mode, itemId, initialStartFrame, initialDurationFrames, currentDeltaFrames } = transientDrag;
-    setTransientDrag(null);
-
-    // Commit single authoritative domain command
-    if (mode === "move") {
-      const finalStart = Math.max(0, initialStartFrame + currentDeltaFrames);
-      if (finalStart !== initialStartFrame) {
-        onMoveClip(itemId, finalStart);
+    if (transientDrag) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore if not captured
       }
-    } else if (mode === "trim-left") {
-      const proposedStart = Math.max(0, initialStartFrame + currentDeltaFrames);
-      const deltaApplied = proposedStart - initialStartFrame;
-      const finalDur = Math.max(1, initialDurationFrames - deltaApplied);
-      onTrimClip(itemId, proposedStart, finalDur);
-    } else if (mode === "trim-right") {
-      const finalDur = Math.max(1, initialDurationFrames + currentDeltaFrames);
-      onTrimClip(itemId, initialStartFrame, finalDur);
+
+      const { mode, itemId, initialStartFrame, initialDurationFrames, initialSourceStartFrame, currentDeltaFrames } = transientDrag;
+      setTransientDrag(null);
+
+      // Commit single authoritative domain command
+      if (mode === "move") {
+        const finalStart = Math.max(0, initialStartFrame + currentDeltaFrames);
+        if (finalStart !== initialStartFrame) {
+          onMoveClip(itemId, finalStart);
+        }
+      } else if (mode === "trim-left") {
+        const proposedStart = Math.max(0, initialStartFrame + currentDeltaFrames);
+        const deltaApplied = proposedStart - initialStartFrame;
+        const finalDur = Math.max(1, initialDurationFrames - deltaApplied);
+        const finalSourceStart = Math.max(0, initialSourceStartFrame + deltaApplied);
+        onTrimClip(itemId, proposedStart, finalDur, finalSourceStart);
+      } else if (mode === "trim-right") {
+        const finalDur = Math.max(1, initialDurationFrames + currentDeltaFrames);
+        onTrimClip(itemId, initialStartFrame, finalDur, initialSourceStartFrame);
+      }
+    } else if (transientKfDrag) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      const { itemId, property, initialOffset, currentOffset } = transientKfDrag;
+      setTransientKfDrag(null);
+      if (currentOffset !== initialOffset && onMoveKeyframe) {
+        onMoveKeyframe(itemId, property, initialOffset, currentOffset);
+      }
     }
+  };
+
+  const getKfColor = (prop: KeyframeProperty) => {
+    switch (prop) {
+      case "PositionX":
+      case "PositionY":
+        return "#38bdf8"; // Sky blue
+      case "ScaleX":
+      case "ScaleY":
+        return "#c084fc"; // Purple
+      case "Rotation":
+        return "#f472b6"; // Pink
+      case "Opacity":
+        return "#34d399"; // Emerald
+      case "Volume":
+        return "#fbbf24"; // Amber
+      default:
+        return "#fbbf24";
+    }
+  };
+
+  const renderWaveformSvg = (
+    wf: WaveformData,
+    sourceStartF: number,
+    sourceDurF: number,
+    frameRate: number,
+    widthPx: number,
+    heightPx: number
+  ) => {
+    const rate = frameRate || 30;
+    const sourceStartSec = sourceStartF / rate;
+    const sourceDurSec = sourceDurF / rate;
+    const bucketStart = Math.max(0, Math.floor(sourceStartSec * wf.bucket_rate));
+    const bucketCount = Math.max(1, Math.ceil(sourceDurSec * wf.bucket_rate));
+    const totalBuckets = Math.floor(wf.peaks.length / 2);
+    const bucketEnd = Math.min(totalBuckets, bucketStart + bucketCount);
+
+    const availableBuckets = bucketEnd - bucketStart;
+    if (availableBuckets <= 1 || widthPx <= 4) return null;
+
+    // Resample adaptively: up to 1 sample per 2 pixels
+    const numSamples = Math.min(availableBuckets, Math.max(20, Math.floor(widthPx / 2)));
+    const step = availableBuckets / numSamples;
+    const midY = heightPx / 2;
+    const ampScale = midY * 0.85;
+
+    const topPoints: string[] = [];
+    const bottomPoints: string[] = [];
+
+    for (let i = 0; i < numSamples; i++) {
+      const bIdx = Math.min(totalBuckets - 1, Math.floor(bucketStart + i * step));
+      const minVal = wf.peaks[bIdx * 2] ?? 0;
+      const maxVal = wf.peaks[bIdx * 2 + 1] ?? 0;
+      const x = ((i / (numSamples - 1)) * widthPx).toFixed(1);
+      const yTop = (midY - maxVal * ampScale).toFixed(1);
+      const yBottom = (midY - minVal * ampScale).toFixed(1);
+
+      topPoints.push(`${x},${yTop}`);
+      bottomPoints.unshift(`${x},${yBottom}`);
+    }
+
+    const pathD = `M ${topPoints.join(" L ")} L ${bottomPoints.join(" L ")} Z`;
+
+    return (
+      <svg
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: `${widthPx}px`,
+          height: `${heightPx}px`,
+          pointerEvents: "none",
+          opacity: 0.35,
+          zIndex: 1,
+        }}
+      >
+        <path d={pathD} fill="#67e8f9" />
+      </svg>
+    );
   };
 
   const handleTracksAreaClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -505,6 +680,22 @@ export const Timeline: React.FC<TimelineProps> = ({
                       zIndex: isSelected ? 8 : 5,
                     }}
                   >
+                    {/* Audio Waveform Visualization (Trim-aware & Zoom-resilient) */}
+                    {item.asset_id &&
+                      waveforms[item.asset_id] &&
+                      renderWaveformSvg(
+                        waveforms[item.asset_id],
+                        transientDrag?.itemId === item.item_id && transientDrag.mode === "trim-left"
+                          ? item.source_range.start.value + (startF - transientDrag.initialStartFrame)
+                          : item.source_range.start.value,
+                        durF,
+                        project?.settings.frame_rate
+                          ? project.settings.frame_rate.numerator / (project.settings.frame_rate.denominator || 1)
+                          : 30,
+                        Math.max(8, durF * zoom),
+                        38
+                      )}
+
                     {/* Left Trim Handle */}
                     <div
                       onPointerDown={(e) => handlePointerDownTrim(e, item, "trim-left")}
@@ -514,6 +705,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                         cursor: "ew-resize",
                         backgroundColor: "rgba(255, 255, 255, 0.2)",
                         borderRadius: "2px 0 0 2px",
+                        zIndex: 7,
                       }}
                       title="Drag to trim start"
                     />
@@ -529,6 +721,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                         display: "flex",
                         alignItems: "center",
                         gap: "6px",
+                        zIndex: 4,
                       }}
                     >
                       <span style={{ fontWeight: 600 }}>{item.name}</span>
@@ -554,6 +747,63 @@ export const Timeline: React.FC<TimelineProps> = ({
                       <span style={{ opacity: 0.7, fontSize: "10px" }}>({durF}f)</span>
                     </span>
 
+                    {/* Keyframe Markers Strip */}
+                    {item.keyframes && item.keyframes.length > 0 && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          right: 0,
+                          bottom: "1px",
+                          height: "12px",
+                          backgroundColor: "rgba(0, 0, 0, 0.45)",
+                          borderTop: "1px solid rgba(255, 255, 255, 0.15)",
+                          zIndex: 6,
+                          pointerEvents: "auto",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {item.keyframes.map((kf, kfIdx) => {
+                          const isDraggingThis =
+                            transientKfDrag &&
+                            transientKfDrag.itemId === item.item_id &&
+                            transientKfDrag.property === kf.property &&
+                            transientKfDrag.initialOffset === kf.offset.value;
+                          const currentOffset = isDraggingThis
+                            ? transientKfDrag.currentOffset
+                            : kf.offset.value;
+                          const markerX = currentOffset * zoom;
+
+                          return (
+                            <div
+                              key={`${kf.property}_${kf.offset.value}_${kfIdx}`}
+                              onPointerDown={(e) => handleKfPointerDown(e, item, kf)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onPlayheadChange(item.timeline_range.start.value + kf.offset.value);
+                              }}
+                              style={{
+                                position: "absolute",
+                                left: `${markerX}px`,
+                                top: "50%",
+                                transform: "translate(-50%, -50%) rotate(45deg)",
+                                width: "7px",
+                                height: "7px",
+                                backgroundColor: isDraggingThis ? "#38bdf8" : getKfColor(kf.property),
+                                border: isDraggingThis ? "1px solid #fff" : "1px solid rgba(0, 0, 0, 0.8)",
+                                boxShadow: isDraggingThis
+                                  ? "0 0 6px #38bdf8"
+                                  : "0 1px 2px rgba(0, 0, 0, 0.5)",
+                                cursor: "ew-resize",
+                                zIndex: 10,
+                              }}
+                              title={`${kf.property}: ${kf.value} @ +${kf.offset.value}f (Kéo để di chuyển, click để nhảy playhead)`}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+
                     {/* Right Trim Handle */}
                     <div
                       onPointerDown={(e) => handlePointerDownTrim(e, item, "trim-right")}
@@ -563,12 +813,113 @@ export const Timeline: React.FC<TimelineProps> = ({
                         cursor: "ew-resize",
                         backgroundColor: "rgba(255, 255, 255, 0.2)",
                         borderRadius: "0 2px 2px 0",
+                        zIndex: 7,
                       }}
                       title="Drag to trim end"
                     />
                   </div>
                 );
               })}
+
+              {/* Transitions on Track */}
+              {track.transitions?.map((trans) => {
+                const leftItem = track.items.find((i) => i.item_id === trans.left_item_id);
+                const rightItem = track.items.find((i) => i.item_id === trans.right_item_id);
+                if (!leftItem || !rightItem) return null;
+
+                const cutF = leftItem.timeline_range.start.value + leftItem.timeline_range.duration.value;
+                const durF = trans.duration.value;
+                const lF = Math.floor(durF / 2);
+                const rF = durF - lF;
+                const t0F = cutF - lF;
+                const t1F = cutF + rF;
+                const isSelected = selectedTransitionId === trans.transition_id;
+
+                return (
+                  <div
+                    key={trans.transition_id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectTransition?.(trans.transition_id);
+                      onSelectItem(null);
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: "6px",
+                      bottom: "6px",
+                      left: `${HEADER_WIDTH + t0F * zoom}px`,
+                      width: `${Math.max(16, (t1F - t0F) * zoom)}px`,
+                      background: isSelected
+                        ? "linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(217, 119, 6, 0.95))"
+                        : "linear-gradient(135deg, rgba(245, 158, 11, 0.65), rgba(59, 130, 246, 0.65))",
+                      border: isSelected ? "2px solid #fbbf24" : "1px solid #f59e0b",
+                      borderRadius: "3px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      zIndex: 12,
+                      color: "#fff",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      boxShadow: isSelected ? "0 0 8px rgba(245, 158, 11, 0.9)" : "0 1px 3px rgba(0, 0, 0, 0.4)",
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
+                      padding: "0 2px",
+                      userSelect: "none",
+                    }}
+                    title={`CrossDissolve: ${durF} frames [${t0F}, ${t1F}) (Click to select)`}
+                  >
+                    ⧓ {durF}f
+                  </div>
+                );
+              })}
+
+              {/* Seam Cut Handles for Adjacent Video Clips Without Transition */}
+              {track.kind === "Video" &&
+                track.items.map((item, idx) => {
+                  if (idx >= track.items.length - 1) return null;
+                  const nextItem = track.items[idx + 1];
+                  if (!isRangeAdjacent(item.timeline_range, nextItem.timeline_range)) return null;
+                  const cutF = item.timeline_range.start.value + item.timeline_range.duration.value;
+                  const hasTrans = track.transitions?.some(
+                    (t) => t.left_item_id === item.item_id && t.right_item_id === nextItem.item_id
+                  );
+                  if (hasTrans) return null;
+
+                  return (
+                    <button
+                      key={`cut_btn_${item.item_id}_${nextItem.item_id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCreateCutTransition?.(track.track_id, item.item_id, nextItem.item_id, 30);
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: "13px",
+                        left: `${HEADER_WIDTH + cutF * zoom - 9}px`,
+                        width: "18px",
+                        height: "18px",
+                        borderRadius: "50%",
+                        backgroundColor: "#f59e0b",
+                        color: "#000",
+                        border: "1px solid #fbbf24",
+                        fontSize: "11px",
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        zIndex: 15,
+                        boxShadow: "0 1px 4px rgba(0, 0, 0, 0.6)",
+                        padding: 0,
+                      }}
+                      title={`Add CrossDissolve between "${item.name}" and "${nextItem.name}"`}
+                    >
+                      ⧓
+                    </button>
+                  );
+                })}
             </div>
           ))}
 

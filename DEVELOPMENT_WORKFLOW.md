@@ -140,10 +140,10 @@ Health check:
 - latest code/revision is active
 
 Package command:
-- TBD — define only when packaging work begins
+- pnpm tauri build (Generates NSIS installer at src-tauri/target/release/bundle/nsis/TinixCut_0.1.0_x64-setup.exe with pinned Gyan Release Essentials FFmpeg/ffprobe 9.0.2 resources)
 
-Release command:
-- TBD — define only when release work begins
+Release qualification command:
+- cargo test --manifest-path src-tauri/Cargo.toml -- test_gate_f_poc5_matrix_execution --nocapture (Runs POC 5 qualification matrix P5-M01..P5-M16 and emits tests/evidence/poc5_qualification_report.json)
 
 HMR / live reload:
 - Partial

@@ -95,9 +95,10 @@ pub fn load_project(path: &Path) -> Result<Project, PersistenceError> {
     let mut file = File::open(path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
+    let clean_contents = contents.trim_start_matches('\u{feff}');
 
     // Check schema version and run migrations if needed
-    let migrated_json = run_migrations_if_needed(&contents)?;
+    let migrated_json = run_migrations_if_needed(clean_contents)?;
     let project: Project = serde_json::from_str(&migrated_json)?;
 
     project
@@ -153,7 +154,8 @@ pub fn check_recovery_status(
 /// Schema migration harness
 /// Detects version in raw JSON and applies registered migration transforms.
 pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceError> {
-    let val: serde_json::Value = serde_json::from_str(raw_json)?;
+    let clean_json = raw_json.trim_start_matches('\u{feff}');
+    let mut val: serde_json::Value = serde_json::from_str(clean_json)?;
     let version = val
         .get("schema_version")
         .and_then(|v| v.as_u64())
@@ -168,10 +170,118 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
         });
     }
 
-    // If future schema versions exist, sequential migration functions are applied here:
-    // if version == 1 && CURRENT_SCHEMA_VERSION == 2 { val = migrate_v1_to_v2(val)?; }
+    if version == 1 && CURRENT_SCHEMA_VERSION >= 2 {
+        val = migrate_v1_to_v2(val)?;
+    }
+
+    if (version == 1 || version == 2) && CURRENT_SCHEMA_VERSION >= 3 {
+        val = migrate_v2_to_v3(val)?;
+    }
 
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
+}
+
+/// Migrates Schema v1 projects to Schema v2:
+/// - Promotes `schema_version` to 2.
+/// - Explicitly initializes `transitions: []` on all tracks.
+/// - Preserves all single-clip Fade semantics (`fade_in`, `fade_out`, item-level `FadeIn`/`FadeOut`/`FadeBlack`) losslessly.
+/// - Never invents `CrossDissolve`.
+/// - Rejects malformed v1 projects containing unsupported `CrossDissolve` placeholders on items.
+pub fn migrate_v1_to_v2(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    if let Some(tracks_val) = obj.get_mut("tracks") {
+        if let Some(tracks_arr) = tracks_val.as_array_mut() {
+            for track_val in tracks_arr.iter_mut() {
+                if let Some(track_obj) = track_val.as_object_mut() {
+                    // Check items for malformed legacy item-level CrossDissolve placeholder
+                    if let Some(items_val) = track_obj.get("items") {
+                        if let Some(items_arr) = items_val.as_array() {
+                            for item_val in items_arr {
+                                if let Some(trans_val) = item_val.get("transition") {
+                                    if !trans_val.is_null() {
+                                        if let Some(kind_val) = trans_val.get("kind") {
+                                            if kind_val.as_str() == Some("CrossDissolve") {
+                                                return Err(PersistenceError::MigrationFailed(
+                                                    "Malformed Schema v1 project: item-level CrossDissolve placeholder is unsupported in Schema v2 and cannot be migrated to cut transition".to_string()
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // CD-09, CD-12: Initialize empty transitions array if absent or null
+                    if !track_obj.contains_key("transitions")
+                        || track_obj.get("transitions").is_some_and(|v| v.is_null())
+                    {
+                        track_obj.insert("transitions".to_string(), serde_json::json!([]));
+                    }
+                }
+            }
+        }
+    }
+
+    // CD-08: Bump schema version to 2
+    obj.insert("schema_version".to_string(), serde_json::json!(2));
+
+    Ok(val)
+}
+
+/// Migrates Schema v2 projects to Schema v3:
+/// - Promotes `schema_version` to 3.
+/// - Sets `outgoing_easing = "Linear"` for all existing keyframes that omit outgoing easing.
+/// - Preserves all Phase-13 cut transitions, fades, project metadata, assets, track topology,
+///   item ranges, transforms, and client registry/command ledger losslessly.
+/// - Produces zero visual or timing change for valid existing projects.
+pub fn migrate_v2_to_v3(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    if let Some(tracks_val) = obj.get_mut("tracks") {
+        if let Some(tracks_arr) = tracks_val.as_array_mut() {
+            for track_val in tracks_arr.iter_mut() {
+                if let Some(track_obj) = track_val.as_object_mut() {
+                    if let Some(items_val) = track_obj.get_mut("items") {
+                        if let Some(items_arr) = items_val.as_array_mut() {
+                            for item_val in items_arr.iter_mut() {
+                                if let Some(item_obj) = item_val.as_object_mut() {
+                                    if let Some(kfs_val) = item_obj.get_mut("keyframes") {
+                                        if let Some(kfs_arr) = kfs_val.as_array_mut() {
+                                            for kf_val in kfs_arr.iter_mut() {
+                                                if let Some(kf_obj) = kf_val.as_object_mut() {
+                                                    if !kf_obj.contains_key("outgoing_easing")
+                                                        || kf_obj
+                                                            .get("outgoing_easing")
+                                                            .is_some_and(|v| v.is_null())
+                                                    {
+                                                        kf_obj.insert(
+                                                            "outgoing_easing".to_string(),
+                                                            serde_json::json!("Linear"),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Bump schema version to 3
+    obj.insert("schema_version".to_string(), serde_json::json!(3));
+
+    Ok(val)
 }
 
 /// Example migration for tests: Migrates hypothetical legacy format to v1
@@ -192,7 +302,9 @@ pub fn migrate_legacy_fixture(raw_json: &str) -> Result<String, PersistenceError
 mod tests {
     use super::*;
     use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
-    use crate::modules::domain::{ItemKind, MediaKind, TimelineItem, Track, TrackKind};
+    use crate::modules::domain::{
+        CutTransition, ItemKind, MediaKind, TimelineItem, Track, TrackKind, TransitionKind,
+    };
     use crate::modules::history::{HistoryEntry, HistoryManager};
     use crate::modules::media::{AssetOnlineStatus, MediaCatalog};
 
@@ -398,5 +510,355 @@ mod tests {
         history.redo(&mut active).unwrap();
         assert_eq!(active.tracks.len(), 1);
         assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn test_phase9_keyframe_and_transition_save_reopen_round_trip() {
+        use crate::modules::composition::CompositionPlan;
+        use crate::modules::domain::{Keyframe, KeyframeProperty, Transition, TransitionKind};
+
+        let temp_dir = std::env::temp_dir().join("tinix_phase9_save_reopen_test");
+        let _ = fs::create_dir_all(&temp_dir);
+        let proj_path = temp_dir.join("phase9_keyframes_transitions.tcproj");
+
+        let mut project = Project::new("Phase 9 Round Trip".to_string());
+        let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
+        let rate = FrameRate::new(30, 1);
+        let mut item = TimelineItem::new(
+            Some("asset_vid".to_string()),
+            "Video Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(300, rate)),
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(300, rate)),
+        )
+        .unwrap();
+
+        // 1. Add keyframes across all supported animated properties
+        let keyframe_specs = vec![
+            (KeyframeProperty::PositionX, 0.0, 100.0),
+            (KeyframeProperty::PositionY, 0.0, -50.0),
+            (KeyframeProperty::ScaleX, 1.0, 2.0),
+            (KeyframeProperty::ScaleY, 1.0, 2.0),
+            (KeyframeProperty::Rotation, 0.0, 45.0),
+            (KeyframeProperty::Opacity, 1.0, 0.2),
+            (KeyframeProperty::Volume, 1.0, 0.5),
+        ];
+
+        for (prop, v_start, v_end) in &keyframe_specs {
+            item.keyframes
+                .push(Keyframe::new(*prop, RationalTime::new(0, rate), *v_start));
+            item.keyframes
+                .push(Keyframe::new(*prop, RationalTime::new(100, rate), *v_end));
+        }
+
+        // 2. Add transition
+        item.transition = Some(Transition {
+            kind: TransitionKind::FadeIn,
+            duration: RationalTime::new(30, rate),
+        });
+
+        track.items.push(item);
+        project.tracks.push(track);
+        project.assets.push(crate::modules::domain::Asset {
+            asset_id: "asset_vid".to_string(),
+            name: "asset_vid.mp4".to_string(),
+            path: "D:/dummy/asset_vid.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::new(300, rate)),
+            file_size: 1024,
+        });
+
+        // Pre-save composition plan evaluation
+        let plan_pre = CompositionPlan::from_project(&project).unwrap();
+        let sample_time = RationalTime::new(50, rate);
+        let pre_op = plan_pre.visual_layers[0].effective_opacity_at(sample_time);
+        let pre_pos_x =
+            plan_pre.visual_layers[0].evaluate_property(KeyframeProperty::PositionX, sample_time);
+        let pre_pos_y =
+            plan_pre.visual_layers[0].evaluate_property(KeyframeProperty::PositionY, sample_time);
+        let pre_scale_x =
+            plan_pre.visual_layers[0].evaluate_property(KeyframeProperty::ScaleX, sample_time);
+        let pre_rot =
+            plan_pre.visual_layers[0].evaluate_property(KeyframeProperty::Rotation, sample_time);
+        let pre_vol = plan_pre.audio_layers[0].effective_volume_at(sample_time);
+
+        // 3. Atomically save project
+        save_project_atomic(&project, &proj_path).expect("save_project_atomic should succeed");
+
+        // 4. Reopen and validate persistence
+        let loaded = load_project(&proj_path).expect("load_project should succeed");
+        assert_eq!(loaded.name, "Phase 9 Round Trip");
+        assert_eq!(loaded.tracks.len(), 1);
+        let loaded_item = &loaded.tracks[0].items[0];
+
+        // Validate Transition persistence
+        assert!(loaded_item.transition.is_some());
+        let trans = loaded_item.transition.as_ref().unwrap();
+        assert_eq!(trans.kind, TransitionKind::FadeIn);
+        assert_eq!(trans.duration, RationalTime::new(30, rate));
+
+        // Validate Keyframes persistence
+        assert_eq!(loaded_item.keyframes.len(), keyframe_specs.len() * 2);
+        for (prop, v_start, v_end) in &keyframe_specs {
+            let kf0 = loaded_item
+                .keyframes
+                .iter()
+                .find(|k| k.property == *prop && k.offset.value == 0)
+                .expect("start keyframe must exist");
+            assert_eq!(kf0.value, *v_start);
+
+            let kf1 = loaded_item
+                .keyframes
+                .iter()
+                .find(|k| k.property == *prop && k.offset.value == 100)
+                .expect("end keyframe must exist");
+            assert_eq!(kf1.value, *v_end);
+        }
+
+        // Validate Post-load composition plan evaluation matches pre-save exactly
+        let plan_post = CompositionPlan::from_project(&loaded).unwrap();
+        let post_op = plan_post.visual_layers[0].effective_opacity_at(sample_time);
+        let post_pos_x =
+            plan_post.visual_layers[0].evaluate_property(KeyframeProperty::PositionX, sample_time);
+        let post_pos_y =
+            plan_post.visual_layers[0].evaluate_property(KeyframeProperty::PositionY, sample_time);
+        let post_scale_x =
+            plan_post.visual_layers[0].evaluate_property(KeyframeProperty::ScaleX, sample_time);
+        let post_rot =
+            plan_post.visual_layers[0].evaluate_property(KeyframeProperty::Rotation, sample_time);
+        let post_vol = plan_post.audio_layers[0].effective_volume_at(sample_time);
+
+        assert_eq!(pre_op, post_op);
+        assert_eq!(pre_pos_x, post_pos_x);
+        assert_eq!(pre_pos_y, post_pos_y);
+        assert_eq!(pre_scale_x, post_scale_x);
+        assert_eq!(pre_rot, post_rot);
+        assert_eq!(pre_vol, post_vol);
+
+        // 5. Recovery snapshot round trip (C2)
+        let rec_path = temp_dir.join("phase9_keyframes_transitions.tcproj.recovery");
+        save_recovery_snapshot(&loaded, &rec_path).expect("save_recovery_snapshot should succeed");
+        let rec_loaded = load_project(&rec_path).expect("loading recovery file should succeed");
+        assert_eq!(
+            rec_loaded.tracks[0].items[0].keyframes.len(),
+            keyframe_specs.len() * 2
+        );
+        assert_eq!(
+            rec_loaded.tracks[0].items[0]
+                .transition
+                .as_ref()
+                .unwrap()
+                .kind,
+            TransitionKind::FadeIn
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_phase13_schema_v1_to_v2_migration_lossless_fades() {
+        let v1_json = r#"{
+            "schema_version": 1,
+            "project_id": "proj_test_v1",
+            "name": "Legacy V1 Project",
+            "revision": 3,
+            "settings": {
+                "width": 1920,
+                "height": 1080,
+                "frame_rate": { "numerator": 30, "denominator": 1 },
+                "sample_rate": 48000,
+                "channels": 2
+            },
+            "assets": [],
+            "tracks": [
+                {
+                    "track_id": "trk_v1",
+                    "name": "Track 1",
+                    "kind": "Video",
+                    "muted": false,
+                    "locked": false,
+                    "items": [
+                        {
+                            "item_id": "clip_v1_1",
+                            "name": "Clip with Fades",
+                            "kind": "Video",
+                            "timeline_range": {
+                                "start": { "value": 0, "rate": { "numerator": 30, "denominator": 1 } },
+                                "duration": { "value": 60, "rate": { "numerator": 30, "denominator": 1 } }
+                            },
+                            "source_range": {
+                                "start": { "value": 0, "rate": { "numerator": 30, "denominator": 1 } },
+                                "duration": { "value": 60, "rate": { "numerator": 30, "denominator": 1 } }
+                            },
+                            "transform": { "position_x": 0.0, "position_y": 0.0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0 },
+                            "crop": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+                            "opacity": 1.0,
+                            "volume": 1.0,
+                            "fade_in": { "value": 15, "rate": { "numerator": 30, "denominator": 1 } },
+                            "fade_out": { "value": 15, "rate": { "numerator": 30, "denominator": 1 } },
+                            "transition": {
+                                "kind": "FadeIn",
+                                "duration": { "value": 15, "rate": { "numerator": 30, "denominator": 1 } }
+                            },
+                            "keyframes": []
+                        }
+                    ]
+                }
+            ],
+            "created_at": "2026-10-04T00:00:00Z",
+            "updated_at": "2026-10-04T00:00:00Z"
+        }"#;
+
+        let migrated_str = run_migrations_if_needed(v1_json).expect("v1 migration should succeed");
+        let project: Project =
+            serde_json::from_str(&migrated_str).expect("migrated json should parse to Project");
+
+        // CD-08: Bumped to schema_version 3 (via v1 -> v2 -> v3 migration)
+        assert_eq!(project.schema_version, 3);
+        assert_eq!(project.tracks.len(), 1);
+
+        // CD-09, CD-12: transitions initialized empty
+        assert_eq!(project.tracks[0].transitions.len(), 0);
+
+        // CD-10, CD-11: Item-level Fade semantics preserved losslessly
+        let item = &project.tracks[0].items[0];
+        assert_eq!(item.fade_in.unwrap().value, 15);
+        assert_eq!(item.fade_out.unwrap().value, 15);
+        assert!(item.transition.is_some());
+        assert_eq!(
+            item.transition.as_ref().unwrap().kind,
+            TransitionKind::FadeIn
+        );
+        assert_eq!(item.transition.as_ref().unwrap().duration.value, 15);
+
+        // Validation passes
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn test_phase13_schema_v2_save_and_reopen_exact_round_trip() {
+        let temp_dir = std::env::temp_dir().join("tinix_p13_save_test");
+        let _ = fs::create_dir_all(&temp_dir);
+        let project_path = temp_dir.join("v2_round_trip.tcproj");
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Schema v2 Project".to_string());
+        assert_eq!(project.schema_version, 3);
+
+        let mut track = Track::new("Video Track 1".to_string(), TrackKind::Video);
+        let t1 = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(60, rate),
+        );
+        let item1 = TimelineItem::new(None, "Clip 1".to_string(), ItemKind::Video, t1, t1).unwrap();
+        let item1_id = item1.item_id.clone();
+
+        let t2 = TimeRange::new(
+            RationalTime::from_frames(60, rate),
+            RationalTime::from_frames(60, rate),
+        );
+        let item2 = TimelineItem::new(None, "Clip 2".to_string(), ItemKind::Video, t2, t2).unwrap();
+        let item2_id = item2.item_id.clone();
+
+        track.items.push(item1);
+        track.items.push(item2);
+
+        let cut_trans = CutTransition::new(
+            track.track_id.clone(),
+            item1_id.clone(),
+            item2_id.clone(),
+            TransitionKind::CrossDissolve,
+            RationalTime::from_frames(20, rate),
+        )
+        .unwrap();
+        let trans_id = cut_trans.transition_id.clone();
+        track.transitions.push(cut_trans);
+        project.tracks.push(track);
+
+        save_project_atomic(&project, &project_path).expect("v2 save should succeed");
+
+        let loaded = load_project(&project_path).expect("v2 load should succeed");
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.tracks[0].transitions.len(), 1);
+
+        let loaded_trans = &loaded.tracks[0].transitions[0];
+        assert_eq!(loaded_trans.transition_id, trans_id);
+        assert_eq!(loaded_trans.left_item_id, item1_id);
+        assert_eq!(loaded_trans.right_item_id, item2_id);
+        assert_eq!(loaded_trans.kind, TransitionKind::CrossDissolve);
+        assert_eq!(loaded_trans.duration.value, 20);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_phase13_malformed_legacy_crossdissolve_rejected_on_migration() {
+        let malformed_v1_json = r#"{
+            "schema_version": 1,
+            "project_id": "proj_malformed",
+            "name": "Malformed Legacy",
+            "tracks": [
+                {
+                    "track_id": "trk_1",
+                    "name": "Track 1",
+                    "kind": "Video",
+                    "items": [
+                        {
+                            "item_id": "clip_bad",
+                            "name": "Bad Clip",
+                            "kind": "Video",
+                            "transition": {
+                                "kind": "CrossDissolve",
+                                "duration": { "value": 30, "rate": { "numerator": 30, "denominator": 1 } }
+                            }
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let res = run_migrations_if_needed(malformed_v1_json);
+        assert!(matches!(res, Err(PersistenceError::MigrationFailed(_))));
+    }
+
+    #[test]
+    fn test_phase13_migration_failure_leaves_source_file_safe() {
+        let temp_dir = std::env::temp_dir().join("tinix_p13_safe_migration_test");
+        let _ = fs::create_dir_all(&temp_dir);
+        let project_path = temp_dir.join("corrupted_legacy.tcproj");
+
+        let malformed_v1 = r#"{
+            "schema_version": 1,
+            "project_id": "proj_safe_test",
+            "name": "Untouched Legacy",
+            "tracks": [
+                {
+                    "track_id": "trk_1",
+                    "name": "Track 1",
+                    "kind": "Video",
+                    "items": [
+                        {
+                            "item_id": "clip_bad",
+                            "name": "Bad Clip",
+                            "kind": "Video",
+                            "transition": {
+                                "kind": "CrossDissolve",
+                                "duration": { "value": 30, "rate": { "numerator": 30, "denominator": 1 } }
+                            }
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        fs::write(&project_path, malformed_v1).unwrap();
+        let res = load_project(&project_path);
+        assert!(res.is_err());
+
+        // Verify original file content is intact and was NOT overwritten
+        let on_disk = fs::read_to_string(&project_path).unwrap();
+        assert_eq!(on_disk, malformed_v1);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

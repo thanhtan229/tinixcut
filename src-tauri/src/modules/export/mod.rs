@@ -6,13 +6,19 @@
 //! - Cancellable and non-supersedable job lifecycle.
 //! - Preserves pre-existing valid output on failure or cancellation.
 
+pub mod automation;
+pub use automation::{
+    escape_ffmpeg_filter_path, AutomationArtifactsGuard, ExportAutomationSchedule,
+};
+
 use crate::modules::composition::CompositionPlan;
 use crate::modules::domain::time::FrameRate;
 use crate::modules::domain::Project;
+use crate::modules::media::resolver::MediaBinaryResolver;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,6 +42,10 @@ pub enum ExportError {
     Composition(String),
 }
 
+fn default_export_audio_sample_rate() -> u32 {
+    48000
+}
+
 /// Bounded output profile for deterministic MP4 export
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExportProfile {
@@ -47,6 +57,8 @@ pub struct ExportProfile {
     pub video_codec: String,
     pub audio_codec: String,
     pub audio_bitrate: String,
+    #[serde(default = "default_export_audio_sample_rate")]
+    pub audio_sample_rate: u32,
 }
 
 impl Default for ExportProfile {
@@ -60,16 +72,17 @@ impl Default for ExportProfile {
             video_codec: "libx264".to_string(),
             audio_codec: "aac".to_string(),
             audio_bitrate: "192k".to_string(),
+            audio_sample_rate: 48000,
         }
     }
 }
 
 impl ExportProfile {
     pub fn validate(&self) -> Result<(), ExportError> {
-        let supported_codecs = ["libx264", "h264_nvenc", "h264_qsv", "h264_amf"];
+        let supported_codecs = ["auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf"];
         if !supported_codecs.contains(&self.video_codec.as_str()) {
             return Err(ExportError::UnsupportedProfile(format!(
-                "Video codec '{}' is not supported in v1 (only libx264 and standard hardware codecs are supported)",
+                "Video codec '{}' is not supported in v1 (only auto, libx264 and standard hardware codecs are supported)",
                 self.video_codec
             )));
         }
@@ -77,6 +90,12 @@ impl ExportProfile {
             return Err(ExportError::UnsupportedProfile(format!(
                 "Audio codec '{}' is not supported in v1 (only aac is supported)",
                 self.audio_codec
+            )));
+        }
+        if self.audio_sample_rate != 48000 && self.audio_sample_rate != 44100 {
+            return Err(ExportError::UnsupportedProfile(format!(
+                "Audio sample rate {} is not supported (only 48000 and 44100 Hz are supported)",
+                self.audio_sample_rate
             )));
         }
         if self.width == 0 || self.height == 0 {
@@ -100,12 +119,75 @@ pub struct ExportReport {
     pub duration_secs: f64,
     pub file_size_bytes: u64,
     pub render_time_ms: u128,
+    #[serde(default)]
+    pub encoder_used: Option<String>,
+    #[serde(default)]
+    pub attempted_encoders: Vec<String>,
 }
 
 /// Export Engine coordinating snapshot freeze, FFmpeg execution, and atomic promotion
 pub struct ExportEngine;
 
 impl ExportEngine {
+    /// Ordered ladder candidates according to ADR-002: NVENC -> QSV -> AMF -> libx264
+    pub fn get_encoder_candidates(requested: &str) -> Vec<&'static str> {
+        match requested {
+            "auto" | "h264_nvenc" => vec!["h264_nvenc", "h264_qsv", "h264_amf", "libx264"],
+            "h264_qsv" => vec!["h264_qsv", "h264_amf", "libx264"],
+            "h264_amf" => vec!["h264_amf", "libx264"],
+            "libx264" => vec!["libx264"],
+            _ => vec!["libx264"],
+        }
+    }
+
+    /// Discriminate hardware/encoder initialization failures from I/O or syntax errors.
+    /// Only genuine hardware/device/driver/encoder failures trigger ladder fallback.
+    pub fn is_hardware_encoder_error(stderr: &str, codec: &str) -> bool {
+        if codec == "libx264" {
+            return false;
+        }
+
+        let lower = stderr.to_lowercase();
+
+        // Non-hardware errors must NOT trigger fallback!
+        if lower.contains("no such file or directory")
+            || lower.contains("permission denied")
+            || lower.contains("no space left on device")
+            || lower.contains("matches no streams")
+        {
+            return false;
+        }
+
+        // Hardware encoder and driver failure signatures
+        lower.contains("cannot load nvcuda.dll")
+            || lower.contains("cannot load nvenvapi.dll")
+            || lower.contains("no nvenc capable devices found")
+            || lower.contains("device creation failed")
+            || lower.contains("driver version insufficient")
+            || lower.contains("function not implemented")
+            || lower.contains("unknown encoder")
+            || lower.contains("encoder not found")
+            || lower.contains("error while opening encoder")
+            || lower.contains("failed to open encoder")
+            || lower.contains("initialization failed")
+            || lower.contains("device not found")
+            || lower.contains("selected device is not valid")
+            || lower.contains("error creating amf context")
+            || lower.contains("amf failed to initialize")
+            || lower.contains("error initializing output stream")
+            || lower.contains("no device available for encoder")
+            || lower.contains("openencodesessionex failed")
+            || lower.contains("nvcuda.dll")
+            || lower.contains("nvenc")
+            || lower.contains("qsv")
+            || lower.contains("amf")
+            || lower.contains("mfx")
+            || lower.contains("unrecognized option 'c:v")
+            || lower.contains("unrecognized option 'vcodec")
+            || lower.contains("cannot load")
+            || lower.contains("not supported")
+    }
+
     /// Renders a project snapshot to the target file safely and deterministically.
     /// Invariant: Edits made to other project instances do not affect this frozen snapshot.
     pub fn render_snapshot(
@@ -143,121 +225,174 @@ impl ExportEngine {
         // Clean up any stale temp file
         let _ = fs::remove_file(&temp_output_path);
 
-        // 2. Generate FFmpeg command arguments from the CompositionPlan
-        let is_hw = profile.video_codec != "libx264";
-        let active_codec = profile.video_codec.clone();
-        let (args, _) = plan.to_ffmpeg_export_args(&temp_output_path, profile.crf, &active_codec);
+        let automation_dir = temp_output_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("tc_auto_{}", std::process::id()));
+        let mut schedule = ExportAutomationSchedule::build(
+            &plan,
+            &automation_dir,
+            profile.audio_sample_rate,
+            cancel_flag.as_ref(),
+        )?;
 
+        let candidates = Self::get_encoder_candidates(&profile.video_codec);
+        let mut attempted_encoders: Vec<String> = Vec::new();
         let start_time = Instant::now();
 
-        // 3. Spawn child FFmpeg process with piped/null I/O
-        let mut child: Child = Command::new("ffmpeg")
-            .args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                ExportError::RenderFailed(format!("Failed to spawn FFmpeg process: {e}"))
-            })?;
-
-        // 4. Poll execution while checking cancellation flag
-        let mut cancelled = false;
-        loop {
+        for (i, &candidate) in candidates.iter().enumerate() {
+            // Check cancellation before launching candidate
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::SeqCst) {
-                    cancelled = true;
-                    let _ = child.kill();
-                    break;
+                    let _ = fs::remove_file(&temp_output_path);
+                    return Err(ExportError::Cancelled);
                 }
             }
 
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        let _ = fs::remove_file(&temp_output_path);
-                        let mut stderr_str = String::new();
-                        if let Some(mut err_pipe) = child.stderr.take() {
-                            use std::io::Read;
-                            let _ = err_pipe.read_to_string(&mut stderr_str);
-                        }
+            attempted_encoders.push(candidate.to_string());
 
-                        // POC 5 Hardware vs Software Fallback Gate:
-                        // If hardware encoder failed or is unavailable on this machine,
-                        // fallback to libx264 software encoding automatically!
-                        if is_hw {
-                            let mut fallback_profile = profile.clone();
-                            fallback_profile.video_codec = "libx264".to_string();
-                            return Self::render_snapshot(
-                                snapshot,
-                                target_path,
-                                &fallback_profile,
-                                cancel_flag,
-                            );
-                        }
+            // Generate FFmpeg command arguments from the CompositionPlan with candidate codec and automation schedule
+            let (args, _) = plan.to_ffmpeg_export_args_with_schedule(
+                &temp_output_path,
+                profile.crf,
+                candidate,
+                Some(&schedule),
+            );
 
-                        return Err(ExportError::RenderFailed(format!(
-                            "FFmpeg render process exited with error status: {:?}. Stderr: {}",
-                            status.code(),
-                            stderr_str
-                        )));
-                    }
-                    break;
-                }
-                Ok(None) => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+            // Spawn child FFmpeg process via centralized MediaBinaryResolver
+            let mut cmd = match MediaBinaryResolver::command("ffmpeg") {
+                Ok(c) => c,
                 Err(e) => {
-                    let _ = child.kill();
                     let _ = fs::remove_file(&temp_output_path);
                     return Err(ExportError::RenderFailed(format!(
-                        "Error checking FFmpeg process: {e}"
+                        "Failed to resolve FFmpeg binary: {e}"
                     )));
                 }
+            };
+
+            let mut child: Child = cmd
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    let _ = fs::remove_file(&temp_output_path);
+                    ExportError::RenderFailed(format!("Failed to spawn FFmpeg process: {e}"))
+                })?;
+
+            let mut cancelled = false;
+            let mut render_success = false;
+            let mut stderr_str = String::new();
+
+            loop {
+                if let Some(ref flag) = cancel_flag {
+                    if flag.load(Ordering::SeqCst) {
+                        cancelled = true;
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        if status.success() {
+                            render_success = true;
+                        } else {
+                            if let Some(mut err_pipe) = child.stderr.take() {
+                                use std::io::Read;
+                                let _ = err_pipe.read_to_string(&mut stderr_str);
+                            }
+                        }
+                        break;
+                    }
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(e) => {
+                        let _ = child.kill();
+                        let _ = fs::remove_file(&temp_output_path);
+                        return Err(ExportError::RenderFailed(format!(
+                            "Error checking FFmpeg process: {e}"
+                        )));
+                    }
+                }
             }
-        }
 
-        if cancelled {
-            // Safe cleanup: remove incomplete temporary file, leave pre-existing target intact
+            if cancelled {
+                let _ = fs::remove_file(&temp_output_path);
+                return Err(ExportError::Cancelled);
+            }
+
+            if render_success {
+                // Verify temporary file was written and is non-empty
+                let metadata = fs::metadata(&temp_output_path).map_err(|e| {
+                    ExportError::RenderFailed(format!(
+                        "Rendered file is missing or inaccessible: {e}"
+                    ))
+                })?;
+
+                if metadata.len() == 0 {
+                    let _ = fs::remove_file(&temp_output_path);
+                    return Err(ExportError::RenderFailed(
+                        "Rendered file is empty (0 bytes)".to_string(),
+                    ));
+                }
+
+                // Safe output promotion: atomically rename temp file to target output
+                if target_path.exists() {
+                    let _ = fs::remove_file(target_path);
+                }
+
+                fs::rename(&temp_output_path, target_path).map_err(|e| {
+                    let _ = fs::remove_file(&temp_output_path);
+                    ExportError::IoError(format!(
+                        "Failed to promote temporary render file to destination: {e}"
+                    ))
+                })?;
+
+                let render_time_ms = start_time.elapsed().as_millis();
+                let file_size_bytes = metadata.len();
+                let duration_secs = plan.duration.to_seconds();
+
+                schedule.guard.cleanup();
+
+                return Ok(ExportReport {
+                    output_path: target_path.to_path_buf(),
+                    duration_secs,
+                    file_size_bytes,
+                    render_time_ms,
+                    encoder_used: Some(candidate.to_string()),
+                    attempted_encoders,
+                });
+            }
+
+            // Render failed with this candidate, clean up temp file
             let _ = fs::remove_file(&temp_output_path);
-            return Err(ExportError::Cancelled);
+
+            // Check if fallback to the next candidate in the ladder is permitted
+            let has_next = i + 1 < candidates.len();
+            if has_next && Self::is_hardware_encoder_error(&stderr_str, candidate) {
+                eprintln!(
+                    "[ExportEngine] Hardware encoder '{}' unavailable or failed; falling back to '{}'. Stderr: {}",
+                    candidate,
+                    candidates[i + 1],
+                    stderr_str.lines().next().unwrap_or("")
+                );
+                continue;
+            }
+
+            // Non-hardware error or final fallback candidate exhausted: fail explicitly
+            return Err(ExportError::RenderFailed(format!(
+                "FFmpeg render process failed with encoder '{}' (status error). Stderr: {}",
+                candidate, stderr_str
+            )));
         }
 
-        // 5. Verify temporary file was written and is non-empty
-        let metadata = fs::metadata(&temp_output_path).map_err(|e| {
-            ExportError::RenderFailed(format!("Rendered file is missing or inaccessible: {e}"))
-        })?;
-
-        if metadata.len() == 0 {
-            let _ = fs::remove_file(&temp_output_path);
-            return Err(ExportError::RenderFailed(
-                "Rendered file is empty (0 bytes)".to_string(),
-            ));
-        }
-
-        // 6. Safe output promotion: atomically rename temp file to target output
-        // On Windows, if target exists, remove it right before rename to ensure atomic replacement
-        if target_path.exists() {
-            let _ = fs::remove_file(target_path);
-        }
-
-        fs::rename(&temp_output_path, target_path).map_err(|e| {
-            let _ = fs::remove_file(&temp_output_path);
-            ExportError::IoError(format!(
-                "Failed to promote temporary render file to destination: {e}"
-            ))
-        })?;
-
-        let render_time_ms = start_time.elapsed().as_millis();
-        let file_size_bytes = metadata.len();
-        let duration_secs = plan.duration.to_seconds();
-
-        Ok(ExportReport {
-            output_path: target_path.to_path_buf(),
-            duration_secs,
-            file_size_bytes,
-            render_time_ms,
-        })
+        Err(ExportError::RenderFailed(
+            "All encoder candidates exhausted without success".to_string(),
+        ))
     }
 }
 
@@ -269,7 +404,6 @@ pub mod tests {
         Asset, ItemKind, MediaKind, Project, ProjectSettings, TimelineItem, Track, TrackKind,
     };
     use std::fs;
-    use std::process::Command;
 
     fn get_fixture_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("tinixcut_test_fixtures_phase8");
@@ -281,33 +415,35 @@ pub mod tests {
         if path.exists() {
             return;
         }
-        let output = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                &format!("color=c={}:s=640x360:r=30:d={}", color, duration_secs),
-                "-f",
-                "lavfi",
-                "-i",
-                &format!("sine=frequency=440:duration={}", duration_secs),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                &path.to_string_lossy(),
-            ])
-            .output();
+        if let Ok(mut cmd) = MediaBinaryResolver::command("ffmpeg") {
+            let output = cmd
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &format!("color=c={}:s=640x360:r=30:d={}", color, duration_secs),
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &format!("sine=frequency=440:duration={}", duration_secs),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    &path.to_string_lossy(),
+                ])
+                .output();
 
-        if let Ok(res) = output {
-            if !res.status.success() {
-                eprintln!(
-                    "FFmpeg synthetic generator warning: {}",
-                    String::from_utf8_lossy(&res.stderr)
-                );
+            if let Ok(res) = output {
+                if !res.status.success() {
+                    eprintln!(
+                        "FFmpeg synthetic generator warning: {}",
+                        String::from_utf8_lossy(&res.stderr)
+                    );
+                }
             }
         }
     }
@@ -562,7 +698,82 @@ pub mod tests {
         assert!(output_file.exists());
         assert_eq!(report.duration_secs, 2.0);
         assert!(report.file_size_bytes > 0);
+        assert!(report.encoder_used.is_some());
+        assert!(!report.attempted_encoders.is_empty());
+        assert_eq!(report.attempted_encoders[0], "h264_nvenc");
 
         let _ = fs::remove_file(output_file);
+    }
+
+    /// P12-AC-09: Automated test proving exact candidate ladder order NVENC -> QSV -> AMF -> libx264
+    #[test]
+    fn test_phase12_hardware_ladder_candidate_order() {
+        let auto_ladder = ExportEngine::get_encoder_candidates("auto");
+        assert_eq!(
+            auto_ladder,
+            vec!["h264_nvenc", "h264_qsv", "h264_amf", "libx264"],
+            "ADR-002 requires exact ladder: NVENC -> QSV -> AMF -> libx264"
+        );
+
+        let nvenc_ladder = ExportEngine::get_encoder_candidates("h264_nvenc");
+        assert_eq!(
+            nvenc_ladder,
+            vec!["h264_nvenc", "h264_qsv", "h264_amf", "libx264"]
+        );
+
+        let qsv_ladder = ExportEngine::get_encoder_candidates("h264_qsv");
+        assert_eq!(qsv_ladder, vec!["h264_qsv", "h264_amf", "libx264"]);
+
+        let amf_ladder = ExportEngine::get_encoder_candidates("h264_amf");
+        assert_eq!(amf_ladder, vec!["h264_amf", "libx264"]);
+
+        let sw_ladder = ExportEngine::get_encoder_candidates("libx264");
+        assert_eq!(sw_ladder, vec!["libx264"]);
+    }
+
+    /// P12-AC-10: Automated test proving only encoder/device initialization unavailability triggers fallback
+    #[test]
+    fn test_phase12_hardware_error_discrimination() {
+        // Genuine hardware/driver errors
+        assert!(ExportEngine::is_hardware_encoder_error(
+            "Cannot load nvcuda.dll",
+            "h264_nvenc"
+        ));
+        assert!(ExportEngine::is_hardware_encoder_error(
+            "No NVENC capable devices found",
+            "h264_nvenc"
+        ));
+        assert!(ExportEngine::is_hardware_encoder_error(
+            "Device creation failed",
+            "h264_qsv"
+        ));
+        assert!(ExportEngine::is_hardware_encoder_error(
+            "Error creating AMF context",
+            "h264_amf"
+        ));
+        assert!(ExportEngine::is_hardware_encoder_error(
+            "Unknown encoder 'h264_nvenc'",
+            "h264_nvenc"
+        ));
+
+        // Software baseline never triggers hardware fallback
+        assert!(!ExportEngine::is_hardware_encoder_error(
+            "Error initializing output stream",
+            "libx264"
+        ));
+
+        // Non-hardware I/O or syntax errors must NOT trigger fallback
+        assert!(!ExportEngine::is_hardware_encoder_error(
+            "No such file or directory: input.mp4",
+            "h264_nvenc"
+        ));
+        assert!(!ExportEngine::is_hardware_encoder_error(
+            "Permission denied when opening destination",
+            "h264_nvenc"
+        ));
+        assert!(!ExportEngine::is_hardware_encoder_error(
+            "No space left on device",
+            "h264_qsv"
+        ));
     }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
-import { Asset, Project, TimelineItem } from "./types/project";
+import { Asset, CutTransition, isRangeAdjacent, KeyframeEasing, KeyframeProperty, Project, TimelineItem, TransitionKind } from "./types/project";
 import { CommandEnvelope } from "./types/command";
 import { editorApi } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -16,6 +16,7 @@ export function App() {
   const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
   const [playheadFrame, setPlayheadFrame] = useState<number>(0);
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
 
@@ -62,6 +63,7 @@ export function App() {
       setProject(p);
       setSavedFilePath(null);
       setSelectedItemId(null);
+      setSelectedTransitionId(null);
       setPlayheadFrame(0);
       setStatusMsg("New project created");
     } catch (err) {
@@ -82,6 +84,7 @@ export function App() {
       setProject(p);
       setSavedFilePath(chosenPath);
       setSelectedItemId(null);
+      setSelectedTransitionId(null);
       setPlayheadFrame(0);
       setStatusMsg(`Loaded project: ${p.name}`);
     } catch (err) {
@@ -339,9 +342,25 @@ export function App() {
     );
   };
 
-  const handleTrimClip = (itemId: string, newStartFrame: number, newDurationFrames: number) => {
+  const handleTrimClip = (
+    itemId: string,
+    newStartFrame: number,
+    newDurationFrames: number,
+    newSourceStartFrame?: number
+  ) => {
     if (!project) return;
     const rate = project.settings.frame_rate;
+    let sourceStart = 0;
+    for (const track of project.tracks) {
+      const it = track.items.find((i) => i.item_id === itemId);
+      if (it) {
+        sourceStart = it.source_range.start.value;
+        break;
+      }
+    }
+    if (newSourceStartFrame !== undefined) {
+      sourceStart = newSourceStartFrame;
+    }
     executeCommandEnvelope(
       [
         {
@@ -355,7 +374,7 @@ export function App() {
                 duration: { value: newDurationFrames, rate },
               },
               new_source_range: {
-                start: { value: 0, rate },
+                start: { value: sourceStart, rate },
                 duration: { value: newDurationFrames, rate },
               },
             },
@@ -505,6 +524,221 @@ export function App() {
     );
   };
 
+  const handleUpdateTransition = (
+    kind: TransitionKind | null,
+    durationFrames: number
+  ) => {
+    if (!selectedItemId || !project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_trans_${Date.now()}`,
+          operation: {
+            type: "ClipTransitionSet",
+            payload: {
+              item_id: selectedItemId,
+              transition: kind
+                ? {
+                    kind,
+                    duration: { value: durationFrames, rate },
+                  }
+                : null,
+            },
+          },
+        },
+      ],
+      kind ? `Set Transition (${kind})` : "Remove Transition"
+    );
+  };
+
+  const handleAddKeyframe = (property: KeyframeProperty, offsetFrame: number, value: number) => {
+    if (!selectedItemId || !project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_kf_add_${Date.now()}`,
+          operation: {
+            type: "ClipKeyframeAdd",
+            payload: {
+              item_id: selectedItemId,
+              keyframe: {
+                property,
+                offset: { value: offsetFrame, rate },
+                value,
+              },
+            },
+          },
+        },
+      ],
+      `Add Keyframe (${property})`
+    );
+  };
+
+  const handleRemoveKeyframe = (property: KeyframeProperty, offsetFrame: number) => {
+    if (!selectedItemId || !project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_kf_rm_${Date.now()}`,
+          operation: {
+            type: "ClipKeyframeRemove",
+            payload: {
+              item_id: selectedItemId,
+              property,
+              offset: { value: offsetFrame, rate },
+            },
+          },
+        },
+      ],
+      `Remove Keyframe (${property})`
+    );
+  };
+
+  const handleMoveKeyframe = (
+    itemId: string,
+    property: KeyframeProperty,
+    oldOffsetFrame: number,
+    newOffsetFrame: number
+  ) => {
+    if (!project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_kf_mv_${Date.now()}`,
+          operation: {
+            type: "ClipKeyframeMove",
+            payload: {
+              item_id: itemId,
+              property,
+              old_offset: { value: oldOffsetFrame, rate },
+              new_offset: { value: newOffsetFrame, rate },
+            },
+          },
+        },
+      ],
+      `Move Keyframe (${property})`
+    );
+  };
+
+  const handleSetKeyframeEasing = (
+    property: KeyframeProperty,
+    offsetFrame: number,
+    easing: KeyframeEasing
+  ) => {
+    if (!selectedItemId || !project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_kf_ease_${Date.now()}`,
+          operation: {
+            type: "ClipKeyframeEasingSet",
+            payload: {
+              item_id: selectedItemId,
+              property,
+              offset: { value: offsetFrame, rate },
+              easing,
+            },
+          },
+        },
+      ],
+      `Set Keyframe Easing (${property})`
+    );
+  };
+
+  const handleUpdateVolume = (volume: number) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_vol_${Date.now()}`,
+          operation: {
+            type: "ClipVolumeSet",
+            payload: {
+              item_id: selectedItemId,
+              volume,
+            },
+          },
+        },
+      ],
+      "Update Volume"
+    );
+  };
+
+  const handleCreateCutTransition = (
+    trackId: string,
+    leftItemId: string,
+    rightItemId: string,
+    durationFrames: number = 30
+  ) => {
+    if (!project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_cut_trans_create_${Date.now()}`,
+          operation: {
+            type: "CutTransitionCreate",
+            payload: {
+              track_id: trackId,
+              left_item_id: leftItemId,
+              right_item_id: rightItemId,
+              kind: "CrossDissolve",
+              duration: { value: durationFrames, rate },
+            },
+          },
+        },
+      ],
+      "Create CrossDissolve"
+    );
+  };
+
+  const handleUpdateCutTransitionDuration = (
+    transitionId: string,
+    newDurationFrames: number
+  ) => {
+    if (!project) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_cut_trans_dur_${Date.now()}`,
+          operation: {
+            type: "CutTransitionUpdateDuration",
+            payload: {
+              transition_id: transitionId,
+              new_duration: { value: newDurationFrames, rate },
+            },
+          },
+        },
+      ],
+      "Update CrossDissolve Duration"
+    );
+  };
+
+  const handleRemoveCutTransition = (transitionId: string) => {
+    if (!project) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_cut_trans_rm_${Date.now()}`,
+          operation: {
+            type: "CutTransitionRemove",
+            payload: {
+              transition_id: transitionId,
+            },
+          },
+        },
+      ],
+      "Remove CrossDissolve"
+    );
+    setSelectedTransitionId(null);
+  };
+
   // Find currently selected item
   let selectedItem: TimelineItem | null = null;
   if (project && selectedItemId) {
@@ -512,6 +746,55 @@ export function App() {
       const it = track.items.find((i) => i.item_id === selectedItemId);
       if (it) {
         selectedItem = it;
+        break;
+      }
+    }
+  }
+
+  // Find currently selected cut transition
+  let selectedTransition: CutTransition | null = null;
+  if (project && selectedTransitionId) {
+    for (const track of project.tracks) {
+      const tr = track.transitions?.find((t) => t.transition_id === selectedTransitionId);
+      if (tr) {
+        selectedTransition = tr;
+        break;
+      }
+    }
+  }
+
+  // Find adjacent items for the selected item
+  const adjacentInfo: {
+    prevClip?: TimelineItem;
+    nextClip?: TimelineItem;
+    outgoingTransition?: CutTransition;
+    incomingTransition?: CutTransition;
+    trackId?: string;
+  } = {};
+
+  if (project && selectedItem) {
+    for (const track of project.tracks) {
+      const itIdx = track.items.findIndex((i) => i.item_id === selectedItem?.item_id);
+      if (itIdx !== -1) {
+        adjacentInfo.trackId = track.track_id;
+        if (itIdx > 0) {
+          const prev = track.items[itIdx - 1];
+          if (isRangeAdjacent(prev.timeline_range, selectedItem.timeline_range)) {
+            adjacentInfo.prevClip = prev;
+            adjacentInfo.incomingTransition = track.transitions?.find(
+              (t) => t.left_item_id === prev.item_id && t.right_item_id === selectedItem?.item_id
+            );
+          }
+        }
+        if (itIdx < track.items.length - 1) {
+          const next = track.items[itIdx + 1];
+          if (isRangeAdjacent(selectedItem.timeline_range, next.timeline_range)) {
+            adjacentInfo.nextClip = next;
+            adjacentInfo.outgoingTransition = track.transitions?.find(
+              (t) => t.left_item_id === selectedItem?.item_id && t.right_item_id === next.item_id
+            );
+          }
+        }
         break;
       }
     }
@@ -550,24 +833,46 @@ export function App() {
           <Timeline
             project={project}
             selectedItemId={selectedItemId}
+            selectedTransitionId={selectedTransitionId}
             playheadFrame={playheadFrame}
-            onSelectItem={setSelectedItemId}
+            onSelectItem={(itemId) => {
+              setSelectedItemId(itemId);
+              if (itemId) setSelectedTransitionId(null);
+            }}
+            onSelectTransition={(transId) => {
+              setSelectedTransitionId(transId);
+              if (transId) setSelectedItemId(null);
+            }}
             onPlayheadChange={setPlayheadFrame}
             onMoveClip={handleMoveClip}
             onTrimClip={handleTrimClip}
             onSplitClip={handleSplitClip}
             onDeleteClip={handleDeleteClip}
             onDuplicateClip={handleDuplicateClip}
+            onMoveKeyframe={handleMoveKeyframe}
+            onCreateCutTransition={handleCreateCutTransition}
           />
         </section>
 
         <Inspector
           selectedItem={selectedItem}
+          selectedTransition={selectedTransition}
+          adjacentInfo={adjacentInfo}
           assets={project?.assets ?? []}
+          playheadFrame={playheadFrame}
           onUpdateTransform={handleUpdateTransform}
           onUpdateOpacity={handleUpdateOpacity}
+          onUpdateVolume={handleUpdateVolume}
           onUpdateText={handleUpdateText}
           onUpdateAudioFade={handleUpdateAudioFade}
+          onUpdateTransition={handleUpdateTransition}
+          onAddKeyframe={handleAddKeyframe}
+          onRemoveKeyframe={handleRemoveKeyframe}
+          onSetKeyframeEasing={handleSetKeyframeEasing}
+          onSeekPlayhead={setPlayheadFrame}
+          onCreateCutTransition={handleCreateCutTransition}
+          onUpdateCutTransitionDuration={handleUpdateCutTransitionDuration}
+          onRemoveCutTransition={handleRemoveCutTransition}
         />
       </div>
 

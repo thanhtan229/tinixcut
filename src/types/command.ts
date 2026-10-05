@@ -1,6 +1,49 @@
-import { Crop, ItemKind, RationalTime, TimeRange, TrackKind, Transform } from "./project";
+import {
+  Crop,
+  ItemKind,
+  Keyframe,
+  KeyframeEasing,
+  KeyframeProperty,
+  RationalTime,
+  TimeRange,
+  TrackKind,
+  Transform,
+  Transition,
+  TransitionKind,
+} from "./project";
 
 export type CommandOperation =
+  | {
+      type: "CutTransitionCreate";
+      payload: {
+        transition_id?: string;
+        track_id: string;
+        left_item_id: string;
+        right_item_id: string;
+        kind: TransitionKind;
+        duration: RationalTime;
+      };
+    }
+  | {
+      type: "CutTransitionUpdateDuration";
+      payload: {
+        transition_id: string;
+        new_duration: RationalTime;
+      };
+    }
+  | {
+      type: "CutTransitionRemove";
+      payload: {
+        transition_id: string;
+      };
+    }
+  | {
+      type: "ClipTransitionSet";
+      payload: {
+        item_id: string;
+        transition?: Transition | null;
+      };
+    }
   | {
       type: "TrackCreate";
       payload: {
@@ -119,6 +162,39 @@ export type CommandOperation =
         media_kind: "Video" | "Audio" | "Image";
         file_size: number;
       };
+    }
+  | {
+      type: "ClipKeyframeAdd";
+      payload: {
+        item_id: string;
+        keyframe: Keyframe;
+      };
+    }
+  | {
+      type: "ClipKeyframeRemove";
+      payload: {
+        item_id: string;
+        property: KeyframeProperty;
+        offset: RationalTime;
+      };
+    }
+  | {
+      type: "ClipKeyframeMove";
+      payload: {
+        item_id: string;
+        property: KeyframeProperty;
+        old_offset: RationalTime;
+        new_offset: RationalTime;
+      };
+    }
+  | {
+      type: "ClipKeyframeEasingSet";
+      payload: {
+        item_id: string;
+        property: KeyframeProperty;
+        offset: RationalTime;
+        easing: KeyframeEasing;
+      };
     };
 
 export interface OperationEnvelope {
@@ -130,6 +206,9 @@ export interface CommandEnvelope {
   schema_version: number;
   project_id: string;
   base_revision: number;
+  client_id?: string;
+  client_epoch?: number;
+  sequence_number?: number;
   dry_run: boolean;
   transaction_id?: string;
   operations: OperationEnvelope[];
@@ -149,6 +228,7 @@ export interface CommandReceipt {
   transaction_id?: string;
   operations_applied: number;
   receipts: OperationReceipt[];
+  idempotency_scope?: string;
 }
 
 export interface DiffReport {

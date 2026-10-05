@@ -1,0 +1,294 @@
+{
+  "report_version": "1.0.0",
+  "timestamp_utc": "2026-10-04T14:53:47.812748900+00:00",
+  "app_version": "0.1.0",
+  "platform": "windows",
+  "os_info": "windows (x86_64)",
+  "gpu_adapters": [
+    "NVIDIA GeForce RTX 3090"
+  ],
+  "binaries": [
+    {
+      "binary": "ffmpeg",
+      "path": "D:\\___TOOLS\\__TINIX\\TinixCut\\src-tauri\\resources\\bin\\ffmpeg.exe",
+      "origin_type": "AppOwnedPackagedResource(\"D:\\\\___TOOLS\\\\__TINIX\\\\TinixCut\\\\src-tauri\\\\resources\\\\bin\\\\ffmpeg.exe\")",
+      "version": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "sha256": "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec"
+    },
+    {
+      "binary": "ffprobe",
+      "path": "D:\\___TOOLS\\__TINIX\\TinixCut\\src-tauri\\resources\\bin\\ffprobe.exe",
+      "origin_type": "AppOwnedPackagedResource(\"D:\\\\___TOOLS\\\\__TINIX\\\\TinixCut\\\\src-tauri\\\\resources\\\\bin\\\\ffprobe.exe\")",
+      "version": "ffprobe version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers",
+      "sha256": "f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52"
+    }
+  ],
+  "results": [
+    {
+      "id": "P5-M01",
+      "name": "Resolve pinned FFmpeg and FFprobe binaries",
+      "passed": true,
+      "operation": "resolve_binaries",
+      "details": "FFmpeg: D:\\___TOOLS\\__TINIX\\TinixCut\\src-tauri\\resources\\bin\\ffmpeg.exe (AppOwnedPackagedResource(\"D:\\\\___TOOLS\\\\__TINIX\\\\TinixCut\\\\src-tauri\\\\resources\\\\bin\\\\ffmpeg.exe\")), FFprobe: D:\\___TOOLS\\__TINIX\\TinixCut\\src-tauri\\resources\\bin\\ffprobe.exe (AppOwnedPackagedResource(\"D:\\\\___TOOLS\\\\__TINIX\\\\TinixCut\\\\src-tauri\\\\resources\\\\bin\\\\ffprobe.exe\"))",
+      "duration_ms": 0,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M02",
+      "name": "Probe P12-F01 (1080p30 baseline)",
+      "passed": true,
+      "operation": "probe_file",
+      "details": "Probe result: Ok((1920, 1080, Some(\"h264\"), Some(\"aac\")))",
+      "duration_ms": 55,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": {
+        "format_name": null,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": "30",
+        "duration_seconds": 2.0
+      },
+      "error_category": null
+    },
+    {
+      "id": "P5-M03",
+      "name": "Thumbnail extraction P12-F01",
+      "passed": true,
+      "operation": "generate_thumbnail",
+      "details": "Thumbnail path: C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m03_thumbnail.jpg, size: 9497 bytes",
+      "duration_ms": 100,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m03_thumbnail.jpg",
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M04",
+      "name": "Proxy generation from P12-F02 (4K -> 540p)",
+      "passed": true,
+      "operation": "generate_proxy",
+      "details": "Proxy height: Some(540)",
+      "duration_ms": 278,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m04_proxy_540p.mp4",
+      "probe_summary": {
+        "format_name": null,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 960,
+        "height": 540,
+        "frame_rate": "30",
+        "duration_seconds": 1.0
+      },
+      "error_category": null
+    },
+    {
+      "id": "P5-M05",
+      "name": "Waveform extraction from P12-F04 (48kHz audio)",
+      "passed": true,
+      "operation": "extract_waveform",
+      "details": "Peaks extracted: 200",
+      "duration_ms": 90,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m05_waveform.json",
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M06",
+      "name": "Probe P12-F03 (VFR) and P12-F05 (rotated metadata)",
+      "passed": true,
+      "operation": "probe_timing_and_rotation",
+      "details": "F03 dur: Ok(2.0), F05 dims: Ok((1280, 720))",
+      "duration_ms": 89,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M07",
+      "name": "Safe negative handling of corrupt media P12-F06",
+      "passed": true,
+      "operation": "probe_corrupt_file",
+      "details": "Expected error returned safely: Some(\"Relink verification failed: ffprobe execution failed: \")",
+      "duration_ms": 41,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": "SafeProcessFailure"
+    },
+    {
+      "id": "P5-M08",
+      "name": "Probe and derivative from Unicode & space path P12-F07",
+      "passed": true,
+      "operation": "unicode_space_path_resilience",
+      "details": "Probe ok: true, Thumb ok: true",
+      "duration_ms": 130,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m08_unicode_thumb.jpg",
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M09",
+      "name": "Automatic hardware ladder export (NVENC -> QSV -> AMF -> libx264)",
+      "passed": false,
+      "operation": "export_snapshot_auto_ladder",
+      "details": "Hardware encoder UNQUALIFIED: Attempted: [\"h264_nvenc\", \"h264_qsv\", \"h264_amf\", \"libx264\"], Selected: Some(\"libx264\"). Hardware encoder initialization failed due to driver version (Driver 595.79 has NVENC API 13.0, FFmpeg 9.0.2 requires NVENC API 13.1 / Driver >= 610.00). Fell back to libx264.",
+      "duration_ms": 982,
+      "attempted_encoders": [
+        "h264_nvenc",
+        "h264_qsv",
+        "h264_amf",
+        "libx264"
+      ],
+      "selected_encoder": "libx264",
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m09_representative_export.mp4",
+      "probe_summary": {
+        "format_name": null,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1280,
+        "height": 720,
+        "frame_rate": "30",
+        "duration_seconds": 2.0
+      },
+      "error_category": "HardwareEncoderDriverMismatch"
+    },
+    {
+      "id": "P5-M10",
+      "name": "Mandatory software fallback via libx264",
+      "passed": true,
+      "operation": "export_snapshot_libx264",
+      "details": "Software render succeeded: size 80819 bytes, dur Some(2.0)s",
+      "duration_ms": 479,
+      "attempted_encoders": [
+        "libx264"
+      ],
+      "selected_encoder": "libx264",
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m10_software_libx264_export.mp4",
+      "probe_summary": {
+        "format_name": null,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1280,
+        "height": 720,
+        "frame_rate": "30",
+        "duration_seconds": 2.0
+      },
+      "error_category": null
+    },
+    {
+      "id": "P5-M11",
+      "name": "Candidate ladder ordering and hardware error discrimination",
+      "passed": true,
+      "operation": "ladder_ordering_and_classification",
+      "details": "Ladder sequence: [\"h264_nvenc\", \"h264_qsv\", \"h264_amf\", \"libx264\"]",
+      "duration_ms": 0,
+      "attempted_encoders": [
+        "h264_nvenc",
+        "h264_qsv",
+        "h264_amf",
+        "libx264"
+      ],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M12",
+      "name": "Software fallback preserves pure project semantics without hardware leakage",
+      "passed": true,
+      "operation": "export_snapshot_semantic_isolation",
+      "details": "Project model semantics invariant across software fallback; valid MP4 generated without hardware dependency leakage",
+      "duration_ms": 491,
+      "attempted_encoders": [
+        "libx264"
+      ],
+      "selected_encoder": "libx264",
+      "output_path": "C:\\Users\\Admin\\AppData\\Local\\Temp\\tinix_test_poc5_matrix\\p5_m12_no_hardware_leak_export.mp4",
+      "probe_summary": {
+        "format_name": null,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "width": 1280,
+        "height": 720,
+        "frame_rate": "30",
+        "duration_seconds": 2.0
+      },
+      "error_category": null
+    },
+    {
+      "id": "P5-M13",
+      "name": "Strict packaged binary failure without silent PATH fallback",
+      "passed": true,
+      "operation": "missing_binary_packaged_mode",
+      "details": "Missing binary produced expected failure: Some(\"Media binary resolution failed: Unsupported media binary name: 'unknown_nonexistent_binary'\")",
+      "duration_ms": 0,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": "BundledBinaryMissing"
+    },
+    {
+      "id": "P5-M14",
+      "name": "App-owned binary precedence over system PATH",
+      "passed": true,
+      "operation": "app_owned_precedence",
+      "details": "Resolved origin: Ok(AppOwnedPackagedResource(\"D:\\\\___TOOLS\\\\__TINIX\\\\TinixCut\\\\src-tauri\\\\resources\\\\bin\\\\ffmpeg.exe\"))",
+      "duration_ms": 22,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": null
+    },
+    {
+      "id": "P5-M15",
+      "name": "Process termination preserves existing target and leaves no partial output",
+      "passed": true,
+      "operation": "process_interruption_safety",
+      "details": "Pre-existing target intact, no orphan temp file promoted",
+      "duration_ms": 27,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": "InterruptedSafePromotion"
+    },
+    {
+      "id": "P5-M16",
+      "name": "Export cancellation returns terminal Cancelled status",
+      "passed": true,
+      "operation": "export_cancellation",
+      "details": "Returned ExportError::Cancelled, temp file removed",
+      "duration_ms": 0,
+      "attempted_encoders": [],
+      "selected_encoder": null,
+      "output_path": null,
+      "probe_summary": null,
+      "error_category": "Cancelled"
+    }
+  ],
+  "total_tests": 16,
+  "passed_tests": 15,
+  "failed_tests": 1,
+  "gate_f_verdict": "INCOMPLETE (CPU/libx264-qualified only; hardware acceleration unqualified due to driver mismatch)"
+}

@@ -39,6 +39,22 @@ impl CacheManager {
         self.thumbnail_path(asset_id, timestamp_secs).exists()
     }
 
+    pub fn has_waveform(&self, asset_id: &str) -> bool {
+        self.waveform_path(asset_id).exists()
+    }
+
+    pub fn load_waveform(
+        &self,
+        asset_id: &str,
+    ) -> Option<crate::modules::media::waveform::WaveformData> {
+        let path = self.waveform_path(asset_id);
+        if !path.exists() {
+            return None;
+        }
+        let data = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
     pub fn has_proxy(&self, asset_id: &str, target_height: u32) -> bool {
         self.proxy_path(asset_id, target_height).exists()
     }

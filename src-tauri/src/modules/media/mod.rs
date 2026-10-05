@@ -4,6 +4,13 @@
 
 pub mod cache;
 pub mod ffmpeg;
+pub mod qualification;
+pub mod resolver;
+pub mod transcription;
+pub mod waveform;
+
+pub use qualification::{Phase12QualificationHarness, Poc5MatrixReport};
+pub use resolver::{BinaryKind, BinaryOrigin, MediaBinaryResolver, ResolvedBinary};
 
 use crate::modules::domain::{Asset, MediaKind, Project};
 use serde::{Deserialize, Serialize};
@@ -23,6 +30,12 @@ pub enum MediaError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Bundled media binary missing or inaccessible: {0}")]
+    BundledBinaryMissing(String),
+
+    #[error("Media binary resolution failed: {0}")]
+    BinaryResolutionFailed(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

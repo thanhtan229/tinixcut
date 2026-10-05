@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
 import { Project } from "../types/project";
 import { CommandEnvelope, CommandReceipt, DiffReport } from "../types/command";
+import { PreviewFrameState, BenchmarkReport, ParitySuiteReport } from "../types/preview";
 
 export const editorApi = {
   async getHealth(): Promise<HealthStatus> {
@@ -50,5 +51,21 @@ export const editorApi = {
 
   async importMedia(filePath: string): Promise<unknown> {
     return invoke("media_import", { filePath });
+  },
+
+  async samplePreviewAt(frame: number): Promise<PreviewFrameState> {
+    return invoke<PreviewFrameState>("preview_sample_at", { frame });
+  },
+
+  async runPreviewBenchmark(durationSecs: number = 30): Promise<BenchmarkReport[]> {
+    return invoke<BenchmarkReport[]>("preview_run_benchmark", { durationSecs });
+  },
+
+  async runParitySuite(): Promise<ParitySuiteReport> {
+    return invoke<ParitySuiteReport>("parity_run_suite");
+  },
+
+  async getWaveform(assetId: string): Promise<import("../types/preview").WaveformStatus> {
+    return invoke<import("../types/preview").WaveformStatus>("media_get_waveform", { assetId });
   },
 };

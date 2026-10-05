@@ -1,0 +1,27 @@
+{
+  "version": "9.0.2",
+  "distribution": "gyan_release_essentials",
+  "upstream_url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.7z",
+  "platform": "x86_64-pc-windows-msvc",
+  "archive": {
+    "filename": "ffmpeg-9.0.2-essentials_build.7z",
+    "sha256": "4705843ccaaf54257c16ad90f3e952ece33c17df964ecf7bfdbb0f49c7171077"
+  },
+  "binaries": {
+    "ffmpeg.exe": {
+      "sha256": "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec",
+      "size": 105423872,
+      "version": "9.0.2-essentials_build-www.gyan.dev"
+    },
+    "ffprobe.exe": {
+      "sha256": "f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52",
+      "size": 105221120,
+      "version": "9.0.2-essentials_build-www.gyan.dev"
+    }
+  },
+  "qualification": {
+    "date": "2026-10-04",
+    "phase": "Phase 12",
+    "status": "QUALIFIED"
+  }
+}

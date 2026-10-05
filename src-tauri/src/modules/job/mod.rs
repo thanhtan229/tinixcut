@@ -64,7 +64,7 @@ impl JobManager {
         for (existing_id, job) in &self.jobs {
             if job.dedupe_key == dedupe_key {
                 match job.status {
-                    JobStatus::Queued | JobStatus::Running => {
+                    JobStatus::Queued | JobStatus::Running | JobStatus::Completed => {
                         return (existing_id.clone(), true); // Deduplicated!
                     }
                     _ => {}
@@ -90,11 +90,53 @@ impl JobManager {
         self.jobs.get(id)
     }
 
+    pub fn running_count(&self) -> usize {
+        self.jobs
+            .values()
+            .filter(|j| matches!(j.status, JobStatus::Running))
+            .count()
+    }
+
+    pub fn queued_count(&self) -> usize {
+        self.jobs
+            .values()
+            .filter(|j| matches!(j.status, JobStatus::Queued))
+            .count()
+    }
+
+    pub fn can_start(&self) -> bool {
+        self.running_count() < self.max_concurrency
+    }
+
+    /// Transitions a Queued job to Running if concurrency permits, returning its cancel flag
+    pub fn start_job(&mut self, id: &str) -> Result<Arc<AtomicBool>, String> {
+        if !self.can_start() {
+            return Err(format!(
+                "Max concurrency limit ({}) reached",
+                self.max_concurrency
+            ));
+        }
+        let cancel_flag = {
+            let job = self
+                .jobs
+                .get_mut(id)
+                .ok_or_else(|| format!("Job '{}' not found", id))?;
+            if job.status == JobStatus::Cancelled {
+                return Err("Cannot start cancelled job".to_string());
+            }
+            job.status = JobStatus::Running;
+            job.cancel_flag.clone()
+        };
+        self.active_count = self.running_count();
+        Ok(cancel_flag)
+    }
+
     pub fn update_progress(&mut self, id: &str, progress: f32) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.progress = progress.clamp(0.0, 1.0);
             if job.status == JobStatus::Queued {
                 job.status = JobStatus::Running;
+                self.active_count = self.running_count();
             }
         }
     }
@@ -103,12 +145,14 @@ impl JobManager {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Completed;
             job.progress = 1.0;
+            self.active_count = self.running_count();
         }
     }
 
     pub fn mark_failed(&mut self, id: &str, reason: String) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Failed(reason);
+            self.active_count = self.running_count();
         }
     }
 
@@ -117,10 +161,26 @@ impl JobManager {
         if let Some(job) = self.jobs.get_mut(id) {
             job.cancel_flag.store(true, Ordering::SeqCst);
             job.status = JobStatus::Cancelled;
+            self.active_count = self.running_count();
             true
         } else {
             false
         }
+    }
+
+    /// Cancel all currently active or queued jobs.
+    pub fn cancel_all_active(&mut self) -> usize {
+        let active_ids: Vec<String> = self
+            .jobs
+            .iter()
+            .filter(|(_, j)| matches!(j.status, JobStatus::Running | JobStatus::Queued))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let count = active_ids.len();
+        for id in active_ids {
+            self.cancel_job(&id);
+        }
+        count
     }
 
     pub fn active_jobs_count(&self) -> usize {
@@ -167,20 +227,96 @@ mod tests {
     }
 
     #[test]
-    fn test_job_cancellation() {
-        let mut jm = JobManager::new(4);
-        let (id, _) = jm.submit_job(
-            "job_cancel_test".to_string(),
-            JobKind::Proxy,
-            "proxy_ast1".to_string(),
-            5,
+    fn test_job_concurrency_bound() {
+        let mut jm = JobManager::new(2);
+        let (id1, _) = jm.submit_job(
+            "job_wf_1".to_string(),
+            JobKind::Waveform,
+            "wf_ast1".to_string(),
+            10,
+        );
+        let (id2, _) = jm.submit_job(
+            "job_wf_2".to_string(),
+            JobKind::Waveform,
+            "wf_ast2".to_string(),
+            10,
+        );
+        let (id3, _) = jm.submit_job(
+            "job_wf_3".to_string(),
+            JobKind::Waveform,
+            "wf_ast3".to_string(),
+            10,
         );
 
+        assert_eq!(jm.queued_count(), 3);
+        assert_eq!(jm.running_count(), 0);
+
+        // Start job 1
+        assert!(jm.start_job(&id1).is_ok());
+        assert_eq!(jm.running_count(), 1);
+
+        // Start job 2
+        assert!(jm.start_job(&id2).is_ok());
+        assert_eq!(jm.running_count(), 2);
+        assert!(!jm.can_start());
+
+        // Attempting to start job 3 exceeds limit of 2
+        let err = jm.start_job(&id3);
+        assert!(err.is_err());
+        assert_eq!(jm.running_count(), 2);
+
+        // Complete job 1
+        jm.mark_completed(&id1);
+        assert_eq!(jm.running_count(), 1);
+        assert!(jm.can_start());
+
+        // Now job 3 can start
+        assert!(jm.start_job(&id3).is_ok());
+        assert_eq!(jm.running_count(), 2);
+    }
+
+    #[test]
+    fn test_waveform_job_lifecycle_and_cancellation() {
+        let mut jm = JobManager::new(4);
+        let (id, deduped) = jm.submit_job(
+            "job_wf_cancel".to_string(),
+            JobKind::Waveform,
+            "wf_cancel_key".to_string(),
+            10,
+        );
+        assert!(!deduped);
+
+        let cancel_flag = jm.start_job(&id).expect("job should start");
+        assert_eq!(jm.get_job(&id).unwrap().status, JobStatus::Running);
+        assert!(!cancel_flag.load(Ordering::SeqCst));
+
+        // Update progress
+        jm.update_progress(&id, 0.45);
+        assert_eq!(jm.get_job(&id).unwrap().progress, 0.45);
+
+        // Cancel job
         let cancelled = jm.cancel_job(&id);
         assert!(cancelled);
+        assert_eq!(jm.get_job(&id).unwrap().status, JobStatus::Cancelled);
+        assert!(cancel_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_waveform_job_failure_state() {
+        let mut jm = JobManager::new(4);
+        let (id, _) = jm.submit_job(
+            "job_wf_fail".to_string(),
+            JobKind::Waveform,
+            "wf_fail_key".to_string(),
+            10,
+        );
+        let _ = jm.start_job(&id);
+        jm.mark_failed(&id, "No audio stream detected".to_string());
 
         let job = jm.get_job(&id).unwrap();
-        assert_eq!(job.status, JobStatus::Cancelled);
-        assert!(job.cancel_flag.load(Ordering::SeqCst));
+        assert_eq!(
+            job.status,
+            JobStatus::Failed("No audio stream detected".to_string())
+        );
     }
 }

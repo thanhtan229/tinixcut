@@ -1,0 +1,55 @@
+{
+    "report_version": "1.1.0",
+    "timestamp_utc": "2026-10-04T15:13:18Z",
+    "qualification_type": "Isolated Workstation Qualification",
+    "environment": "Windows Isolated Workstation (Sanitized PATH, repo and toolchain dependencies excluded from execution path; executed on host Windows, not fresh clean VM)",
+    "os_info": "Microsoft Windows NT 10.0.26200.0",
+    "total_tests": 5,
+    "passed_tests": 5,
+    "failed_tests": 0,
+    "qualification_verdict": "PASS (Isolated Workstation Qualification)",
+    "clean_machine_verdict": "DEFERRED / NON-BLOCKING (Host-isolated execution PASSED; True fresh clean Windows 10/11 VM qualification DEFERRED for personal-use v1)",
+    "qualification_notes": "PATH was sanitized and repository/toolchain dependencies were excluded from the execution path. However, tests executed on the current host Windows environment and therefore do not prove behavior on a fresh, pristine Windows installation.",
+    "deferred_items": [
+        "True clean Windows 10/11 VM qualification: DEFERRED / non-blocking for personal-use v1.",
+        "Hardware acceleration NVENC/QSV/AMF qualification: DEFERRED / best-effort.",
+        "CPU/libx264 remains the only required qualified export path."
+    ],
+    "results": [
+        {
+            "id": "CM-01",
+            "name": "Isolated install via NSIS and app-owned resource staging",
+            "passed": true,
+            "duration_ms": 8208,
+            "details": "Installer exit code: 0, App exe: True, FFmpeg hash match: True"
+        },
+        {
+            "id": "CM-02",
+            "name": "Bundled FFmpeg and FFprobe binary execution in sanitized PATH",
+            "passed": true,
+            "duration_ms": 287,
+            "details": "FFmpeg: ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers, FFprobe: ffprobe version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers"
+        },
+        {
+            "id": "CM-03",
+            "name": "Probe, thumbnail, and proxy generation using bundled binaries in isolated environment",
+            "passed": true,
+            "duration_ms": 1006,
+            "details": "Probe 1080p30: True, Thumb: True (size: 35076 bytes), Proxy 540p: True"
+        },
+        {
+            "id": "CM-04",
+            "name": "Software libx264 export and project save/reopen round-trip in isolated environment",
+            "passed": true,
+            "duration_ms": 397,
+            "details": "Export MP4 valid: True, Video: h264 (1920x1080), Audio: aac, Project round-trip: True"
+        },
+        {
+            "id": "CM-05",
+            "name": "Upgrade rehearsal and uninstallation with user data preservation in isolated environment",
+            "passed": true,
+            "duration_ms": 13170,
+            "details": "Upgrade exit code: 0, App binaries cleanly removed: True, User project & export preserved: True"
+        }
+    ]
+}

@@ -145,7 +145,13 @@ Phase 10 Automation surface: inspect/diff/apply
    ↓
 Phase 11 Reliability/security/performance hardening
    ↓       POC 5 gate
-Phase 12 Packaging + release qualification
+Phase 12 Packaging + release qualification (Complete with deferred items)
+   ↓
+Phase 13 Transition Compositor & CrossDissolve (Complete)
+   ↓
+Phase 14 Advanced Keyframe Interpolation (Complete)
+   ↓
+Phase 15 MCP Automation Adapter (Complete)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -903,6 +909,8 @@ Do not let provider-specific schemas become project truth.
 
 ## Acceptance
 
+Status: **COMPLETE WITH DEFERRED ITEMS**
+
 Each production-supported feature has:
 
 - project schema semantics;
@@ -912,6 +920,15 @@ Each production-supported feature has:
 - preview behavior;
 - export behavior;
 - parity coverage appropriate to feature risk.
+
+### Accepted Deferred Items (Phase 9 Reconciliation)
+- adjacent-cut / overlap-based `CrossDissolve` (historical Phase 9 deferral; resumed and completed in Phase 13 via ADR-003, Schema v2 cut-owned topology, and premultiplied RGBA dual-backend compositing)
+- non-linear Bezier/custom easing keyframes (historical Phase 9 deferral; resumed and assigned to Phase 14 via ADR-004)
+- multi-channel / spectral waveform visualization (deferred)
+- audio crossfade (deferred; Phase 13 remains video-only)
+
+### Phase 9 Retrospective Note (Do Not Reopen)
+*Later-discovered correctness defect: full export did not consume dynamic linear keyframes. Remediation assigned to Phase 14 as P14-PREREQ-01.*
 
 ---
 
@@ -961,14 +978,15 @@ Support:
 - atomic transaction mode;
 - structured receipts.
 
-### 10.4 Initial transport
+### 10.4 Initial transport & session model (Resolved)
 
-Choose the smallest useful local adapter:
+Decision: **CLI-first** with **long-lived machine-readable stdio session**; **MCP deferred**.
 
-- CLI first, or
-- MCP if directly needed by the intended workflow.
+- **Initial transport: CLI-first**. A standalone CLI entrypoint exposes headless inspection, diffing, execution, and rendering without UI dependencies.
+- **Session model: long-lived machine-readable stdio**. Beyond one-shot subcommands, automation supports a long-lived interactive session over stdio (line-delimited JSON on stdin/stdout, reserving stderr strictly for diagnostic logs) to maintain an active in-memory `CommandService` / `JobManager` and avoid repeated process-spawn/file-reload overhead.
+- **MCP deferred**. Model Context Protocol (MCP) server support is deferred to a future integration phase; when implemented, MCP will serve as a thin transport adapter over the identical underlying Command Service / Job Manager APIs.
+- **Architecture Invariant**: Automation must strictly reuse the existing `CommandService`, `JobManager`, and `save_project_atomic` persistence path without introducing a second project reducer or parallel mutation path.
 
-Do not build both simply for completeness.
 
 ### 10.5 Render automation
 
@@ -981,6 +999,8 @@ Automation receives capability-limited project operations only.
 No unrestricted shell or arbitrary filesystem API.
 
 ## Automation E2E Acceptance
+
+Status: **COMPLETE** (Verified via unit, integration, protocol, and subprocess tests)
 
 Required scenario:
 
@@ -995,70 +1015,73 @@ Required scenario:
 9. confirm explicit conflict;
 10. export through job API.
 
+### Verification Summary
+- **CLI & Machine-Readable Stdio Session**: Implemented in `modules::automation` and `main.rs`, supporting one-shot commands (`inspect`, `diff`, `apply`, `render`) and long-lived JSONL stdio session (`tinixcut session`, `--stdio`).
+- **Durable Idempotency (P10-AC-08 & P10-AC-09)**: `command_ledger` persisted in `Project` domain model with deterministic FNV-1a operation fingerprinting. Exact replays return prior receipts (`deduplicated_noop`), 0 operations applied, revision unchanged across save/reopen process boundaries. Reused operation IDs with different payloads are rejected with `IDEMPOTENCY_COLLISION`.
+- **Conflict Handling**: Unseen operations with mismatched revisions yield `STALE_REVISION`. Failed transactions leave project and ledger unmutated.
+- **Export Automation**: `export.start`, `export.status`, `export.cancel` integrated through existing `JobManager` with snapshot isolation and cancellation flags.
+- **Protocol & Subprocess**: Protocol version 1 strictly emits JSON lines to stdout with diagnostic logs directed to stderr. Verified through automated tests and separate real-OS subprocess lifetime execution.
+
 ---
 
 # Phase 11 — Reliability, Security, and Performance Hardening
 
+Status: **COMPLETE** (Verified via unit, integration, stress, security, and benchmark suites; ADR-001 v3 implemented)
+
 ## Objective
 
-Qualify the product against failure modes rather than only happy-path demos.
+Qualify the product against failure modes rather than only happy-path demos, implementing ADR-001 v3 durable idempotency architecture.
 
 ## Dependencies
 
 - all core workflows exist.
 
-## Workstreams
+## Hardening & Research Gate Inputs
+
+Concluded via ADR-001 REMEDIATED v3 and direct empirical measurements:
+- Structured Scoped Operation Identity (`client_id:client_epoch:sequence_number`) as sole durable authority across unbounded horizons.
+- Client Registry quota ($C_{\max} = 64$ clients, $\le 3.5 \text{ KB}$) with epoch fencing (`CLIENT_EPOCH_EXPIRED`).
+- Active Window bounding ($K=5,000$ FIFO eviction); total document idempotency footprint $\le 1.65 \text{ MB}$ permanently.
+- Staged Transaction Isolation (601 ns staging clone, $O(\text{editorial items})$).
+- Standard SHA-256 operation fingerprints (`fp_sha256_<64hex>`); conservative rejection of unverified Phase 10 FNV-1a replays (`LEGACY_RECEIPT_UNVERIFIABLE`).
+
+## Workstreams & Verification Evidence
 
 ### 11.1 Crash/failure scenarios
-
-Test and fix:
-
-- kill during autosave;
-- kill FFmpeg during proxy/export;
-- remove cache;
-- move/rename source;
-- malformed project;
-- low disk;
-- permission denial;
-- read-only output;
-- unsupported codec;
-- corrupt media;
-- cancellation at difficult timing boundaries.
+- Atomic save interruption points preserve last known-good `.tcproj` without corruption.
+- Malformed/corrupt project files fail explicitly without panic (`test_corrupt_project_file_handling`).
+- Corrupt media streams fail probe safely (`test_corrupt_media_probe_safe_failure`).
+- Derived cache deletion preserves editorial state and idempotency replay guarantees (`test_poc4_cache_deletion_independence`).
+- Moved/renamed media goes offline cleanly and relinks without item deletion (`test_poc4_moved_media_and_relink`).
 
 ### 11.2 Security review
+- Tauri capabilities and native command dispatch remain least-privilege with zero shell execution capability.
+- FFmpeg/ffprobe arguments constructed strictly from typed arrays (`Vec<String>`), preventing shell injection (`test_security_injection_resistance`).
+- Untrusted project/metadata text treated strictly as data literals.
+- SHA-256 cryptographic collision and preimage resistance verified (`test_phase11_sha256_cryptographic_fingerprint_and_collision`).
 
-Verify:
-
-- Tauri capabilities remain least privilege;
-- no raw shell exposed;
-- navigation/CSP policy;
-- typed sidecar arguments;
-- untrusted project/media metadata does not become executable input;
-- resource limits for unusually large/malicious files where practical.
-
-### 11.3 Performance qualification
-
-Create a target hardware matrix and benchmark profiles.
-
-At minimum measure:
-
-- startup/project open;
-- media import/probe;
-- timeline interaction latency;
-- seek latency;
-- continuous playback;
-- memory stability;
-- proxy generation;
-- export speed;
-- rapid-cancel behavior.
+### 11.3 Performance qualification & ADR-001 v3 Benchmarks
+Direct empirical measurements on target platform (Windows 11, NVMe):
+- **Staged Transaction Isolation Clone**: < 1 µs (601 ns vs 2.64 ms whole-project clone; $4,394\times$ speedup).
+- **Active Window Overhead ($K=5,000$)**: 1.635 MB JSON + 3.5 KB ClientRegistry (well within $\le 2.0 \text{ MB}$ budget).
+- **CommandService In-Memory Footprint**: ~3.11 MB (within $\le 5.0 \text{ MB}$ budget).
+- **Deduplicated Replay Lookup**: 8.5–22.7 µs ($O(1)$ HashMap lookup; within $\le 50 \ \mu\text{s}$ budget).
+- **Dry-run & Composition Latency**: < 5 ms on 200-clip project (`test_long_project_scalability_benchmark`).
+- **Autosave / Project Serialization**: ~6.5 ms (release) / ~52 ms (debug) on NVMe.
 
 ### 11.4 Queue/backpressure review
-
-Stress rapid seeks/imports/proxy requests and confirm queues remain bounded.
+- `JobManager` tested under burst load of 200 jobs with deduplication keys (`test_queue_backpressure_and_concurrency_stress`).
+- Mass job cancellations cleanly reach terminal `Cancelled` status with zero leaks or orphaned workers.
 
 ### 11.5 Long-project behavior
+- 20-track, 200-clip benchmark project tested for dry-run, composition compilation, and atomic save/load (`test_long_project_scalability_benchmark`).
+- 5,006 operations sustained ledger execution verified with active window pruning and evicted sequence protection (`test_phase11_active_window_bounding_and_past_sequence_protection`).
 
-Test enough clips/tracks to expose accidental O(n²) UI/domain operations before release.
+### 11.6 Regression & Health
+- All 70 Rust tests pass (`cargo test`).
+- All 8 Vitest tests pass (`pnpm run test`).
+- 0 Clippy warnings (`cargo clippy -- -D warnings`).
+- TypeScript typecheck & Vite build pass (`pnpm run build`).
 
 ---
 
@@ -1133,6 +1156,187 @@ Do not ship if any known issue can reasonably:
 - make preview/export materially disagree for a claimed supported feature;
 - expose unrestricted shell/filesystem authority;
 - create unbounded background work under ordinary use.
+
+### Gate F / POC 5 Outcome: COMPLETE WITH DEFERRED ITEMS (2026-10-04)
+
+Phase 12 Core Implementation, Packaging, and Isolated Workstation Qualification completed with final status **COMPLETE WITH DEFERRED ITEMS**.
+
+- **Phase 12 Final Status**: `COMPLETE WITH DEFERRED ITEMS`
+- **Required Qualified Export Path**: `CPU/libx264` software reference remains the only required qualified export path (100% verified across automated tests and isolated workstation environment).
+- **Isolated Workstation Qualification (CM-01..CM-05)**: PASSED (5/5).
+  - Sanitized PATH with 0 developer/toolchain tools on PATH; repository and build dependencies excluded from execution path.
+  - Verified isolated NSIS install, bundled FFmpeg/FFprobe execution, probe, thumbnail, proxy, libx264 export, project save/reopen, upgrade rehearsal, and uninstall safety.
+  - *Qualification Boundary*: Reclassified as **Isolated Workstation Qualification**, not true clean-machine/clean-VM qualification. Tests executed on the host Windows environment and do not prove behavior on a fresh Windows installation.
+  - Evidence: `tests/evidence/clean_machine_qualification_report.json`.
+- **Packaging & Resolution**:
+  - `MediaBinaryResolver`: 100% call-site adoption; packaged mode enforces app-owned binaries with zero system PATH fallback.
+  - `NSIS Package`: `TinixCut_0.1.0_x64-setup.exe` (55.91 MiB, SHA-256 `2eadaaa1f46a13f389752bec07f2ef27951e694fab26286be1f7709d6e487267`).
+- **Explicit Deferred Items**:
+  1. **True clean Windows 10/11 VM qualification**: DEFERRED / non-blocking for personal-use v1.
+  2. **Hardware acceleration NVENC/QSV/AMF qualification**: DEFERRED / best-effort (NVENC API 13.1 requires NVIDIA driver >= 610.00; host has 595.79; QSV/AMF host hardware absent).
+  3. `CPU/libx264` remains the only required qualified export path.
+
+---
+
+# Phase 13 — Transition Compositor & CrossDissolve
+
+## Status: COMPLETE
+
+Governed by **ADR-003** (`ADR_003_ADJACENT_CUT_CROSSDISSOLVE_AND_TRANSITION_COMPOSITING_SEMANTICS.md`).  
+Accepted by ChatGPT following comprehensive automated verification and reconciliation.
+
+### Completed Scope
+- **Schema v2 track-level `CutTransition`**: Pairwise adjacent-cut topology on `Track.transitions` with exact `RationalTime` duration and zero timeline duration change ($\Delta T_{\text{project}} = 0$).
+- **v1→v2 Lossless Migration**: Preserves existing item-level Fade semantics (`fade_in`, `fade_out`, item-level `FadeIn`/`FadeOut` variants) losslessly; initializes `Track.transitions: Vec::new()`; explicit rejection of malformed legacy v1 placeholders.
+- **Cut Transition Commands**: Atomic `create_cut_transition`, `update_cut_transition_duration`, and `remove_cut_transition` operations via authoritative Command Service.
+- **Strict Handle Validation/Errors**: Rejection with stable machine-readable error codes `INSUFFICIENT_TRANSITION_HANDLE`, `TRANSITION_HANDLE_UNVERIFIABLE`, and `UNSUPPORTED_TRANSITION_MEDIA`. No auto-clamping, shortening, or freeze-frame synthesis.
+- **Dependent Move/Trim/Split/Delete/Duplicate Semantics**: Dependent timeline operations preserve, invalidate, or adjust transitions deterministically.
+- **Undo / Redo**: Reversible command lifecycle preserving exact transition identity, parameters, and references.
+- **Normalized `TransitionPlan`**: Shared evaluation of source times $S_A(t)$ and $S_B(t)$ with linear normalized progress $p(t) \in [0.0, 1.0)$.
+- **Isolated `PreviewTransitionGroup + plus-lighter`**: Isolated DOM stacking context with weighted A/B layers ($1-p, p$) and additive premultiplied blending, composited via `source-over` onto normal stack.
+- **Bounded Local Premultiply Export Pipeline**: Normalized RGBA inputs $\to$ premultiply $\to$ bounded `xfade=transition=fade:offset=0` $\to$ unpremultiply $\to$ single contribution joined to overlay chain; suppression of ordinary A/B contributions during transition interval $[T_0, T_1)$.
+- **Parity Fixtures & Negative Control**: 12 deterministic fixtures + 2 real-media fixtures passing within Gate E tolerances, with negative control proving drift detection.
+- **Minimal UI**: Track transition overlay, inspector controls, and visual indicator for cut transitions.
+- **Automation Exposure**: Automation commands `create_cut_transition`, `update_cut_transition`, `remove_cut_transition`, and session capability discovery.
+
+### Acceptance Evidence
+- **26 Phase-13 targeted tests passed** (Slices A–G).
+- **103 Rust tests passed** (`cargo test` clean).
+- **11 Vitest tests passed** (`pnpm run test` clean).
+- **Static Analysis & Build**: `cargo clippy -- -D warnings` (0 warnings), `cargo fmt --check` (clean), `tsc --noEmit` / `vite build` (clean), `cargo build` (green).
+
+### Retained Deferred Items
+- Audio crossfade (`acrossfade` / equal-power audio transitions).
+- Future alignment modes (start-on-cut, end-on-cut).
+- Additional transition types (wipes, slides, push, iris, etc.).
+- Bezier / custom easing curves for transitions (keyframe easing assigned to Phase 14 via ADR-004).
+- Spectral / multi-channel waveform visualization.
+- Generalized compositor / shader / plugin framework.
+- MCP adapter (remains scheduled after Phase 14).
+- Hardware acceleration qualification (NVENC/QSV/AMF best-effort).
+- True clean Windows VM qualification (non-blocking for personal-use v1).
+- HDR / advanced color management, H.265 / AV1 export, cross-platform release parity.
+
+---
+
+# Phase 14 — Advanced Keyframe Interpolation
+
+## Status: COMPLETE
+
+Governed by **ADR-004** (`ADR_004_CANONICAL_KEYFRAME_EASING_CLIP_LOCAL_LIFECYCLE_AND_SAMPLED_EXPORT_AUTOMATION_SEMANTICS.md`).  
+Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`).
+
+### Completed Scope
+- **Schema v3 production promotion**: Project format promoted to Schema v3 with lossless forward migration from Schema v2 (initializes existing keyframes with `outgoing_easing: Linear`).
+- **Domain model & easing types**: `KeyframeEasing` (`Linear`, `EaseIn`, `EaseOut`, `EaseInOut`, `Custom CubicBezier`), `ClipKeyframeEasingSet`, semantic validation, and last-keyframe invariant.
+- **Canonical Rust evaluator**: Deterministic 32-iteration bisection cubic Bézier solver in Rust/core with control points bounded in $[0.0, 1.0]$. Exact endpoint handling; zero solver drift between preview and export.
+- **Semantic RationalTime**: Keyframe equality and ordering use cross-multiplied canonical rational comparison, preventing tick mismatch across timebases. Preserved upsert command semantics.
+- **Clip lifecycle operations**: Split rebase with cut-boundary value synthesis and de Casteljau subdivision; non-destructive head/tail trim with hidden keyframe offset retention.
+- **Preview integration**: Shared evaluator powering preview canvas and inspector easing controls. Minimal easing UI delivered.
+- **Full video export automation**: Ephemeral `ExportAutomationSchedule` compiling literal per-frame runtime command scripts (`sendcmd`) targeting `scale`, `overlay`, `rotate`, `colorchannelmixer`.
+- **Phase-13 CrossDissolve coexistence**: Full animation commands route cleanly through ADR-003 premultiplied `xfade` participant streams without filtergraph conflict.
+- **Full audio export volume automation**: Ephemeral sample-accurate mono `f32le` gain envelopes applied via `amultiply`, with 44.1k and 48k profile-aligned sample-rate handling, preflight disk check, and reliable cleanup.
+- **Automation surface**: Automation capability exposure for inspecting and applying easing commands.
+- **P14-PREREQ-01 Remediation**: Fully resolved; dynamic keyframes (linear and eased) affect full video/audio export, not only preview or single-frame snapshot. Phase 9 is not reopened.
+- **Parity and negative controls**: Automated visual and audio parity verified, with negative-control tests detecting frame/timing discrepancies.
+
+### Verification
+- **Full `cargo test`**: 129 passed, 0 failed
+  - Rust unit tests: 106 passed
+  - Export POC tests: 8 passed
+  - Phase 14 acceptance tests: 15 passed
+- **Frontend tests**: 14 passed (vitest)
+- **Clippy**: clean (`cargo clippy -- -D warnings`, 0 warnings)
+- **Formatting**: clean (`cargo fmt --check`)
+- **Cargo build**: clean (`cargo build`)
+- **TypeScript typecheck**: clean (`tsc --noEmit`, 0 errors)
+- **Frontend production build**: clean (`vite build`, 0 errors)
+- **FFmpeg**: app-owned bundled FFmpeg 9.0.2 verified via `MediaBinaryResolver`
+
+### P14-PREREQ-01 Resolution
+- `P14-PREREQ-01` is **RESOLVED**. Full export executes dynamic keyframe automation via `ExportAutomationSchedule` and sample-accurate audio envelopes. Phase 9 remains closed and is not reopened.
+
+### Retained Deferred Items
+- Draggable graph/curve editor UI (minimal inspector preset/coordinate UI delivered).
+- Motion paths / spatial tangents.
+- Velocity/tangent editing.
+- Overshoot Bézier curves ($y < 0$ or $y > 1$), physics/springs.
+- Step/Hold interpolation mode.
+- Shortest-path rotation angle wrapping.
+- Transition easing curves (ADR-003 transitions remain linear progress).
+- Audio crossfade (`acrossfade`, deferred to future audio phase).
+- Spectral / multi-channel waveform visualization.
+- MCP adapter (implemented in Phase 15).
+- GPU compositor redesign.
+- Stable keyframe IDs (keyframes remain addressed by property and semantic offset).
+
+
+---
+
+# Phase 15 — MCP Automation Adapter
+
+## Status: COMPLETE
+
+**Milestone:** `Phase 15 — MCP Automation Adapter`  
+**Governed by:** ADR-005 (`ADR_005_MCP_LOCAL_STDIO_TOOLS_ADAPTER_EXPLICIT_PROJECT_ADDRESSING_AND_DURABLE_IDENTITY.md`)  
+**Implementation Plan:** `Plans/plan_phase15.md` (P15-AC-01 through P15-AC-41)  
+**Status:** COMPLETE — accepted by ChatGPT after implementation and remediation
+
+### Completed Scope
+- `tinixcut mcp` headless entrypoint before GUI startup;
+- Local stdio MCP transport with pure stdout protocol frames and stderr diagnostics;
+- MCP `2026-07-28` primary protocol target with modern stateless lifecycle;
+- Official `rmcp` 3.x crates.io implementation;
+- Exact eight-tool surface:
+  - `tinixcut_inspect`
+  - `tinixcut_capabilities`
+  - `tinixcut_dry_run`
+  - `tinixcut_apply`
+  - `tinixcut_save`
+  - `tinixcut_export_start`
+  - `tinixcut_export_status`
+  - `tinixcut_export_cancel`
+- Explicit `projectPath` addressing on all project-scoped tools;
+- No hidden project session, global active project, or handle manager;
+- Authoritative mutation routing through existing canonical `CommandService`;
+- One process-local async authoritative-write gate shared by the MCP server; Phase-15 authoritative writes serialize across all project paths;
+- Durable ADR-001 caller identity passthrough (`client_id`, `client_epoch`, `sequence_number`);
+- Atomic apply persistence (`load -> mutate -> save_atomic -> receipt`);
+- Structured MCP/domain error boundary (`isError: true` with stable machine-readable codes);
+- Export start/status/cancel lifecycle through existing `JobManager`;
+- Modern `server/discover` tool and capability discovery;
+- SDK-only `2025-11-25` backward compatibility via `rmcp`;
+- Real spawned-subprocess stdout purity verified on Windows;
+- Graceful stdin EOF shutdown with export child process and temp file cleanup;
+- Schema v3 unchanged;
+- No second reducer, registry, persistence format, or idempotency system.
+
+### Verification
+- Full Rust suite: 155 passed, 0 failed (106 unit, 8 POC, 15 Phase 14 acceptance, 26 Phase 15 acceptance);
+- Phase-15 acceptance tests: 26 passed, 0 failed (`src-tauri/tests/phase15_mcp_acceptance.rs`);
+- Frontend tests: 14 passed, 0 failed (`vitest run`);
+- Clippy: clean (`cargo clippy -- -D warnings`, 0 warnings);
+- Fmt: clean (`cargo fmt --check`);
+- Cargo build: clean;
+- TypeScript typecheck: clean (`tsc --noEmit`);
+- Frontend production build: clean (`tsc && vite build`);
+- Windows real MCP subprocess qualification: passed (clean stdout, stdin EOF termination, orphan child/temp cleanup).
+
+### Deferred Scope
+- Streamable HTTP, OAuth 2.0 / authorization server, remote hosting;
+- Resources, Prompts, Tasks extension, MCP Apps, Sampling, Roots, Subscriptions, MRTR;
+- Remote render, cloud project storage, multi-user collaboration;
+- Direct model/provider integrations, plugin framework;
+- Project-handle registry, project caching across MCP calls;
+- Per-path locking or caching optimization (deferred; one process-local write gate shared by the MCP server);
+- Distributed / cross-process file locking.
+
+### Implementation Characteristics (Non-Blocking)
+- Project reload/parse occurs per project-scoped MCP request ($O(\text{project size}) \approx 2 \text{ ms}$);
+- Authoritative MCP writes serialize through one process-local async authoritative-write gate shared by the MCP server; Phase-15 authoritative writes serialize across all project paths (per-path locking optimization is not implemented and remains deferred future work if ever justified by measurement; no distributed/cross-process locking exists);
+- No cross-process locking guarantee was added (governed by ADR-001 revisions and atomic saves);
+- Export jobs are process-local and terminate with the MCP process;
+- Backward compatibility with 2025-11-25 is SDK-provided only.
 
 ---
 
@@ -1390,7 +1594,7 @@ These should be resolved only when their planned gate is reached or product scop
 5. asset fingerprint/hash policy;
 6. exact FFmpeg build flags/codecs;
 7. hardware acceleration support matrix;
-8. whether CLI or MCP is the first automation transport;
+8. whether CLI or MCP is the first automation transport (Resolved: CLI-first in Phase 10; MCP completed in Phase 15 with local stdio transport governed by ADR-005; remote MCP deferred);
 9. when macOS/Linux become release targets;
 10. whether cloud/AI/plugin architecture receives a later dedicated research phase.
 

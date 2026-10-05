@@ -1,19 +1,30 @@
+#![allow(clippy::result_large_err)]
+
 pub mod modules;
 
 use crate::modules::command::{
     CommandEnvelope, CommandOperation, CommandReceipt, CommandService, DiffReport,
     OperationEnvelope,
 };
+use crate::modules::composition::{CompositionPlan, PreviewFrameState};
+use crate::modules::domain::time::RationalTime;
 use crate::modules::domain::{Asset, MediaKind, Project, CURRENT_SCHEMA_VERSION};
 use crate::modules::export::{ExportEngine, ExportProfile, ExportReport};
 use crate::modules::history::{HistoryEntry, HistoryManager};
+use crate::modules::job::{JobKind, JobManager, JobStatus};
+use crate::modules::media::cache::CacheManager;
 use crate::modules::media::ffmpeg::FFmpegService;
+use crate::modules::media::waveform::WaveformStatus;
 use crate::modules::persistence::{
     check_recovery_status, load_project, save_project_atomic, RecoveryStatus,
 };
+use crate::modules::preview::{
+    BenchmarkReport, NativeDecodedPreviewBackend, PreviewBackend, WebViewProxyPreviewBackend,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,20 +47,25 @@ pub fn get_health_status() -> HealthStatus {
 pub struct EditorEngine {
     pub service: CommandService,
     pub history: HistoryManager,
+    pub cache: CacheManager,
+    pub jobs: JobManager,
     pub current_file_path: Option<PathBuf>,
 }
 
 impl EditorEngine {
     pub fn new(project: Project) -> Self {
+        let cache_dir = std::env::temp_dir().join("tinixcut_cache");
         Self {
             service: CommandService::new(project),
             history: HistoryManager::new(100),
+            cache: CacheManager::new(cache_dir),
+            jobs: JobManager::new(4),
             current_file_path: None,
         }
     }
 }
 
-pub struct AppState(pub Mutex<EditorEngine>);
+pub struct AppState(pub Arc<Mutex<EditorEngine>>);
 
 #[tauri::command]
 fn app_health_check() -> HealthStatus {
@@ -75,11 +91,27 @@ fn project_get_current(state: State<'_, AppState>) -> Result<Project, String> {
 #[tauri::command]
 fn project_execute_command(
     state: State<'_, AppState>,
-    envelope: CommandEnvelope,
+    mut envelope: CommandEnvelope,
 ) -> Result<CommandReceipt, String> {
     let mut engine = state.0.lock().map_err(|e| e.to_string())?;
     let prior_snapshot = engine.service.project().clone();
     let is_dry_run = envelope.dry_run;
+
+    // Desktop GUI automatically routes edits through client_id: "gui" (ADR-001 v3 Section 6.2)
+    if envelope.client_id.is_none() {
+        let cur_epoch = engine.service.project().client_registry.current_epoch;
+        let next_seq = engine
+            .service
+            .project()
+            .client_registry
+            .clients
+            .get("gui")
+            .map(|c| c.highest_sequence + 1)
+            .unwrap_or(1);
+        envelope.client_id = Some("gui".to_string());
+        envelope.client_epoch = Some(cur_epoch);
+        envelope.sequence_number = Some(next_seq);
+    }
 
     let receipt = engine
         .service
@@ -193,9 +225,7 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "Imported Media".to_string());
 
-    let file_size = std::fs::metadata(path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
     // Determine media kind
     let ext = path
@@ -233,10 +263,23 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
         file_size,
     };
 
+    let cur_epoch = engine.service.project().client_registry.current_epoch;
+    let next_seq = engine
+        .service
+        .project()
+        .client_registry
+        .clients
+        .get("gui")
+        .map(|c| c.highest_sequence + 1)
+        .unwrap_or(1);
+
     let envelope = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
         project_id: engine.service.project().project_id.clone(),
         base_revision: engine.service.project().revision,
+        client_id: Some("gui".to_string()),
+        client_epoch: Some(cur_epoch),
+        sequence_number: Some(next_seq),
         dry_run: false,
         transaction_id: Some(format!("tx_import_{}", uuid::Uuid::new_v4().simple())),
         operations: vec![OperationEnvelope {
@@ -246,7 +289,10 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
     };
 
     let prior_snapshot = engine.service.project().clone();
-    let _receipt = engine.service.execute(envelope).map_err(|e| e.to_string())?;
+    let _receipt = engine
+        .service
+        .execute(envelope)
+        .map_err(|e| e.to_string())?;
     let resulting_snapshot = engine.service.project().clone();
 
     engine.history.record_edit(HistoryEntry {
@@ -265,10 +311,146 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
     Ok(asset)
 }
 
+#[tauri::command]
+fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFrameState, String> {
+    let engine = state.0.lock().map_err(|e| e.to_string())?;
+    let project = engine.service.project();
+    let plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
+    let timestamp = RationalTime::new(frame, project.settings.frame_rate);
+    Ok(plan.sample_preview_at(timestamp))
+}
+
+#[tauri::command]
+fn preview_run_benchmark(
+    state: State<'_, AppState>,
+    duration_secs: Option<u32>,
+) -> Result<Vec<BenchmarkReport>, String> {
+    let engine = state.0.lock().map_err(|e| e.to_string())?;
+    let project = engine.service.project();
+    let dur = duration_secs.unwrap_or(30);
+
+    let mut candidate_a = WebViewProxyPreviewBackend::new();
+    let report_a = candidate_a
+        .run_workload_benchmark(project, dur)
+        .map_err(|e| e.to_string())?;
+
+    let mut candidate_b = NativeDecodedPreviewBackend::new();
+    let report_b = candidate_b
+        .run_workload_benchmark(project, dur)
+        .map_err(|e| e.to_string())?;
+
+    Ok(vec![report_a, report_b])
+}
+
+#[tauri::command]
+fn parity_run_suite() -> Result<crate::modules::composition::parity::ParitySuiteReport, String> {
+    Ok(crate::modules::composition::parity::run_all_parity_fixtures())
+}
+
+#[tauri::command]
+fn media_get_waveform(
+    state: State<'_, AppState>,
+    asset_id: String,
+) -> Result<WaveformStatus, String> {
+    let mut engine = state.0.lock().map_err(|e| e.to_string())?;
+
+    // 1. Check cache first
+    if let Some(data) = engine.cache.load_waveform(&asset_id) {
+        return Ok(WaveformStatus::Ready(data));
+    }
+
+    // 2. Find asset in project
+    let project = engine.service.project();
+    let asset = match project.assets.iter().find(|a| a.asset_id == asset_id) {
+        Some(a) => a.clone(),
+        None => {
+            return Ok(WaveformStatus::Unavailable {
+                reason: format!("Asset '{}' not found in project", asset_id),
+            });
+        }
+    };
+
+    let source_path = PathBuf::from(&asset.path);
+    if !source_path.exists() {
+        return Ok(WaveformStatus::Unavailable {
+            reason: format!("Media file not found at path '{}'", asset.path),
+        });
+    }
+
+    // 3. Route through JobManager with deduplication and bounded concurrency
+    let dedupe_key = format!("waveform:{}", asset_id);
+    let job_id_candidate = format!("wf_{}_{}", asset_id, uuid::Uuid::new_v4().simple());
+    let (job_id, is_deduped) =
+        engine
+            .jobs
+            .submit_job(job_id_candidate, JobKind::Waveform, dedupe_key, 10);
+
+    if let Some(job) = engine.jobs.get_job(&job_id) {
+        match &job.status {
+            JobStatus::Completed => {
+                if let Some(data) = engine.cache.load_waveform(&asset_id) {
+                    return Ok(WaveformStatus::Ready(data));
+                }
+            }
+            JobStatus::Failed(reason) => {
+                return Ok(WaveformStatus::Unavailable {
+                    reason: reason.clone(),
+                });
+            }
+            JobStatus::Cancelled => {
+                return Ok(WaveformStatus::Unavailable {
+                    reason: "Waveform extraction was cancelled".to_string(),
+                });
+            }
+            JobStatus::Running => {
+                return Ok(WaveformStatus::Pending {
+                    progress: job.progress,
+                });
+            }
+            JobStatus::Queued => {
+                if !is_deduped && engine.jobs.can_start() {
+                    if let Ok(cancel_flag) = engine.jobs.start_job(&job_id) {
+                        let cache_out = engine.cache.waveform_path(&asset_id);
+                        let state_arc = Arc::clone(&state.0);
+                        let jid = job_id.clone();
+                        let aid = asset_id.clone();
+
+                        std::thread::spawn(move || {
+                            if cancel_flag.load(Ordering::SeqCst) {
+                                if let Ok(mut eng) = state_arc.lock() {
+                                    eng.jobs.cancel_job(&jid);
+                                }
+                                return;
+                            }
+
+                            let result =
+                                FFmpegService::extract_waveform(&source_path, &aid, 50, &cache_out);
+
+                            if let Ok(mut eng) = state_arc.lock() {
+                                if cancel_flag.load(Ordering::SeqCst) {
+                                    eng.jobs.cancel_job(&jid);
+                                } else {
+                                    match result {
+                                        Ok(_) => eng.jobs.mark_completed(&jid),
+                                        Err(err) => eng.jobs.mark_failed(&jid, err.to_string()),
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                return Ok(WaveformStatus::Pending { progress: 0.0 });
+            }
+        }
+    }
+
+    Ok(WaveformStatus::Pending { progress: 0.0 })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_project = Project::new("Untitled Project".to_string());
-    let state = AppState(Mutex::new(EditorEngine::new(initial_project)));
+    let state = AppState(Arc::new(Mutex::new(EditorEngine::new(initial_project))));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -286,7 +468,11 @@ pub fn run() {
             project_undo,
             project_redo,
             project_export,
-            media_import
+            media_import,
+            media_get_waveform,
+            preview_sample_at,
+            preview_run_benchmark,
+            parity_run_suite
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

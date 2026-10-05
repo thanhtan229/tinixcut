@@ -161,6 +161,9 @@ pub mod tests {
                 schema_version: CURRENT_SCHEMA_VERSION,
                 project_id: service.project().project_id.clone(),
                 base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
                 dry_run: true,
                 transaction_id: Some("tx_bench".to_string()),
                 operations: vec![OperationEnvelope {
