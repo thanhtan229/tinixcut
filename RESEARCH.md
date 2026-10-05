@@ -2324,6 +2324,279 @@ The following features and integrations are explicitly excluded from Phase 15:
 - **Project-Handle Registry & Cross-Call Caching**: No server-side handle tables or cross-call caching; reload/parse per project-scoped request is accepted.
 - **Distributed / Cross-Process Locking**: No file lock daemons; cross-process safety relies on ADR-001 revisions and atomic persistence.
 
+---
 
+# Phase 16 Research Gate: Timeline Editing Productivity Reconciliation
 
+## 1. Selected Milestone & Status
 
+- **Milestone:** `Phase 16 — Timeline Editing Productivity`
+- **Status:** `Research Gate COMPLETE — READY FOR PLANNING`
+- **Implementation:** `NOT STARTED`
+- **Schema:** `v3 unchanged`
+- **ADR Decision:** `No new ADR required`
+- **POC:** `src-tauri/tests/phase16_research_poc.rs — 12/12 passed` (research POC evidence, not implementation acceptance)
+
+---
+
+## 2. Research Findings & Gap Analysis
+
+### 2.1 Repository Audit of Timeline Gaps
+A thorough code audit of the current timeline implementation (`src/components/Timeline.tsx`, `src-tauri/src/modules/command/mod.rs`, `src-tauri/src/modules/domain/mod.rs`) identifies the following productivity gaps:
+
+- **Absent Capabilities:**
+  - Snapping (no edge, playhead, or zero snapping during move/trim);
+  - Multi-select (selection model is limited to single active item);
+  - Group move (cannot translate multiple selected clips together);
+  - Keyboard trim (no head/tail trim shortcuts to playhead);
+  - Ripple delete / ripple insert (no single-action ripple removal);
+  - Track targeting (no explicit track selection/lock matrix);
+  - Magnetic editing (no auto-closing ripple timeline);
+  - Timeline markers (no persistent project markers).
+
+- **Partial Capabilities:**
+  - Split at playhead exists via toolbar button (`ClipSplit` domain operation), but has no keyboard shortcut;
+  - Duplicate exists via toolbar button (`ClipDuplicate` domain operation), but has no keyboard shortcut.
+
+### 2.2 Group-Move Semantics POC & Ordering Sensitivity
+The research evaluated whether multi-clip translation could be achieved by executing multiple sequential `ClipMove` operations (Option G1) or requires a dedicated simultaneous `ClipGroupMove` command (Option G2).
+
+**Option G2 Adopted:**
+`EXISTING MULTI-CLIP MOVE IS ORDER-SENSITIVE / UNSAFE — DEDICATED ClipGroupMove COMMAND REQUIRED`
+
+**Evidence from `src-tauri/tests/phase16_research_poc.rs`:**
+- **Right move requires reverse ordering:** Moving clips `[A, B]` rightward by $\Delta > 0$ requires moving `B` first then `A`. Moving `A` first immediately collides with `B`'s unmoved position, causing false validation rejection.
+- **Left move requires forward ordering:** Moving clips `[A, B]` leftward by $\Delta < 0$ requires moving `A` first then `B`. Moving `B` first collides with `A`.
+- **Gap cases can false-reject:** When clips have varying gaps, determining an execution order without temporary false collisions is complex and non-deterministic in user space.
+- **CrossDissolve destruction:** Moving clips sequentially triggers per-item transition reconciliation at intermediate steps. An internal cut transition between two moved clips can be permanently stripped if the first clip moves before the second, destroying adjacency mid-flight.
+- **Atomic rollback works correctly:** While atomic rollback on command failure works as designed, client-side sequential ordering workarounds are fragile and prohibited.
+
+**Conclusion:** UI-level ordering hacks are strictly prohibited. A dedicated atomic `ClipGroupMove` domain command is required.
+
+---
+
+## 3. Normative Research Contract (TP-01 through TP-12)
+
+### TP-01 — Ephemeral Selection
+- Selection state exists exclusively in frontend client memory (`selectedItemIds: Set<string>`, `primarySelectedItemId: string | null`).
+- Selection MUST NOT be serialized into `.tcproj` project files or stored in domain state.
+- **Interaction Contract:**
+  - *Normal Click:* Replaces existing selection with clicked item; clicked item becomes primary.
+  - *Ctrl+Click:* Toggles clicked item in/out of selection. When added, clicked item becomes primary. When removed, primary selection updates to another remaining selected item (or null if empty).
+  - *Empty Timeline Click:* Clears selection.
+  - *Shift Range Selection:* Deferred.
+  - *Marquee / Box Selection:* Deferred.
+- **Selection Persistence & Normal Save:**
+  - Normal project Save MUST NOT clear selection merely because selection is ephemeral.
+  - Selection is cleared or reconciled only when:
+    1. Project is closed, opened, or reloaded;
+    2. A selected item is deleted;
+    3. Canonical project state no longer contains the selected ID.
+
+### TP-02 — Primary Selection
+- Exactly one selected item is designated as the **primary selected item** whenever selection is non-empty.
+- **Responsibilities of Primary Selection:**
+  - Drives Inspector property panel display and editing;
+  - Acts as the group-drag anchor during multi-clip moves;
+  - Provides snapping boundary anchors during drag interactions;
+  - Serves as the sole target for single-item-only actions (Duplicate, Ripple Delete).
+
+### TP-03 — UI-Only Snapping
+- Snapping is strictly an ephemeral UI behavior during timeline pointer gestures; it does not introduce new canonical persistence or schema fields.
+- **Snap Targets:**
+  - Timeline zero ($t = 0$);
+  - Current playhead position;
+  - Start and end edges of unselected timeline items across all tracks.
+- **Constraint:** Selected items must not snap to their own boundaries.
+- **Group Move Snapping:** Snap the primary (actively dragged) clip to eligible targets, then apply the resulting exact common delta to all selected clips.
+- **Threshold & Computation:**
+  - Default threshold: `8 CSS pixels`.
+  - **Correction:** Do NOT expand threshold to a minimum one-frame duration. Eligibility is determined strictly by actual visual pixel distance:
+    $$\text{distancePx} = |\text{semanticTimeDistanceSeconds}| \times \text{zoomPxPerSecond}$$
+    $$\text{snap eligible iff } \text{distancePx} \le 8$$
+  - Snapped result is the exact target `RationalTime` of the target boundary.
+  - At high zoom levels, if one frame renders wider than 8px, do not silently extend the snap threshold to one frame.
+- **Tie-Breaking Rules:**
+  1. Smallest absolute pixel distance;
+  2. Target priority: Playhead > Timeline Zero > Clip Edge;
+  3. Earlier semantic target time;
+  4. Stable target/item ordering if still tied.
+- **Modifier:** Holding `Alt` temporarily suppresses/disables snapping during drag.
+- **Configuration:** Snapping enabled state is ephemeral UI state; no project preference or schema field in Phase 16.
+
+### TP-04 — Group Move Command Exclusivity
+- Multi-clip timeline translation MUST use the dedicated `ClipGroupMove` command.
+- Implementing group move via multiple individual `ClipMove` calls is prohibited.
+
+### TP-05 — ClipGroupMove Semantics
+- **Candidate Operation:**
+  ```rust
+  ClipGroupMove {
+      item_ids: Vec<String>,
+      delta: RationalTime,
+  }
+  ```
+- **Normative Contract:**
+  - Applies a single common semantic horizontal `delta` to all specified `item_ids`.
+  - Clip tracks remain unchanged (pure horizontal translation).
+  - Source ranges (`source_start`, `source_duration`) remain unchanged.
+  - Relative timeline offsets and spacing between selected items are strictly invariant.
+  - Rescales `delta` semantically to each item's timebase/rate (no raw cross-rate `.value` comparisons).
+  - Rejects with error if any resulting item start time becomes negative ($t < 0$).
+  - Validates final simultaneous placement against all unselected items on affected tracks (no collisions).
+  - Selected members are treated as a simultaneous group: intermediate intra-group collisions do not occur.
+  - Internal cut transitions (where both adjacent clips move together) are preserved intact.
+  - External transitions (where one participant moves and the other does not) are reconciled/removed under existing Phase-13 transition rules.
+  - Updates staged project simultaneously before final domain validation.
+  - Atomic failure and rollback: if any clip fails validation, no changes are committed.
+  - Emits one logical history action (single Undo/Redo step).
+  - Inherits standard command receipt, idempotency, and dry-run semantics.
+  - Retains Schema v3 (no Schema v4).
+
+### TP-06 — Bounded ClipRippleDelete
+- **Candidate Operation:**
+  ```rust
+  ClipRippleDelete {
+      item_id: String,
+  }
+  ```
+- **Normative Contract:**
+  - Single target item only; affects only the track containing the target item.
+  - Rejects if the target track is locked or non-editable.
+  - Removes the target item's timeline interval $[t_{\text{start}}, t_{\text{end}})$.
+  - Removes any transitions directly attached to the deleted item.
+  - Every surviving item on the same track whose start is at or after the deleted item's end time ($t \ge t_{\text{end}}$) shifts left by exactly the deleted item's duration ($d = t_{\text{end}} - t_{\text{start}}$).
+  - Source ranges of surviving items are strictly preserved.
+  - Relative spacing and gaps among downstream items are preserved.
+  - Other tracks remain completely untouched.
+  - Does NOT synthesize a new transition across the newly exposed cut.
+  - Downstream transitions where both participants shift left remain intact.
+  - Canonical project duration recomputes through standard existing project rules.
+  - Atomic execution with exact single-step Undo/Redo.
+  - Retains Schema v3 (no Schema v4).
+
+### TP-07 — Transition Coexistence
+- `ClipGroupMove` and `ClipRippleDelete` must preserve all ADR-003 transition invariants:
+  - Transitions remain video-only cut transitions;
+  - Strict semantic adjacency required for transition validity;
+  - Valid source handles required;
+  - At most one transition per cut;
+  - No automatic freeze-frame clamping;
+  - No silent synthetic transition creation.
+
+### TP-08 — Multi-Delete Semantics
+- Deleting multiple selected items executes via ordinary `ClipDelete` operations batched inside a single atomic `CommandEnvelope`.
+- POC proved that `ClipDelete` operations are order-independent when deleting a selection set.
+- The entire multi-item deletion remains one logical transaction and one history undo/redo step.
+
+### TP-09 — Conservative Duplicate Scope
+- Phase 16 Duplicate shortcut is restricted to the **primary selected item only**.
+- Multi-clip duplication is explicitly deferred because arbitrary batch duplication creates unavoidable track/time collision ambiguity without complex layout heuristics.
+
+### TP-10 — Split at Playhead Semantics
+- **Keyboard Shortcut Behavior (Ctrl+K):**
+  1. If the primary selected item's interior contains the playhead ($t_{\text{start}} < t_{\text{playhead}} < t_{\text{end}}$), split the primary item;
+  2. If multiple items are selected and contain the playhead, split ONLY the primary selected item;
+  3. If the primary item does not contain the playhead (or nothing is selected), search tracks in canonical track order and split the first item whose interior contains the playhead;
+  4. If no item across any track intersects the playhead, the shortcut is a clean no-op.
+- Uses the existing canonical `ClipSplit` domain operation.
+- Multi-track simultaneous splitting is explicitly deferred.
+
+### TP-11 — Keyboard Framework & Suppression
+- Implement a centralized, lightweight frontend keyboard shortcut listener; no heavy third-party shortcut library.
+- **Suppression:** All shortcuts are suppressed when active focus is inside `<input>`, `<textarea>`, or any `contenteditable` element.
+- **Windows-First Default Key Bindings:**
+  - `Space` → Play / Pause toggle (existing)
+  - `Ctrl+K` → Split at Playhead
+  - `Ctrl+D` → Duplicate primary item
+  - `Delete` / `Backspace` → Delete selected items (batched atomic envelope)
+  - `Shift+Delete` → Ripple Delete primary item
+  - `[` → Normal Trim Head to Playhead (existing `ClipTrim`, non-ripple)
+  - `]` → Normal Trim Tail to Playhead (existing `ClipTrim`, non-ripple)
+  - `=` / `+` → Timeline Zoom In
+  - `-` → Timeline Zoom Out
+  - `S` → Toggle Snapping
+- **Explicit Exclusion:** Q/W ripple trim shortcuts are explicitly OUT OF SCOPE.
+- Head/tail trim shortcuts adjust the clip boundary without moving downstream clips.
+
+### TP-12 — Schema, History, and Automation Invariance
+- Phase 16 retains **Schema v3** without changes.
+- New commands (`ClipGroupMove`, `ClipRippleDelete`) are registered as standard `CommandOperation` enum variants.
+- Both operations automatically inherit:
+  - `CommandService` validation, staged mutations, and rollback;
+  - Dry-run calculation and diff generation;
+  - Atomic execution;
+  - Single-step Undo/Redo history integration;
+  - ADR-001 idempotency and identity tracking;
+  - Headless CLI, JSONL session, and MCP generic envelope compatibility.
+- `AutomationAdapter::supported_operations()` must be updated to advertise the new variants.
+- No MCP-specific or CLI-specific editing paths are introduced.
+
+---
+
+## 4. Phase-16 In-Scope Ceiling
+
+The following ten (10) capabilities define the strict ceiling for Phase 16:
+1. **Ctrl-based ephemeral multi-select + primary selection** (`selectedItemIds`, `primarySelectedItemId`);
+2. **UI-only deterministic snapping** (8px threshold, playhead/zero/clip edges, Alt disable);
+3. **Dedicated `ClipGroupMove` command** (atomic simultaneous translation, delta-based, collision-checked);
+4. **Bounded single-track `ClipRippleDelete` command** (deletes target, shifts downstream on same track);
+5. **Centralized keyboard shortcut framework** (input suppression, Windows-first bindings);
+6. **Split-at-playhead shortcut/workflow** (Ctrl+K, primary clip or first intersecting track);
+7. **Normal non-ripple trim-to-playhead shortcuts** (`[` and `]`, existing `ClipTrim`);
+8. **Multi-selection delete via one atomic envelope** (batched `ClipDelete` operations);
+9. **Primary-only duplicate shortcut** (Ctrl+D);
+10. **Timeline zoom and snapping toggle shortcuts** (`=`, `-`, `S` as UI behavior).
+
+---
+
+## 5. Explicitly Out of Scope
+
+The following items are deferred and explicitly prohibited from Phase 16:
+- Ripple insert;
+- Ripple trim / Q-W keyboard semantics;
+- Magnetic / FCP-style timeline;
+- Cross-track ripple editing;
+- Shift range selection;
+- Marquee / box drag selection;
+- Multi-clip duplication;
+- Persistent timeline markers;
+- Track targeting matrix;
+- Keyframe UX expansion;
+- Audio crossfade (`acrossfade`);
+- Waveform visualization expansion;
+- New transition kinds or transition easing;
+- Text/caption expansion;
+- Project Schema v4.
+
+---
+
+## 6. ADR & POC Gate Decision
+
+- **ADR Required:** **NO** (ADR-006 is NOT required).
+  - *Rationale:* Both `ClipGroupMove` and `ClipRippleDelete` are normal domain operations executing within existing `CommandService`, ADR-001 idempotency, and ADR-003 transition boundaries. They do not alter persistence topology, renderer pipeline, IPC protocols, or concurrency models.
+- **Additional POC Required Before Planning:** **NO**.
+  - *Rationale:* Comprehensive transaction semantics and ordering constraints were already proven by `phase16_research_poc.rs`.
+
+---
+
+## 7. Research POC Status & Verification Evidence
+
+- **Test Suite:** `src-tauri/tests/phase16_research_poc.rs`
+- **Result:** **12 passed, 0 failed**
+- **Classification:** **RESEARCH POC EVIDENCE ONLY** (proves feasibility, order-sensitivity constraints, and transaction invariants; does NOT constitute Phase-16 implementation acceptance).
+
+| Test Name | Verified Invariant |
+|---|---|
+| `test_case_1_two_adjacent_move_right_order_sensitivity` | Proves sequential move right requires reverse order. |
+| `test_case_2_two_adjacent_move_left_order_sensitivity` | Proves sequential move left requires forward order. |
+| `test_case_3_and_4_three_adjacent_clips_move_right_and_left` | Proves 3-clip sequential moves require strict directional ordering. |
+| `test_case_5_clips_separated_by_gaps` | Proves gap cases can cause false-positive collision rejections. |
+| `test_case_6_clips_on_different_tracks` | Proves multi-track group move validity. |
+| `test_case_7_group_next_to_unselected_clip_conflict_rejection` | Proves collision rejection against stationary unselected clips. |
+| `test_case_8_selected_clips_with_cross_dissolve_FATAL_TRANSITION_DESTRUCTION` | Proves sequential move destroys intermediate cut transitions; simultaneous update preserves them. |
+| `test_case_9_stale_revision` | Proves revision rejection on group move. |
+| `test_case_10_transaction_rollback_when_one_member_invalid` | Proves atomic rollback when one group member violates constraints. |
+| `test_ripple_delete_candidate_semantics_and_invariants` | Proves single-track downstream shift, transition cleanup, and gap preservation. |
+| `test_multi_selection_delete_safety` | Proves batched `ClipDelete` is order-independent in an atomic envelope. |
+| `test_multi_selection_duplicate_safety` | Proves multi-clip duplicate is collision-prone and must be restricted to primary clip. |

@@ -11,37 +11,47 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE  
-**Current Selected Milestone:** Phase 15 — MCP Automation Adapter (COMPLETE)  
+**Overall Status:** PHASES 0–15 COMPLETE (Baseline Checkpoint: `48fe7b0`)  
+**Current Selected Milestone:** Phase 16 — Timeline Editing Productivity  
 **Current Active Implementation Phase:** NONE  
-**Phase 15 Status:** COMPLETE — accepted by ChatGPT after implementation and remediation  
-**Implementation:** COMPLETE  
-**ADR-005:** ACCEPTED & IMPLEMENTED — Phase 15  
-**Plan Status:** `Plans/plan_phase15.md` COMPLETE  
-**Next Action:** ChatGPT selects next milestone and performs research gate  
+**Phase 16 Status:** Research Gate COMPLETE — READY FOR PLANNING  
+**Implementation:** NOT STARTED  
+**ADR:** No new ADR required (ADR-006 NOT created)  
+**Plan Status:** Pending (`Plans/plan_phase16.md` NOT yet created)  
+**Project Schema:** Schema v3 unchanged  
+**Research POC:** `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence, not implementation acceptance)  
+**Baseline Commit:** `48fe7b0597e925f7ab801ddab2e28af8911f3ac9` (`chore: checkpoint accepted phases 0-15`)  
+**Next Action:** ChatGPT creates `plan_phase16.md`  
 **Last Updated:** 2026-10-05  
 
 ---
 
 ## 1. Current Objective
 
-Phase 15 MCP Automation Adapter is COMPLETE and reconciled:
+Phase 16 Research Gate is COMPLETE and durable state is reconciled:
+- **Phases 0–15 Baseline Checkpoint**: Clean commit `48fe7b0` (`chore: checkpoint accepted phases 0-15`).
 - **Phases 0–15 Final State**: `COMPLETE`.
+- **Selected Milestone**: `Phase 16 — Timeline Editing Productivity`.
 - **Current Active Implementation Phase**: NONE.
-- **Phase 15 State**: `COMPLETE` (accepted by ChatGPT after implementation and remediation).
-- **ADR-005**: `ACCEPTED & IMPLEMENTED` (`ADR_005_MCP_LOCAL_STDIO_TOOLS_ADAPTER_EXPLICIT_PROJECT_ADDRESSING_AND_DURABLE_IDENTITY.md`).
-- **Plan File**: `Plans/plan_phase15.md` (P15-AC-01 through P15-AC-41 verified and complete).
-- **MCP Primary Protocol**: `2026-07-28` (stateless lifecycle, `server/discover`, SDK-only `2025-11-25` fallback).
-- **MCP Transport**: Local stdio only (`tinixcut mcp`), 100% stdout protocol purity, stderr diagnostics.
-- **MCP Tool Surface**: Exactly 8 authoritative tools (`tinixcut_inspect`, `tinixcut_capabilities`, `tinixcut_dry_run`, `tinixcut_apply`, `tinixcut_save`, `tinixcut_export_start`, `tinixcut_export_status`, `tinixcut_export_cancel`).
-- **Addressing & Identity**: Explicit `projectPath` addressing, caller-supplied ADR-001 structured identity `(client_id, client_epoch, sequence_number)`, atomic apply persistence (`load -> mutate -> save_atomic -> receipt`), one process-local async authoritative-write gate shared by the MCP server; Phase-15 authoritative writes serialize across all project paths.
+- **Phase 16 Status**: Research Gate COMPLETE — READY FOR PLANNING.
+- **Implementation Status**: NOT STARTED.
+- **ADR Decision**: No new ADR required (ADR-006 NOT created; both new commands remain normal local domain operations under existing CommandService/ADR-001/ADR-003 boundaries; no persistence topology, renderer, protocol, or concurrency architecture changes).
+- **Plan Status**: `Plans/plan_phase16.md` does not yet exist (planning pending ChatGPT).
 - **Project Schema**: Schema v3 unchanged.
-- **Verification Baseline**:
-  - Full `cargo test`: 155 passed, 0 failed (106 unit, 8 POC, 15 Phase 14 acceptance, 26 Phase 15 acceptance).
-  - Frontend `vitest`: 14 passed, 0 failed.
-  - Clippy clean (0 warnings), fmt clean, cargo build clean, tsc clean, vite build clean.
-  - Windows real MCP subprocess qualification passed.
-- **Next Action**: ChatGPT selects next milestone and performs research gate.
+- **Research POC**: `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence only, not Phase-16 implementation acceptance).
+- **In-Scope Ceiling**: Exactly 10 items:
+  1. Ctrl-based ephemeral multi-select + primary selection (`selectedItemIds`, `primarySelectedItemId`);
+  2. UI-only deterministic snapping (8px threshold, playhead/zero/clip edges, Alt disable);
+  3. Dedicated `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
+  4. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track);
+  5. Centralized keyboard shortcut framework (input suppression, Windows-first bindings);
+  6. Split-at-playhead shortcut/workflow (Ctrl+K, primary clip or first intersecting track);
+  7. Normal non-ripple trim-to-playhead shortcuts (`[` and `]`, existing `ClipTrim`);
+  8. Multi-selection delete via one atomic envelope (batched `ClipDelete` operations);
+  9. Primary-only duplicate shortcut (Ctrl+D);
+  10. Timeline zoom and snapping toggle shortcuts (`=`, `-`, `S` as UI behavior).
+- **Explicitly Out of Scope**: Ripple insert, ripple trim / Q-W semantics, magnetic timeline, cross-track ripple, Shift range selection, marquee selection, multi-clip duplicate, persistent timeline markers, track targeting, keyframe UX expansion, audio crossfade, waveform expansion, new transitions, text/caption expansion, Schema v4.
+- **Next Action**: ChatGPT creates `plan_phase16.md`.
 
 ---
 
@@ -63,6 +73,7 @@ Phase 15 MCP Automation Adapter is COMPLETE and reconciled:
 - Phase 13 Transition Compositor & CrossDissolve: **COMPLETE** (Schema v2 implemented and current, ADR-003 implemented, cut-owned topology, isolated preview transition group, bounded export premultiply filtergraph, parity fixtures verified; accepted by ChatGPT).
 - Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 current, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved; accepted by ChatGPT and ratified by user post-implementation).
 - Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented, `rmcp` 3.x local stdio transport, MCP `2026-07-28` primary protocol, exact 8-tool surface, explicit `projectPath` addressing, caller-supplied ADR-001 structured identity, atomic apply persistence, process-local write serialization, `JobManager` export lifecycle, structured domain error preservation, spawned subprocess stdout purity verified on Windows; accepted by ChatGPT after implementation and remediation).
+- Phase 16 Timeline Editing Productivity: **Research Gate COMPLETE — READY FOR PLANNING** (Implementation NOT STARTED; Schema v3 unchanged; no new ADR required; 12/12 research POC tests passed in `src-tauri/tests/phase16_research_poc.rs`).
 - Automated Tests: 169 total automated tests green (155 `cargo test` passed [106 unit + 8 POC + 15 Phase 14 acceptance + 26 Phase 15 acceptance], 14 `vitest` passed, `cargo clippy` 0 warnings, `cargo fmt` clean, frontend typecheck/build clean, production binary build green).
 
 ---
@@ -91,12 +102,13 @@ Phase 15 MCP Automation Adapter is COMPLETE and reconciled:
 - [x] Phase 13 Transition Compositor & CrossDissolve: **COMPLETE** (Schema v2, cut-owned CrossDissolve, preview/export parity, verified via 26 Phase-13 tests, 103 Rust tests, 11 Vitest tests; accepted by ChatGPT).
 - [x] Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 promoted, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved, 129 Rust tests + 14 Vitest tests passing; accepted by ChatGPT and ratified by user post-implementation).
 - [x] Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented & verified, `rmcp` 3.x local stdio adapter, `2026-07-28` modern protocol, exact 8 tools, explicit `projectPath`, caller-supplied structured identity, atomic apply persistence, process-local write gate, `JobManager` export lifecycle, pure stdout, clean EOF termination, Schema v3 unchanged, 26 Phase-15 acceptance tests passing, 155 total Rust tests green; accepted by ChatGPT after implementation and remediation).
+- [x] Phase 16 Research Gate and Transaction Semantics POC complete (12/12 passed; research findings & normative contract TP-01..TP-12 reconciled; implementation pending planning).
 
 ---
 
 ## 4. In Progress
 
-None. Phase 15 is complete. Current active implementation phase: NONE. Next milestone selection pending ChatGPT.
+None. Phases 0–15 are complete. Phase 16 Research Gate is complete. Current active implementation phase: NONE. Implementation of Phase 16 is NOT STARTED. Next action: ChatGPT creates `plan_phase16.md`.
 
 ---
 

@@ -152,6 +152,8 @@ Phase 13 Transition Compositor & CrossDissolve (Complete)
 Phase 14 Advanced Keyframe Interpolation (Complete)
    ↓
 Phase 15 MCP Automation Adapter (Complete)
+   ↓
+Phase 16 Timeline Editing Productivity (Research Gate Complete — Ready for Planning)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1337,6 +1339,49 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 - No cross-process locking guarantee was added (governed by ADR-001 revisions and atomic saves);
 - Export jobs are process-local and terminate with the MCP process;
 - Backward compatibility with 2025-11-25 is SDK-provided only.
+
+---
+
+# Phase 16 — Timeline Editing Productivity
+
+## Status: RESEARCH GATE COMPLETE — READY FOR PLANNING
+
+**Milestone:** `Phase 16 — Timeline Editing Productivity`  
+**Governed by:** Phase 16 Research Reconciliation (No new ADR required)  
+**Implementation Plan:** `Plans/plan_phase16.md` (Pending — NOT yet created)  
+**Research Gate:** COMPLETE — READY FOR PLANNING  
+**Implementation Status:** NOT STARTED  
+**Schema State:** Schema v3 unchanged  
+**Research POC:** `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence, not implementation acceptance)  
+
+### Planned Scope (Ceiling)
+1. Ctrl-based ephemeral multi-select + primary selection (`selectedItemIds`, `primarySelectedItemId`);
+2. UI-only deterministic snapping (8px threshold, playhead/zero/clip edges, Alt disable);
+3. Dedicated `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
+4. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track);
+5. Centralized keyboard shortcut framework (input suppression, Windows-first bindings);
+6. Split-at-playhead shortcut/workflow (Ctrl+K, primary clip or lowest-track fallback);
+7. Normal non-ripple trim-to-playhead shortcuts (`[` and `]`, existing `ClipTrim`);
+8. Multi-selection delete via one atomic envelope (batched `ClipDelete` operations);
+9. Primary-only duplicate shortcut (Ctrl+D);
+10. Timeline zoom and snapping toggle shortcuts (`=`, `-`, `S` as UI behavior).
+
+### Explicitly Out of Scope
+- Ripple insert
+- Ripple trim / Q-W keyboard semantics
+- Magnetic / FCP-style timeline
+- Cross-track ripple editing
+- Shift range selection
+- Marquee / box drag selection
+- Multi-clip duplication
+- Persistent timeline markers
+- Track targeting matrix
+- Keyframe UX expansion
+- Audio crossfade (`acrossfade`)
+- Waveform visualization expansion
+- New transition kinds or transition easing
+- Text/caption expansion
+- Project Schema v4
 
 ---
 
