@@ -154,6 +154,8 @@ Phase 14 Advanced Keyframe Interpolation (Complete)
 Phase 15 MCP Automation Adapter (Complete)
    ↓
 Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
+   ↓
+Phase 17 Performance Requalification & Release Foundation (Research Gate Complete — Ready for Planning)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1400,6 +1402,39 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 - New transition kinds or transition easing
 - Text/caption expansion
 - Project Schema v4
+
+---
+
+# Phase 17 — Performance Requalification & Release Foundation
+
+## Status: RESEARCH GATE COMPLETE — READY FOR PLANNING
+
+**Milestone:** `Phase 17 — Performance Requalification & Release Foundation`  
+**Governing Inputs:** `RESEARCH.md` (Phase 17 Research Gate), `ARCHITECTURE.md`, ADR-001 through ADR-005  
+**Research Status:** COMPLETE — ACCEPTED  
+**Implementation Status:** NOT STARTED  
+**Current Active Implementation Phase:** NONE  
+**Schema State:** Schema v3 invariant (no Schema v4)  
+**ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  
+
+### High-Level Scope Ceiling
+1. **Schema-v3 Performance Requalification Harness:** Empirical qualification of core operations, long-project scale (Fixture B), Phase-16 commands, and transports (JSONL and MCP stdio).
+2. **Reproducible Non-Flaky Regression Evidence:** Dedicated opt-in performance benchmark suite isolated from functional CI under `#[ignore]`.
+3. **Release Packaging Synchronization:** Pinned Tauri 2.12 NSIS installer profile and synchronization of packaging qualification tests (`src-tauri/tests/qualification.rs`) to Schema v3.
+4. **Host-Isolated Workstation Qualification:** Formal verification under `CM-01` through `CM-07` protocols.
+5. **Formalization of External Release Gates:** Explicit tracking and preservation of `P16-AC-56` (interactive Windows GUI QA) and True Clean VM qualification.
+6. **Provenance & Test Baseline Verification:** Complete functional test pass and release artifact hygiene verification.
+
+### Explicit Exclusions
+- NVENC/QSV/AMF hardware acceleration qualification without suitable multi-vendor hardware environments;
+- True clean-VM provisioning and automation;
+- Interactive GUI qualification (remains tracked under `P16-AC-56`);
+- New creator features or timeline UX expansion;
+- Project Schema v4 or domain model persistence migrations;
+- Compositor, timeline, or renderer architectural redesign;
+- Production code modifications (Phase 17 is strictly qualification-first).
+
+*Note: Detailed acceptance criteria (ACs), implementation sequence, and task breakdown will be authored by ChatGPT in `Plans/plan_phase17.md` from the reconciled research state. No implementation ACs are defined in this high-level roadmap section.*
 
 ---
 

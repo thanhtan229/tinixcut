@@ -2600,3 +2600,272 @@ The following items are deferred and explicitly prohibited from Phase 16:
 | `test_ripple_delete_candidate_semantics_and_invariants` | Proves single-track downstream shift, transition cleanup, and gap preservation. |
 | `test_multi_selection_delete_safety` | Proves batched `ClipDelete` is order-independent in an atomic envelope. |
 | `test_multi_selection_duplicate_safety` | Proves multi-clip duplicate is collision-prone and must be restricted to primary clip. |
+
+---
+
+# Phase 17 Research Gate — Performance Requalification & Release Foundation
+
+## Status: COMPLETE — READY FOR PLANNING AFTER DURABLE RECONCILIATION
+
+**Milestone:** `Phase 17 — Performance Requalification & Release Foundation`  
+**Research Status:** COMPLETE — ACCEPTED  
+**Implementation:** NOT STARTED  
+**Current Active Implementation Phase:** NONE  
+**Schema State:** Schema v3 invariant (no Schema v4)  
+**ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  
+**Governing Inputs:** `PLAN.md`, `ARCHITECTURE.md`, ADR-001 through ADR-005, Phase 11 / Phase 12 qualification baselines, Phase 16 reconciliation  
+
+---
+
+## 1. Research History & Audit Progression
+
+The Phase 17 research gate resolved the next strategic engineering boundary following the completion of Phase 16 (Timeline Editing Productivity). The research progressed across four structured phases:
+
+1. **Initial Repository & Performance Architecture Audit:**  
+   Audited the codebase across preview decoding, proxy policies, thumbnail/waveform background jobs, `JobManager` backpressure and cancellation, export pipeline, media binary resolver, hardware encoder selection, frontend timeline interactions, composition compilation, serialization/autosave latency, long-project scale characteristics, and IPC hotspots. Confirmed that foundational capabilities across Schema v1 through v3 are implemented and functionally verified, but historical performance baselines (established in Phase 11 on Schema v1 and Phase 12 packaging) had not been systematically requalified under Schema v3 (incorporating ADR-003 cut-owned `CrossDissolve` and ADR-004 nonlinear Bézier keyframes).
+2. **Calibration Round:**  
+   Clarified terminology and benchmark methodology. Established a sharp boundary between **preview semantic sampling latency** (`sample_preview_at` Rust composition evaluation) and **interactive display preview** (which involves WebView presentation, frame pacing, and display sync, tracked as an external manual gate). Proved the requirement for a dual-fixture evaluation framework separating feature complexity from project scale.
+3. **Scale, Transport & Package Closure:**  
+   Formulated the deterministic 20-track / 200-clip scale fixture (Fixture B). Re-measured project load/save, composition compilation, Phase-16 command scaling, and transport overhead (JSONL and MCP stdio). Evaluated packaging artifact hygiene and release synchronization requirements.
+4. **MCP Validation Correction:**  
+   Investigated an anomalous early measurement where `tinixcut_apply` was erroneously reported at ~0.06 ms. Diagnosed the root cause in the temporary harness, corrected wire protocol formatting, and executed genuine release subprocess benchmarks over Windows OS stdio pipes to establish valid, authoritative measurements.
+
+### Explicit Disclosure of Prior Invalid MCP Benchmark Measurements
+
+```text
+Earlier MCP ~0.06 ms measurements were INVALID.
+
+Root cause:
+A malformed wire parameter `_meta` (passing `clientCapabilities` instead of `io.modelcontextprotocol/clientCapabilities`) caused the `rmcp` 3.x stdio server to return a JSON-RPC error -32602 (`InvalidParams`) within ~0.08 ms before tool dispatch. The initial temporary benchmark harness failed to inspect the error response payload and recorded this early protocol rejection as a successful execution.
+
+Corrected real OS-stdio MCP measurements supersede those invalid values.
+```
+
+---
+
+## 2. Accepted Milestone Scope & Boundaries
+
+### Milestone Name & Purpose
+- **Milestone:** `Phase 17 — Performance Requalification & Release Foundation`
+- **Purpose:**  
+  1. Systematically requalify Schema-v3 performance across core operations, long-project scale, command execution, and multi-transport surfaces.
+  2. Establish reproducible, non-flaky performance regression test fixtures and an opt-in qualification suite.
+  3. Synchronize release packaging configuration (Tauri 2.12 NSIS installer, bundled FFmpeg 9.0.2 Essentials, Schema-v3 qualification harness).
+  4. Perform Host-Isolated Workstation qualification (`CM-01` through `CM-07`).
+  5. Formalize and preserve external release gates (`P16-AC-56` interactive GUI QA and True Clean VM qualification).
+
+### Milestone Philosophy: Qualification-First
+Phase 17 is strictly **qualification-first**, not an optimization or feature phase. Production code in `src/` and `src-tauri/src/` must remain untouched unless an unambiguous regression or defect is uncovered during qualification. No speculative refactoring, algorithm redesign, or premature optimizations are authorized.
+
+### Explicit Exclusions
+The following areas are explicitly excluded from Phase 17:
+- Hardware acceleration qualification (NVENC, Intel QSV, AMD AMF) without dedicated multi-vendor testbeds;
+- True Clean Windows VM provisioning and automation;
+- Interactive GUI desktop qualification (remains tracked under `P16-AC-56`);
+- New creator-facing features or UI expansion;
+- Project Schema v4 or domain model revisions;
+- Compositor, timeline, or renderer architectural redesign.
+
+---
+
+## 3. Standardized Benchmark Fixtures
+
+To ensure deterministic, reproducible benchmarking across runs, two canonical fixtures are established:
+
+### Fixture A — Semantic-Rich Schema-v3 Workload
+- **Target:** Feature-complexity overhead, semantic sampling, export throughput, and preview/export parity.
+- **Duration:** 6.0 seconds @ 30 fps (180 frames canonical duration).
+- **Variants:** 720p (`1280x720`) and 1080p (`1920x1080`).
+- **Topology:**
+  - 3 timeline tracks (2 video tracks, 1 audio track);
+  - 2 sequential video clips with 1.0s overlap cut transition;
+  - 1 text/title overlay item with animated transform properties;
+  - 1 background audio item with dynamic volume envelope.
+- **Semantic Features:**
+  - 1.0s video-only `CrossDissolve` cut transition (ADR-003 premultiplied RGBA dual-backend compositing);
+  - Nonlinear Bézier keyframes across clips (Linear, EaseIn, EaseOut, EaseInOut, CubicBezier evaluated via 32-iteration bisection);
+  - Dynamic audio volume automation schedules.
+
+### Fixture B — Long-Project Scale Schema-v3 Workload
+- **Target:** Scale sensitivity, serialization/deserialization limits, composition compilation, multi-item commands, and transport serialization cost.
+- **Duration:** 10.0 seconds @ 30 fps (300 frames canonical duration).
+- **Topology:**
+  - 20 timeline tracks (12 video tracks, 8 audio tracks);
+  - 200 timeline items (120 video clips, 80 audio clips);
+  - 10 video `CrossDissolve` cut transitions;
+  - Mixed timeline rates and source timebases;
+  - Nonlinear Bézier keyframes distributed across clips;
+  - Audio gain automation schedules across multiple audio tracks.
+
+---
+
+## 4. Empirical Benchmark Data & Methodology
+
+### Methodology & Reference Execution Environment
+- **Operating System:** Windows 11 Pro (Build 26200 / 24H2)
+- **CPU:** Intel Core i5-13400F (10 cores, 16 threads, base 2.5 GHz, boost up to 4.6 GHz)
+- **RAM:** 64 GB DDR4-3200 MHz
+- **Storage:** Samsung 990 PRO 2TB NVMe PCIe 4.0 SSD (sequential read/write > 7000 MB/s)
+- **GPU:** NVIDIA GeForce RTX 3090 (24 GB VRAM, Driver 595.79)
+- **Media Binaries:** Bundled FFmpeg 9.0.2 / FFprobe 9.0.2 Essentials (GPLv3)
+- **Build Profile:** Rust Release Profile (`cargo build --release`, `opt-level = 3`, LTO enabled)
+- **Protocol:** Dedicated measurement loops with 5–10 warmup iterations, high-resolution wall-clock timestamps (`std::time::Instant`), isolated temporary directories with atomic cleanup.
+
+### 4.1 Fixture B Scale Operations ($N = 50$ iterations)
+
+| Operation | Median | P95 | Reference-Host Budget | Qualification Ceiling |
+|---|---|---|---|---|
+| `save_project_atomic` | 3.890 ms | 5.912 ms | $\le 8.0\text{ ms}$ | $\le 50.0\text{ ms}$ |
+| `load_project` (deser) | 2.985 ms | 3.951 ms | $\le 6.0\text{ ms}$ | $\le 50.0\text{ ms}$ |
+| `CompositionPlan::from_project` | 0.282 ms | 0.408 ms | $\le 1.0\text{ ms}$ | $\le 10.0\text{ ms}$ |
+| `sample_preview_at` (sampling) | 0.218 ms | 0.252 ms | $\le 0.5\text{ ms}$ | $\le 5.0\text{ ms}$ |
+
+### 4.2 Phase-16 Command Scale on Fixture B ($N = 50$ iterations)
+
+| Command Operation | Scope | Median Latency | Qualification Ceiling |
+|---|---|---|---|
+| `ClipGroupMove` | 5 items simultaneous translation | 64 µs | $\le 1.0\text{ ms}$ |
+| `ClipRippleDelete` | Single item + downstream shift | 49 µs | $\le 1.0\text{ ms}$ |
+| `ClipDelete` (batch envelope) | 5 items atomic deletion | 53 µs | $\le 1.0\text{ ms}$ |
+
+### 4.3 JSONL OS-Stdio Automation Session ($N = 50$ iterations)
+
+| Action | Target | Median Latency | Notes |
+|---|---|---|---|
+| `session.inspect` | Fixture B (200 items) | 23 µs | In-memory query over JSONL stdio |
+| `command.dry_run` | Fixture B command | 18 µs | Transactional validation without commit |
+| `command.apply` | Fixture B in-memory | 19 µs | In-memory apply (without `saveAfter: true`) |
+
+*Note: In-memory JSONL `command.apply` executes in ~19 µs because atomic disk persistence is decoupled. When `saveAfter: true` is requested, latency reflects the underlying ~3.89 ms atomic disk write.*
+
+### 4.4 Validated MCP OS-Stdio Protocol ($N = 30$ iterations)
+Executed against real release subprocess `tinixcut.exe mcp` over Windows OS stdin/stdout pipes:
+
+| Tool Call | Description | Median Latency | P95 Latency | Aggregate Avg |
+|---|---|---|---|---|
+| `tinixcut_inspect` | Inspect project state | 0.2381 ms | 0.3707 ms | 0.2858 ms |
+| `tinixcut_dry_run` | Dry-run validation | 0.2422 ms | 0.4493 ms | 0.2909 ms |
+| `tinixcut_apply` | Full reload + mutate + atomic save | 12.2009 ms | 14.3105 ms | 12.3136 ms |
+
+**Constituent Operations Alignment:**  
+Physical disk operations on Fixture B account for $0.19\text{ ms}$ (`load_project`) $+ 3.18\text{ ms}$ (`save_project_atomic`) $\approx 3.37\text{ ms}$. The total tool call median of $12.20\text{ ms}$ encompasses:
+1. JSON-RPC request deserialization and protocol dispatch;
+2. Process-local write gate mutex acquisition;
+3. Domain project disk reload and validation;
+4. `CommandService` transactional execution and receipt generation;
+5. Atomic temporary write, fsync, and replace persistence;
+6. JSON-RPC response serialization and OS pipe write.  
+Sequential throughput across 30 measured requests was verified in aggregate at $12.31\text{ ms/call}$, demonstrating $< 1\%$ variance.
+
+### 4.5 Export Throughput on Fixture A (5 repeated runs, 6.0s timeline, bundled FFmpeg 9.0.2, CPU `libx264` ultrafast)
+
+| Profile | Median Time | Min RTF | Median RTF | Reference-Host Budget | Qualification Ceiling |
+|---|---|---|---|---|---|
+| 720p30 (1280x720) | 2.343 s | 2.42x | 2.56x | $\text{RTF} \ge 2.20\times$ | $\text{RTF} \ge 1.00\times$ |
+| 1080p30 (1920x1080) | 4.791 s | 1.15x | 1.25x | $\text{RTF} \ge 1.00\times$ | $\text{RTF} \ge 0.50\times$ |
+
+*Clarification: The minimum observed 720p RTF across 5 runs was 2.42x (exceeding the 2.20x budget). The 1080p budget of $\text{RTF} \ge 1.00\times$ is strictly a reference-host baseline; slower multi-core hardware will exhibit proportionally lower RTF under CPU encoding.*
+
+---
+
+## 5. Hybrid Timing Budget Policy & CI Isolation Contract
+
+### Three-Tier Assertion Classification
+To reconcile the tension between detecting performance degradation and preventing flaky test failures across divergent hardware, performance criteria are classified into three distinct tiers:
+
+1. **Qualification Ceilings (Hard Guardrails):**  
+   Generous upper bounds designed to catch gross algorithmic regressions ($O(N^2)$ loops, deadlocks, memory leaks) on any reasonably capable workstation. Failure indicates a fundamental defect.
+2. **Reference-Host Budgets (Target Baselines):**  
+   Concrete latency targets calibrated against the specified reference developer workstation (Intel i5-13400F, NVMe SSD). Used during milestone qualification and performance audits to confirm efficiency on target-class hardware.
+3. **Informational Baselines (Tracking Only):**  
+   Empirical timings recorded in documentation and benchmark logs to monitor trends over time without triggering hard assertion failures.
+
+### CI Isolation Contract
+Machine-dependent latency assertions **MUST NEVER** run inside default automated functional test suites (`cargo test`, `vitest run`).  
+- All performance benchmarks and latency assertions must be located in dedicated test harnesses under `src-tauri/tests/` and decorated with `#[ignore]`.
+- Performance suites are executed exclusively via explicit opt-in invocations:  
+  `cargo test --release --test phase17_performance_benchmarks -- --ignored --nocapture`
+- Default CI suites remain strictly functional, deterministic, fast, and host-agnostic.
+
+---
+
+## 6. Hardware Acceleration Policy
+
+1. **CPU `libx264` is Authoritative:**  
+   The software encoder `libx264` bundled via FFmpeg 9.0.2 Essentials is the sole authoritative export backend for all functional verification, acceptance tests, and deterministic output comparison.
+2. **Hardware Acceleration is Non-Authoritative Fallback:**  
+   NVENC, Intel QuickSync (QSV), and AMD AMF remain governed by ADR-002 as best-effort, non-authoritative hardware paths with mandatory automatic fallback to CPU `libx264`.
+3. **Hardware Qualification Deferred:**  
+   Full qualification of NVENC/QSV/AMF across varied driver versions, GPUs, and virtual machines is explicitly excluded from Phase 17 and deferred to future specialized release environments.
+
+---
+
+## 7. Packaging & Installer Synchronization Policy
+
+1. **Product Identity & Version:**  
+   - Application Name: `TinixCut`
+   - Identifier: `com.tinixcut.editor`
+   - Current Version: `0.1.0`
+   - Packaging Format: NSIS standalone executable installer configured for per-user installation (`currentUser`, `downloadBootstrapper = false`).
+2. **App-Owned Bundled Binaries:**  
+   Bundled FFmpeg and FFprobe 9.0.2 Essentials executables reside in `src-tauri/bin/` as app-owned packaged resources resolved via `MediaBinaryResolver`.
+3. **Binary Tracking Prohibition:**  
+   Compiled distribution binaries (e.g., `TinixCut_0.1.0_x64-setup.exe`, `.pdb` debug symbols) **MUST NOT** be committed to the Git repository. Release integrity is preserved durably via:
+   - Cryptographic SHA-256 checksums;
+   - Build provenance and toolchain metadata;
+   - Automated packaging qualification test reports.
+4. **Qualification Harness Synchronization:**  
+   The Phase 12 packaging qualification suite (`src-tauri/tests/qualification.rs`) contains stale Schema-v1 mock transition markers (`"Dissolve"`). It must be synchronized to Schema v3 (`CrossDissolve`) during Phase 17 implementation planning.
+
+---
+
+## 8. Host-Isolated Workstation Qualification Contract (`CM-01` through `CM-07`)
+
+The Host-Isolated Workstation qualification protocol establishes a rigorous local environment standard that complements, but does not replace, clean virtual machine testing:
+
+- **`CM-01` Controlled Workspace:** Working directory verified 100% clean against an authoritative Git commit hash; no untracked artifacts or uncommitted modifications.
+- **`CM-02` Pinned Toolchain:** Verification executed under pinned, approved toolchain versions (Rust 1.85+, Node 20+, pnpm 9+, Vite 6+, Tauri 2.12).
+- **`CM-03` Bundled Media Binaries:** Cryptographic verification that bundled FFmpeg/ffprobe binaries in `src-tauri/bin/` match known release signatures.
+- **`CM-04` Release Compilation:** All performance benchmarks and qualification binaries compiled under `--release` profile with maximum optimization (`opt-level = 3`, LTO enabled).
+- **`CM-05` Disposable Cache Cleanliness:** All derived caches (waveforms, thumbnails, export temp directories) generated in isolated temporary paths and verified for zero leakage upon completion.
+- **`CM-06` Background Interference Suppression:** Verification executed without concurrent background indexing, compilations, or high-CPU workloads.
+- **`CM-07` Qualification Complementarity:** Explicit recognition that Host-Isolated Workstation qualification provides high confidence on developer hardware, but does NOT replace formal Clean VM qualification.
+
+---
+
+## 9. External Release Gates Dispositions
+
+Two external release gates remain explicitly tracked and deferred:
+
+1. **`P16-AC-56 — Real Interactive Windows GUI Qualification`:**  
+   - **Status:** `DEFERRED / NOT PASS`
+   - **Rationale:** Native Windows desktop GUI interaction capability is unavailable in autonomous agent environments, and the user elected not to perform the 23-point manual checklist personally. Automated test coverage does not substitute for this qualification.
+2. **`True Clean Windows 10/11 VM Qualification`:**  
+   - **Status:** `DEFERRED / EXTERNAL RELEASE GATE`
+   - **Rationale:** Provisioning a pristine Windows virtual machine lacking developer tools, pre-installed Visual C++ runtimes, and local paths remains an external release gate prior to final public distribution.
+
+---
+
+## 10. Final Normative Contract (`PR-01` through `PR-18`)
+
+The following eighteen (18) normative requirements govern the definition, planning, and execution of Phase 17:
+
+- **`PR-01` Scope Ceiling:** Phase 17 is strictly bounded to performance requalification, release package synchronization, host-isolated workstation qualification, and external gate formalization.
+- **`PR-02` Production Code Protection:** Phase 17 is qualification-first; zero modifications to production code in `src/` or `src-tauri/src/` are authorized unless an unambiguous defect is verified.
+- **`PR-03` Schema v3 Invariance:** The project schema remains strictly Schema v3; no Schema v4 or domain persistence migration is permitted.
+- **`PR-04` ADR-006 Omission:** ADR-006 is NOT required because Phase 17 introduces zero architectural, schema, or protocol changes.
+- **`PR-05` Fixture A Standardization:** Fixture A (6.0s @ 30fps, 3 tracks, 720p/1080p, CrossDissolve, Bézier keyframes, audio automation) is the canonical semantic-rich fixture.
+- **`PR-06` Fixture B Standardization:** Fixture B (10.0s @ 30fps, 20 tracks, 200 items, 10 CrossDissolves, scale stress) is the canonical long-project scale fixture.
+- **`PR-07` Semantic Sampling Terminology:** `sample_preview_at` measurements must be identified as composition sampling latency, not interactive display pacing.
+- **`PR-08` Empirical Benchmark Rigor:** Benchmarks must be executed on Rust release profile with warmup iterations, isolated directories, and verified response payloads.
+- **`PR-09` MCP Validation Rigor:** All MCP benchmarks must validate JSON-RPC success envelopes; invalid ~0.06 ms measurements are durably superseded by validated ~12.2 ms OS-stdio figures.
+- **`PR-10` Three-Tier Timing Budgets:** Performance assertions must adhere to the three-tier model (Qualification Ceilings, Reference-Host Budgets, Informational Baselines).
+- **`PR-11` CI Isolation Guarantee:** Machine-dependent latency assertions must remain isolated under `#[ignore]` and never execute in standard functional CI.
+- **`PR-12` CPU Authoritative Export:** Bundled FFmpeg CPU `libx264` is the sole authoritative export backend; export throughput targets are $\text{RTF} \ge 2.20\times$ (720p) and $\text{RTF} \ge 1.00\times$ (1080p) on reference hardware.
+- **`PR-13` Hardware Acceleration Deferral:** GPU hardware acceleration remains non-authoritative fallback; hardware qualification is deferred.
+- **`PR-14` Packaging Synchronization:** Release package configuration and qualification tests (`qualification.rs`) must be synchronized to Schema v3.
+- **`PR-15` Binary Tracking Prohibition:** Transient installer binaries must not be committed to Git; release evidence is preserved via SHA-256 hashes and build metadata.
+- **`PR-16` Host-Isolated Execution:** Workstation qualification must comply with conditions `CM-01` through `CM-07`.
+- **`PR-17` P16-AC-56 Tracking:** `P16-AC-56` interactive GUI qualification remains explicitly `DEFERRED / NOT PASS`.
+- **`PR-18` True Clean-VM Tracking:** Pristine clean virtual machine qualification remains an external release gate.
+

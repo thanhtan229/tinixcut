@@ -11,57 +11,46 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS  
-**Current Selected Milestone:** None  
+**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS, PHASE 17 RESEARCH GATE COMPLETE  
+**Current Selected Milestone:** Phase 17 — Performance Requalification & Release Foundation (Research Gate Complete)  
 **Current Active Implementation Phase:** NONE  
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
-**Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred)  
-**Implementation:** COMPLETE  
-**ADR:** No new ADR required (ADR-006 NOT created/required)  
-**Plan Status:** Complete (`Plans/plan_phase16.md` implemented and reconciled)  
+**Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
+**Implementation:** Phases 0–16 COMPLETE; Phase 17 Implementation NOT STARTED  
+**ADR:** No new ADR required (ADR-006 NOT required)  
+**Plan Status:** Phase 17 Research Gate Reconciled; implementation plan to be authored in `Plans/plan_phase17.md`  
 **Project Schema:** Schema v3 unchanged  
-**Phase 17:** NOT STARTED  
-**Baseline Commit:** `37df1cc` (`docs: approve phase 16 timeline productivity plan`)  
-**Next Action:** ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.  
+**Phase 17:** RESEARCH GATE COMPLETE — READY FOR PLANNING (Implementation: NOT STARTED)  
+**Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
+**Next Action:** ChatGPT authors plan_phase17.md using reconciled research state.  
 **Last Updated:** 2026-10-06  
 
 ---
 
 ## 1. Current Objective
 
-Phase 16 Timeline Editing Productivity is COMPLETE WITH DEFERRED ITEMS:
-- **Phases 0–15 Baseline Checkpoint**: Clean commit `48fe7b0` (`chore: checkpoint accepted phases 0-15`).
+Phase 17 Research Gate is COMPLETE — READY FOR PLANNING; implementation is NOT STARTED:
 - **Phases 0–15 Final State**: `COMPLETE`.
-- **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS`.
+- **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS` (`P16-AC-56` real interactive Windows GUI QA deferred).
+- **Phase 17 Milestone**: `Phase 17 — Performance Requalification & Release Foundation`.
+- **Phase 17 Research Status**: `COMPLETE — READY FOR PLANNING`.
 - **Current Active Implementation Phase**: NONE.
-- **Phase 17 Status**: NOT STARTED.
-- **ADR Decision**: No new ADR required (ADR-006 NOT created; `ClipGroupMove` and `ClipRippleDelete` operate under existing CommandService/ADR-001/ADR-003 boundaries; zero schema/renderer/protocol changes).
-- **Plan Status**: `Plans/plan_phase16.md` fully implemented and reconciled.
-- **Project Schema**: Schema v3 unchanged.
+- **Phase 17 Implementation Status**: `NOT STARTED`.
+- **ADR Decision**: No new ADR required (ADR-006 NOT required; Phase 17 is qualification-first; zero production architecture, schema, or protocol changes).
+- **Plan Status**: Reconciled research state in `RESEARCH.md` and roadmap in `PLAN.md`; `Plans/plan_phase17.md` to be authored by ChatGPT.
+- **Project Schema**: Schema v3 invariant (no Schema v4).
 - **Automated Verification**: PASS (198 Rust tests + 37 frontend tests, clean clippy, fmt, build, typecheck).
-- **Deferred Acceptance Qualification**:
-  ```text
-  P16-AC-56:
-  Manual Windows interactive GUI QA deferred.
-  Automated coverage is green, but real desktop interaction has not been qualified.
-  ```
-  Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable`. The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
-- **Completed Scope**:
-  1. Ephemeral Ctrl-based multi-select (`selectedItemIds`);
-  2. Primary selection (`primarySelectedItemId`);
-  3. Exact 8 CSS-pixel UI snapping (playhead, zero, clip edges, Alt bypass);
-  4. Dedicated atomic `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
-  5. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track via exact `semantic_ge`);
-  6. Centralized shortcut framework with focus suppression and Windows-first bindings;
-  7. Deterministic split-at-playhead workflow (`Ctrl+K`, primary clip or lowest-track fallback);
-  8. Non-ripple trim-to-playhead shortcuts (`[` and `]`, using existing `ClipTrim`);
-  9. Atomic multi-delete via one atomic envelope (batched `ClipDelete` operations);
-  10. Primary-only duplicate shortcut (`Ctrl+D`);
-  11. Timeline zoom (`=`, `-`) and snapping toggle (`S`) shortcuts;
-  12. Generic CLI/JSONL/MCP transport inheritance without transport-specific edit logic;
-  13. RationalTime semantic helper remediation (`semantic_cmp`, `semantic_ge`, etc.) and representation-based `Ord`/`Eq` contract preservation.
-- **Planned Out-of-Scope Future Features**: Ripple insert, ripple trim / Q-W semantics, magnetic timeline, cross-track ripple, Shift range selection, marquee selection, multi-clip duplicate, persistent timeline markers, track targeting, keyframe UX expansion, audio crossfade, waveform expansion, new transitions, text/caption expansion, Schema v4.
-- **Next Action**: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
+- **Deferred External Acceptance Gates**:
+  1. `P16-AC-56`: Real interactive Windows GUI qualification deferred (environment constraint; automated tests do not substitute).
+  2. `True Clean Windows 10/11 VM Qualification`: Provisioning a sanitized clean virtual machine without dev tools remains an external release gate prior to distribution.
+- **Reconciled Research Conclusions**:
+  1. Dual-fixture benchmark framework standardized: Fixture A (semantic-rich Schema-v3, 6.0s @ 30fps) and Fixture B (scale Schema-v3, 20 tracks, 200 items, 10 CrossDissolves, 10.0s @ 30fps).
+  2. Empirical release baselines verified on reference workstation: Fixture B save ~3.89 ms, load ~2.99 ms, compile ~0.28 ms, sampling ~0.22 ms; Phase-16 commands 49–64 µs; JSONL 18–23 µs; MCP inspect ~0.24 ms, dry-run ~0.24 ms, apply ~12.20 ms; CPU export 720p RTF $\ge 2.20\times$, 1080p RTF $\ge 1.00\times$.
+  3. Prior invalid MCP ~0.06 ms measurements disclosed and superseded: root cause was wire parameter `_meta` formatting error returning JSON-RPC `-32602` before tool dispatch. Validated ~12.2 ms OS-stdio measurements durably recorded.
+  4. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
+  5. Host-Isolated Workstation qualification contract (`CM-01` through `CM-07`).
+  6. Normative contract `PR-01` through `PR-18` accepted.
+- **Next Action**: ChatGPT authors plan_phase17.md using reconciled research state.
 
 ---
 
@@ -113,12 +102,13 @@ Phase 16 Timeline Editing Productivity is COMPLETE WITH DEFERRED ITEMS:
 - [x] Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 promoted, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved, 129 Rust tests + 14 Vitest tests passing; accepted by ChatGPT and ratified by user post-implementation).
 - [x] Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented & verified, `rmcp` 3.x local stdio adapter, `2026-07-28` modern protocol, exact 8 tools, explicit `projectPath`, caller-supplied structured identity, atomic apply persistence, process-local write gate, `JobManager` export lifecycle, pure stdout, clean EOF termination, Schema v3 unchanged, 26 Phase-15 acceptance tests passing, 155 total Rust tests green; accepted by ChatGPT after implementation and remediation).
 - [x] Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Approved plan implemented, 30 new acceptance tests + 23 new vitest tests green, RationalTime contract remediated, generic transport inheritance proven; P16-AC-56 manual Windows GUI QA deferred).
+- [x] Phase 17 Research Gate: Performance Requalification & Release Foundation: **COMPLETE — READY FOR PLANNING** (Milestone defined, dual fixtures standardized, empirical release baselines established, invalid MCP measurement disclosed & superseded, hybrid timing policy defined, host-isolated workstation contract CM-01..CM-07 formalized, external gates preserved, normative contract PR-01..PR-18 accepted).
 
 ---
 
 ## 4. In Progress
 
-None. Phases 0–15 are complete. Phase 16 is COMPLETE WITH DEFERRED ITEMS. Current active implementation phase: NONE. Phase 17 is NOT STARTED. Next action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
+None. Phases 0–15 are complete. Phase 16 is COMPLETE WITH DEFERRED ITEMS. Phase 17 Research Gate is COMPLETE. Current active implementation phase: NONE. Phase 17 implementation is NOT STARTED. Next action: ChatGPT authors plan_phase17.md using reconciled research state.
 
 ---
 
@@ -131,11 +121,16 @@ None. Phases 0–15 are complete. Phase 16 is COMPLETE WITH DEFERRED ITEMS. Curr
 - **Schema & Parity**: Zero schema regressions (Schema v3 intact); zero preview/export semantic regressions.
 - **Active Deferred Acceptance Qualification**:
   ```text
-  P16-AC-56:
-  Manual Windows interactive GUI QA deferred.
-  Automated coverage is green, but real desktop interaction has not been qualified.
+  1. P16-AC-56:
+     Manual Windows interactive GUI QA deferred.
+     Automated coverage is green, but real desktop interaction has not been qualified.
+     Both Codex and ChatGPT Work environments reported BLOCKED — GUI interaction capability unavailable.
+     The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
+
+  2. True Clean Windows 10/11 VM Qualification:
+     Provisioning a sanitized clean virtual machine without dev tools, Visual C++ runtimes, or local state
+     remains an external release gate prior to general distribution.
   ```
-  Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable`. The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
 
 ### Phase 15 Technical Status (RESOLVED by ADR-005 & Phase 15 Implementation)
 - **Local Stdio MCP Server**: Exposes `tinixcut mcp` headless command using the official `rmcp` 3.x crate.
@@ -307,7 +302,7 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS. Current active implementation phase: NONE. Phase 17: NOT STARTED.
+Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 Research Gate COMPLETE. Current active implementation phase: NONE. Phase 17 Implementation: NOT STARTED.
 Relevant process/runtime notes: 235 total automated tests passing cleanly (198 Rust, 37 Vitest), clean process cleanup, zero background leaks
 ```
 
@@ -315,8 +310,8 @@ Relevant process/runtime notes: 235 total automated tests passing cleanly (198 R
 
 ## 9. Next Actions
 
-1. ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
-2. Phase 17 remains NOT STARTED. Do NOT begin Phase 17 implementation without explicit research, plan authoring, and user approval.
+1. ChatGPT authors plan_phase17.md using reconciled research state.
+2. Phase 17 implementation remains NOT STARTED. Do NOT begin Phase 17 implementation without approved plan and explicit user instruction.
 
 ---
 
@@ -325,17 +320,18 @@ Relevant process/runtime notes: 235 total automated tests passing cleanly (198 R
 ```text
 Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
-- Phase 16: COMPLETE WITH DEFERRED ITEMS.
-- Deferred: P16-AC-56 manual Windows GUI qualification.
+- Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
+- Phase 17 Research Gate: COMPLETE — READY FOR PLANNING.
+- Phase 17 Implementation: NOT STARTED.
 - Current active implementation phase: NONE.
-- Selected Milestone: NONE.
+- Selected Milestone: Phase 17 — Performance Requalification & Release Foundation.
 - Project Schema: Schema v3 unchanged.
-- Phase 17: NOT STARTED.
+- ADR Decision: ADR-006 NOT REQUIRED.
 - Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
+- Next Action: ChatGPT authors plan_phase17.md using reconciled research state.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Current Active Phase: NONE -> Phase 17: NOT STARTED -> Next Action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase 17 Research Gate COMPLETE -> Current Active Phase: NONE -> Phase 17 Implementation: NOT STARTED -> Next Action: ChatGPT authors plan_phase17.md using reconciled research state.
 ```
 
 ---
