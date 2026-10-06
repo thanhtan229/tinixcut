@@ -226,6 +226,13 @@ pub enum CommandOperation {
     CutTransitionRemove {
         transition_id: String,
     },
+    ClipGroupMove {
+        item_ids: Vec<String>,
+        delta: RationalTime,
+    },
+    ClipRippleDelete {
+        item_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -459,14 +466,12 @@ impl CommandService {
                 continue;
             }
 
-            let change = Self::apply_operation_to_project(
+            let op_changes = Self::apply_operation_to_project(
                 &mut sim_project,
                 &op_env.operation,
                 &op_env.operation_id,
             )?;
-            if let Some(ch) = change {
-                changes.push(ch);
-            }
+            changes.extend(op_changes);
         }
 
         // Validate final simulated state
@@ -599,7 +604,7 @@ impl CommandService {
         let sequence_number = envelope.sequence_number;
 
         for op_env in &envelope.operations {
-            let change = Self::apply_operation_to_project(
+            let op_changes = Self::apply_operation_to_project(
                 &mut staged_project,
                 &op_env.operation,
                 &op_env.operation_id,
@@ -611,35 +616,43 @@ impl CommandService {
                     message: e.to_string(),
                 })?;
 
-            let (affected_item_id, affected_track_id) = match &change {
-                Some(DiffChange::ClipCreated { item_id, track_id }) => {
-                    (Some(item_id.clone()), Some(track_id.clone()))
+            let (affected_item_id, affected_track_id) = match &op_env.operation {
+                CommandOperation::ClipGroupMove { item_ids, .. } => {
+                    (item_ids.first().cloned(), None)
                 }
-                Some(DiffChange::ClipMoved { item_id, .. }) => (Some(item_id.clone()), None),
-                Some(DiffChange::ClipTrimmed { item_id, .. }) => (Some(item_id.clone()), None),
-                Some(DiffChange::ClipSplit {
-                    original_item_id, ..
-                }) => (Some(original_item_id.clone()), None),
-                Some(DiffChange::ClipDeleted { item_id }) => (Some(item_id.clone()), None),
-                Some(DiffChange::ClipDuplicated { new_item_id, .. }) => {
-                    (Some(new_item_id.clone()), None)
-                }
-                Some(DiffChange::ClipModified { item_id }) => (Some(item_id.clone()), None),
-                Some(DiffChange::TrackCreated { track_id, .. }) => (None, Some(track_id.clone())),
-                Some(DiffChange::TrackDeleted { track_id }) => (None, Some(track_id.clone())),
-                Some(DiffChange::TrackModified { track_id }) => (None, Some(track_id.clone())),
-                Some(DiffChange::AssetImported { asset_id }) => (Some(asset_id.clone()), None),
-                Some(DiffChange::CutTransitionCreated {
-                    transition_id,
-                    track_id,
-                }) => (Some(transition_id.clone()), Some(track_id.clone())),
-                Some(DiffChange::CutTransitionUpdated { transition_id, .. }) => {
-                    (Some(transition_id.clone()), None)
-                }
-                Some(DiffChange::CutTransitionRemoved { transition_id }) => {
-                    (Some(transition_id.clone()), None)
-                }
-                None => (None, None),
+                CommandOperation::ClipRippleDelete { item_id } => (Some(item_id.clone()), None),
+                _ => match op_changes.first() {
+                    Some(DiffChange::ClipCreated { item_id, track_id }) => {
+                        (Some(item_id.clone()), Some(track_id.clone()))
+                    }
+                    Some(DiffChange::ClipMoved { item_id, .. }) => (Some(item_id.clone()), None),
+                    Some(DiffChange::ClipTrimmed { item_id, .. }) => (Some(item_id.clone()), None),
+                    Some(DiffChange::ClipSplit {
+                        original_item_id, ..
+                    }) => (Some(original_item_id.clone()), None),
+                    Some(DiffChange::ClipDeleted { item_id }) => (Some(item_id.clone()), None),
+                    Some(DiffChange::ClipDuplicated { new_item_id, .. }) => {
+                        (Some(new_item_id.clone()), None)
+                    }
+                    Some(DiffChange::ClipModified { item_id }) => (Some(item_id.clone()), None),
+                    Some(DiffChange::TrackCreated { track_id, .. }) => {
+                        (None, Some(track_id.clone()))
+                    }
+                    Some(DiffChange::TrackDeleted { track_id }) => (None, Some(track_id.clone())),
+                    Some(DiffChange::TrackModified { track_id }) => (None, Some(track_id.clone())),
+                    Some(DiffChange::AssetImported { asset_id }) => (Some(asset_id.clone()), None),
+                    Some(DiffChange::CutTransitionCreated {
+                        transition_id,
+                        track_id,
+                    }) => (Some(transition_id.clone()), Some(track_id.clone())),
+                    Some(DiffChange::CutTransitionUpdated { transition_id, .. }) => {
+                        (Some(transition_id.clone()), None)
+                    }
+                    Some(DiffChange::CutTransitionRemoved { transition_id }) => {
+                        (Some(transition_id.clone()), None)
+                    }
+                    None => (None, None),
+                },
             };
 
             let fp = compute_operation_fingerprint(&op_env.operation);
@@ -895,6 +908,265 @@ impl CommandService {
     }
 
     fn apply_operation_to_project(
+        project: &mut Project,
+        operation: &CommandOperation,
+        op_id: &str,
+    ) -> Result<Vec<DiffChange>, CommandError> {
+        match operation {
+            CommandOperation::ClipGroupMove { item_ids, delta } => {
+                Self::apply_clip_group_move(project, item_ids, delta, op_id)
+            }
+            CommandOperation::ClipRippleDelete { item_id } => {
+                Self::apply_clip_ripple_delete(project, item_id, op_id)
+            }
+            _ => {
+                let single_change =
+                    Self::apply_single_operation_to_project(project, operation, op_id)?;
+                Ok(single_change.into_iter().collect())
+            }
+        }
+    }
+
+    fn apply_clip_group_move(
+        project: &mut Project,
+        item_ids: &[String],
+        delta: &RationalTime,
+        op_id: &str,
+    ) -> Result<Vec<DiffChange>, CommandError> {
+        if item_ids.is_empty() {
+            return Err(CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: "item_ids cannot be empty in ClipGroupMove".to_string(),
+            });
+        }
+
+        let mut id_set = std::collections::HashSet::new();
+        for id in item_ids {
+            if !id_set.insert(id.as_str()) {
+                return Err(CommandError::OperationValidationFailed {
+                    operation_id: op_id.to_string(),
+                    message: format!("Duplicate item_id '{}' in ClipGroupMove", id),
+                });
+            }
+        }
+
+        struct MoveSpec {
+            track_id: String,
+            item_id: String,
+            new_start: RationalTime,
+            duration: RationalTime,
+        }
+
+        let mut specs = Vec::with_capacity(item_ids.len());
+
+        for id in item_ids {
+            let mut found = None;
+            for track in &project.tracks {
+                if let Some(item) = track.find_item(id) {
+                    if track.locked {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Track '{}' is locked", track.track_id),
+                        });
+                    }
+                    let shift = delta.rescaled_to(item.timeline_range.start.rate);
+                    let new_start = item.timeline_range.start + shift;
+                    if new_start.semantic_lt(&RationalTime::zero(new_start.rate)) {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Resulting timeline start for item '{}' would be negative: {:?}",
+                                id, new_start
+                            ),
+                        });
+                    }
+                    found = Some(MoveSpec {
+                        track_id: track.track_id.clone(),
+                        item_id: id.clone(),
+                        new_start,
+                        duration: item.timeline_range.duration,
+                    });
+                    break;
+                }
+            }
+            match found {
+                Some(spec) => specs.push(spec),
+                None => {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", id),
+                    });
+                }
+            }
+        }
+
+        // Apply all target starts simultaneously
+        for spec in &specs {
+            let track = project.find_track_mut(&spec.track_id).unwrap();
+            let item = track.find_item_mut(&spec.item_id).unwrap();
+            item.timeline_range = TimeRange::new(spec.new_start, spec.duration);
+        }
+
+        // Validate overlap on all affected tracks
+        let affected_track_ids: std::collections::HashSet<String> =
+            specs.iter().map(|s| s.track_id.clone()).collect();
+        for track_id in &affected_track_ids {
+            let track = project.find_track(track_id).unwrap();
+            for i in 0..track.items.len() {
+                for j in (i + 1)..track.items.len() {
+                    let item_a = &track.items[i];
+                    let item_b = &track.items[j];
+                    if item_a.timeline_range.overlaps(&item_b.timeline_range) {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Collision on track '{}': items '{}' and '{}' overlap",
+                                track.track_id, item_a.item_id, item_b.item_id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Transition reconciliation:
+        // Internal transitions (both participants in item_ids): preserved if still adjacent & valid handles
+        // External transitions (one participant in item_ids): removed if broken adjacency
+        let target_rate = project.settings.frame_rate;
+        let mut transitions_to_remove = Vec::new();
+
+        for track in &project.tracks {
+            for t in &track.transitions {
+                let left_in = id_set.contains(t.left_item_id.as_str());
+                let right_in = id_set.contains(t.right_item_id.as_str());
+                if left_in || right_in {
+                    let mut valid = false;
+                    if let (Some(left), Some(right)) = (
+                        track.find_item(&t.left_item_id),
+                        track.find_item(&t.right_item_id),
+                    ) {
+                        if left
+                            .timeline_range
+                            .is_adjacent_to_with_rate(&right.timeline_range, target_rate)
+                        {
+                            valid = Self::validate_cut_transition_handles(
+                                project,
+                                &track.track_id,
+                                &t.left_item_id,
+                                &t.right_item_id,
+                                t.duration,
+                                op_id,
+                            )
+                            .is_ok();
+                        }
+                    }
+                    if !valid {
+                        transitions_to_remove
+                            .push((track.track_id.clone(), t.transition_id.clone()));
+                    }
+                }
+            }
+        }
+
+        let mut diff_changes = Vec::new();
+        for spec in specs {
+            diff_changes.push(DiffChange::ClipMoved {
+                item_id: spec.item_id,
+                new_start: spec.new_start,
+            });
+        }
+
+        for (track_id, trans_id) in transitions_to_remove {
+            if let Some(track) = project.find_track_mut(&track_id) {
+                track.remove_transition(&trans_id);
+                diff_changes.push(DiffChange::CutTransitionRemoved {
+                    transition_id: trans_id,
+                });
+            }
+        }
+
+        Ok(diff_changes)
+    }
+
+    fn apply_clip_ripple_delete(
+        project: &mut Project,
+        item_id: &str,
+        op_id: &str,
+    ) -> Result<Vec<DiffChange>, CommandError> {
+        let mut found_pos = None;
+        let mut found_track_id = None;
+        for track in &project.tracks {
+            if let Some(pos) = track.items.iter().position(|i| i.item_id == item_id) {
+                found_pos = Some(pos);
+                found_track_id = Some(track.track_id.clone());
+                break;
+            }
+        }
+
+        let (track_id, item_pos) = match (found_track_id, found_pos) {
+            (Some(tid), Some(pos)) => (tid, pos),
+            _ => {
+                return Err(CommandError::OperationValidationFailed {
+                    operation_id: op_id.to_string(),
+                    message: format!("Item '{}' not found", item_id),
+                });
+            }
+        };
+
+        let track = project.find_track_mut(&track_id).unwrap();
+        if track.locked {
+            return Err(CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: format!("Track '{}' is locked", track_id),
+            });
+        }
+
+        let deleted_item = track.items.remove(item_pos);
+        let deleted_end = deleted_item.timeline_range.end();
+        let deleted_duration = deleted_item.timeline_range.duration;
+
+        // Remove directly dependent transitions
+        let mut removed_transitions = Vec::new();
+        track.transitions.retain(|t| {
+            let is_dep = t.left_item_id == item_id || t.right_item_id == item_id;
+            if is_dep {
+                removed_transitions.push(t.transition_id.clone());
+            }
+            !is_dep
+        });
+
+        // Shift surviving items on SAME track where timeline_start >= deleted_end
+        // Semantic RationalTime comparison via exact 128-bit cross-multiplication (ZERO float conversion)
+        let mut moved_downstream = Vec::new();
+        for item in &mut track.items {
+            if item.timeline_range.start.semantic_ge(&deleted_end) {
+                let shift_dur = deleted_duration.rescaled_to(item.timeline_range.start.rate);
+                let new_start = item.timeline_range.start - shift_dur;
+                item.timeline_range = TimeRange::new(new_start, item.timeline_range.duration);
+                moved_downstream.push((item.item_id.clone(), new_start));
+            }
+        }
+
+        let mut diff_changes = Vec::new();
+        diff_changes.push(DiffChange::ClipDeleted {
+            item_id: item_id.to_string(),
+        });
+        for (m_id, new_start) in moved_downstream {
+            diff_changes.push(DiffChange::ClipMoved {
+                item_id: m_id,
+                new_start,
+            });
+        }
+        for trans_id in removed_transitions {
+            diff_changes.push(DiffChange::CutTransitionRemoved {
+                transition_id: trans_id,
+            });
+        }
+
+        Ok(diff_changes)
+    }
+
+    fn apply_single_operation_to_project(
         project: &mut Project,
         operation: &CommandOperation,
         op_id: &str,
@@ -2094,6 +2366,12 @@ impl CommandService {
                 Ok(Some(DiffChange::CutTransitionRemoved {
                     transition_id: transition_id.clone(),
                 }))
+            }
+
+            CommandOperation::ClipGroupMove { .. } | CommandOperation::ClipRippleDelete { .. } => {
+                unreachable!(
+                    "Group and ripple operations are handled in apply_operation_to_project"
+                )
             }
         }
     }

@@ -1519,3 +1519,35 @@ Governance note:
 - ChatGPT authored the plan after Phase-16 research completion.
 - User explicitly approved it with `Duyệt Phase 16`.
 - Approval occurred before any Phase-16 production implementation.
+
+---
+
+## 28. Completion Reconciliation
+
+### Phase 16 final classification:
+COMPLETE WITH DEFERRED ITEMS
+
+### Deferred acceptance qualification:
+P16-AC-56 — Manual Windows interactive GUI QA
+
+### Reason:
+No available Codex/ChatGPT agent environment had native Windows GUI interaction capability.
+The user elected not to perform the manual checklist personally.
+
+### Important:
+P16-AC-56 is DEFERRED, not PASS.
+Automated tests are not considered a substitute for this qualification.
+
+### Final automated baseline:
+- Rust tests: 198 passed, 0 failed
+- Frontend tests: 37 passed, 0 failed
+- clippy `-D warnings`: PASS
+- fmt: PASS
+- cargo build: PASS
+- typecheck: PASS
+- frontend production build: PASS
+
+### Architectural and Schema Invariants:
+- Schema v3 unchanged;
+- no ADR-006 required;
+- preview/export semantics remain completely unchanged.

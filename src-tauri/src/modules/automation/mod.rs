@@ -691,6 +691,8 @@ impl AutomationAdapter {
             "CutTransitionCreate".to_string(),
             "CutTransitionUpdateDuration".to_string(),
             "CutTransitionRemove".to_string(),
+            "ClipGroupMove".to_string(),
+            "ClipRippleDelete".to_string(),
         ]
     }
 
@@ -738,8 +740,11 @@ impl AutomationAdapter {
                 clips_count += t.items.len();
                 transitions_count += t.transitions.len();
                 for item in &t.items {
-                    if item.timeline_range.end() > total_duration {
-                        total_duration = item.timeline_range.end();
+                    if item.timeline_range.end().semantic_gt(&total_duration) {
+                        total_duration = item
+                            .timeline_range
+                            .end()
+                            .rescaled_to(project.settings.frame_rate);
                     }
                 }
                 TrackSummary {

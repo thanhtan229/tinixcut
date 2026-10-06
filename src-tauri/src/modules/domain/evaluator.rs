@@ -9,7 +9,6 @@
 
 use super::time::RationalTime;
 use super::{Keyframe, KeyframeEasing, KeyframeProperty};
-use std::cmp::Ordering;
 
 /// Preset: EaseIn = (0.42, 0.0, 1.0, 1.0)
 pub const EASE_IN_PARAMS: (f64, f64, f64, f64) = (0.42, 0.0, 1.0, 1.0);
@@ -109,18 +108,18 @@ pub fn evaluate_property_channel(
     }
 
     // Sort keyframes using canonical semantic RationalTime ordering
-    relevant.sort_by_key(|a| a.offset);
+    relevant.sort_by(|a, b| a.offset.semantic_cmp(&b.offset));
 
     let first = relevant[0];
     let last = relevant[relevant.len() - 1];
 
     // Hold before or at first keyframe
-    if target_offset.cmp(&first.offset) != Ordering::Greater {
+    if target_offset.semantic_le(&first.offset) {
         return first.value;
     }
 
     // Hold at or after last keyframe
-    if target_offset.cmp(&last.offset) != Ordering::Less {
+    if target_offset.semantic_ge(&last.offset) {
         return last.value;
     }
 
@@ -129,9 +128,7 @@ pub fn evaluate_property_channel(
         let k0 = window[0];
         let k1 = window[1];
 
-        if target_offset.cmp(&k0.offset) != Ordering::Less
-            && target_offset.cmp(&k1.offset) != Ordering::Greater
-        {
+        if target_offset.semantic_ge(&k0.offset) && target_offset.semantic_le(&k1.offset) {
             // Exact endpoint bypass (KF-11)
             if target_offset.is_same_time(&k0.offset) {
                 return k0.value;

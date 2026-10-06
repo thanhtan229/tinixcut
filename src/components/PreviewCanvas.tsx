@@ -9,6 +9,8 @@ interface PreviewCanvasProps {
   playheadFrame: number;
   selectedItem: TimelineItem | null;
   onPlayheadChange: (frame: number) => void;
+  isPlaying?: boolean;
+  onTogglePlay?: () => void;
 }
 
 function safeConvertFileSrc(path?: string | null): string {
@@ -25,9 +27,19 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   playheadFrame,
   selectedItem,
   onPlayheadChange,
+  isPlaying: externalIsPlaying,
+  onTogglePlay,
 }) => {
   const [sampledState, setSampledState] = useState<PreviewFrameState | null>(null);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [internalIsPlaying, setInternalIsPlaying] = useState<boolean>(false);
+  const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
+  const handleTogglePlay = () => {
+    if (onTogglePlay) {
+      onTogglePlay();
+    } else {
+      setInternalIsPlaying((p) => !p);
+    }
+  };
   const [seekLatencyMs, setSeekLatencyMs] = useState<number>(0);
   const [supersededRequests, setSupersededRequests] = useState<number>(0);
   const [showBenchmarkModal, setShowBenchmarkModal] = useState<boolean>(false);
@@ -99,7 +111,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
         const nextFrame = playheadFrame + framesToAdvance;
         if (nextFrame >= maxDurationFrames) {
-          setIsPlaying(false);
+          if (externalIsPlaying !== undefined && onTogglePlay) {
+            onTogglePlay();
+          } else {
+            setInternalIsPlaying(false);
+          }
           onPlayheadChange(0);
           return;
         } else {
@@ -111,23 +127,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
     animId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, playheadFrame, project, onPlayheadChange]);
+  }, [isPlaying, playheadFrame, project, onPlayheadChange, externalIsPlaying, onTogglePlay]);
 
-  // 3. Spacebar Keyboard Shortcut to toggle Play/Pause
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        const activeElem = document.activeElement;
-        if (activeElem && (activeElem.tagName === "INPUT" || activeElem.tagName === "TEXTAREA")) {
-          return;
-        }
-        e.preventDefault();
-        setIsPlaying((prev) => !prev);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  // 3. Spacebar Keyboard Shortcut is centralized in useTimelineShortcuts (P16-AC-48)
 
   // 4. Synchronize video elements to exact source times when paused or seeking
   useEffect(() => {
@@ -489,7 +491,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           </button>
           <button
             className="btn-action"
-            onClick={() => setIsPlaying((p) => !p)}
+            onClick={handleTogglePlay}
             title={isPlaying ? "Pause (Space)" : "Play (Space)"}
             style={{
               padding: "4px 14px",

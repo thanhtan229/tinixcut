@@ -11,47 +11,57 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE (Baseline Checkpoint: `48fe7b0`)  
-**Current Selected Milestone:** Phase 16 — Timeline Editing Productivity  
+**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS  
+**Current Selected Milestone:** None  
 **Current Active Implementation Phase:** NONE  
-**Phase 16 Status:** Research Gate COMPLETE — READY FOR PLANNING  
-**Implementation:** NOT STARTED  
-**ADR:** No new ADR required (ADR-006 NOT created)  
-**Plan Status:** Pending (`Plans/plan_phase16.md` NOT yet created)  
+**Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
+**Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred)  
+**Implementation:** COMPLETE  
+**ADR:** No new ADR required (ADR-006 NOT created/required)  
+**Plan Status:** Complete (`Plans/plan_phase16.md` implemented and reconciled)  
 **Project Schema:** Schema v3 unchanged  
-**Research POC:** `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence, not implementation acceptance)  
-**Baseline Commit:** `48fe7b0597e925f7ab801ddab2e28af8911f3ac9` (`chore: checkpoint accepted phases 0-15`)  
-**Next Action:** ChatGPT creates `plan_phase16.md`  
-**Last Updated:** 2026-10-05  
+**Phase 17:** NOT STARTED  
+**Baseline Commit:** `37df1cc` (`docs: approve phase 16 timeline productivity plan`)  
+**Next Action:** ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.  
+**Last Updated:** 2026-10-06  
 
 ---
 
 ## 1. Current Objective
 
-Phase 16 Research Gate is COMPLETE and durable state is reconciled:
+Phase 16 Timeline Editing Productivity is COMPLETE WITH DEFERRED ITEMS:
 - **Phases 0–15 Baseline Checkpoint**: Clean commit `48fe7b0` (`chore: checkpoint accepted phases 0-15`).
 - **Phases 0–15 Final State**: `COMPLETE`.
-- **Selected Milestone**: `Phase 16 — Timeline Editing Productivity`.
+- **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS`.
 - **Current Active Implementation Phase**: NONE.
-- **Phase 16 Status**: Research Gate COMPLETE — READY FOR PLANNING.
-- **Implementation Status**: NOT STARTED.
-- **ADR Decision**: No new ADR required (ADR-006 NOT created; both new commands remain normal local domain operations under existing CommandService/ADR-001/ADR-003 boundaries; no persistence topology, renderer, protocol, or concurrency architecture changes).
-- **Plan Status**: `Plans/plan_phase16.md` does not yet exist (planning pending ChatGPT).
+- **Phase 17 Status**: NOT STARTED.
+- **ADR Decision**: No new ADR required (ADR-006 NOT created; `ClipGroupMove` and `ClipRippleDelete` operate under existing CommandService/ADR-001/ADR-003 boundaries; zero schema/renderer/protocol changes).
+- **Plan Status**: `Plans/plan_phase16.md` fully implemented and reconciled.
 - **Project Schema**: Schema v3 unchanged.
-- **Research POC**: `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence only, not Phase-16 implementation acceptance).
-- **In-Scope Ceiling**: Exactly 10 items:
-  1. Ctrl-based ephemeral multi-select + primary selection (`selectedItemIds`, `primarySelectedItemId`);
-  2. UI-only deterministic snapping (8px threshold, playhead/zero/clip edges, Alt disable);
-  3. Dedicated `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
-  4. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track);
-  5. Centralized keyboard shortcut framework (input suppression, Windows-first bindings);
-  6. Split-at-playhead shortcut/workflow (Ctrl+K, primary clip or first intersecting track);
-  7. Normal non-ripple trim-to-playhead shortcuts (`[` and `]`, existing `ClipTrim`);
-  8. Multi-selection delete via one atomic envelope (batched `ClipDelete` operations);
-  9. Primary-only duplicate shortcut (Ctrl+D);
-  10. Timeline zoom and snapping toggle shortcuts (`=`, `-`, `S` as UI behavior).
-- **Explicitly Out of Scope**: Ripple insert, ripple trim / Q-W semantics, magnetic timeline, cross-track ripple, Shift range selection, marquee selection, multi-clip duplicate, persistent timeline markers, track targeting, keyframe UX expansion, audio crossfade, waveform expansion, new transitions, text/caption expansion, Schema v4.
-- **Next Action**: ChatGPT creates `plan_phase16.md`.
+- **Automated Verification**: PASS (198 Rust tests + 37 frontend tests, clean clippy, fmt, build, typecheck).
+- **Deferred Acceptance Qualification**:
+  ```text
+  P16-AC-56:
+  Manual Windows interactive GUI QA deferred.
+  Automated coverage is green, but real desktop interaction has not been qualified.
+  ```
+  Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable`. The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
+- **Completed Scope**:
+  1. Ephemeral Ctrl-based multi-select (`selectedItemIds`);
+  2. Primary selection (`primarySelectedItemId`);
+  3. Exact 8 CSS-pixel UI snapping (playhead, zero, clip edges, Alt bypass);
+  4. Dedicated atomic `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
+  5. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track via exact `semantic_ge`);
+  6. Centralized shortcut framework with focus suppression and Windows-first bindings;
+  7. Deterministic split-at-playhead workflow (`Ctrl+K`, primary clip or lowest-track fallback);
+  8. Non-ripple trim-to-playhead shortcuts (`[` and `]`, using existing `ClipTrim`);
+  9. Atomic multi-delete via one atomic envelope (batched `ClipDelete` operations);
+  10. Primary-only duplicate shortcut (`Ctrl+D`);
+  11. Timeline zoom (`=`, `-`) and snapping toggle (`S`) shortcuts;
+  12. Generic CLI/JSONL/MCP transport inheritance without transport-specific edit logic;
+  13. RationalTime semantic helper remediation (`semantic_cmp`, `semantic_ge`, etc.) and representation-based `Ord`/`Eq` contract preservation.
+- **Planned Out-of-Scope Future Features**: Ripple insert, ripple trim / Q-W semantics, magnetic timeline, cross-track ripple, Shift range selection, marquee selection, multi-clip duplicate, persistent timeline markers, track targeting, keyframe UX expansion, audio crossfade, waveform expansion, new transitions, text/caption expansion, Schema v4.
+- **Next Action**: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
 
 ---
 
@@ -73,8 +83,8 @@ Phase 16 Research Gate is COMPLETE and durable state is reconciled:
 - Phase 13 Transition Compositor & CrossDissolve: **COMPLETE** (Schema v2 implemented and current, ADR-003 implemented, cut-owned topology, isolated preview transition group, bounded export premultiply filtergraph, parity fixtures verified; accepted by ChatGPT).
 - Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 current, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved; accepted by ChatGPT and ratified by user post-implementation).
 - Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented, `rmcp` 3.x local stdio transport, MCP `2026-07-28` primary protocol, exact 8-tool surface, explicit `projectPath` addressing, caller-supplied ADR-001 structured identity, atomic apply persistence, process-local write serialization, `JobManager` export lifecycle, structured domain error preservation, spawned subprocess stdout purity verified on Windows; accepted by ChatGPT after implementation and remediation).
-- Phase 16 Timeline Editing Productivity: **Research Gate COMPLETE — READY FOR PLANNING** (Implementation NOT STARTED; Schema v3 unchanged; no new ADR required; 12/12 research POC tests passed in `src-tauri/tests/phase16_research_poc.rs`).
-- Automated Tests: 169 total automated tests green (155 `cargo test` passed [106 unit + 8 POC + 15 Phase 14 acceptance + 26 Phase 15 acceptance], 14 `vitest` passed, `cargo clippy` 0 warnings, `cargo fmt` clean, frontend typecheck/build clean, production binary build green).
+- Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Ephemeral Ctrl multi-select & primary selection, exact 8px snapping, atomic ClipGroupMove, single-track bounded ClipRippleDelete, centralized shortcut framework, non-ripple trim, multi-delete, primary-only duplicate, generic CLI/JSONL/MCP transport inheritance, canonical RationalTime semantic helpers; automated test suite 100% green; P16-AC-56 real interactive Windows GUI QA deferred).
+- Automated Tests: 235 total automated tests green (198 `cargo test` passed [107 unit + 8 POC + 15 Phase 14 acceptance + 26 Phase 15 acceptance + 12 Phase 16 research POC + 30 Phase 16 timeline productivity acceptance], 37 `vitest` passed across 4 test suites, `cargo clippy` 0 warnings, `cargo fmt` clean, frontend typecheck/build clean, production binary build green).
 
 ---
 
@@ -102,20 +112,30 @@ Phase 16 Research Gate is COMPLETE and durable state is reconciled:
 - [x] Phase 13 Transition Compositor & CrossDissolve: **COMPLETE** (Schema v2, cut-owned CrossDissolve, preview/export parity, verified via 26 Phase-13 tests, 103 Rust tests, 11 Vitest tests; accepted by ChatGPT).
 - [x] Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 promoted, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved, 129 Rust tests + 14 Vitest tests passing; accepted by ChatGPT and ratified by user post-implementation).
 - [x] Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented & verified, `rmcp` 3.x local stdio adapter, `2026-07-28` modern protocol, exact 8 tools, explicit `projectPath`, caller-supplied structured identity, atomic apply persistence, process-local write gate, `JobManager` export lifecycle, pure stdout, clean EOF termination, Schema v3 unchanged, 26 Phase-15 acceptance tests passing, 155 total Rust tests green; accepted by ChatGPT after implementation and remediation).
-- [x] Phase 16 Research Gate and Transaction Semantics POC complete (12/12 passed; research findings & normative contract TP-01..TP-12 reconciled; implementation pending planning).
+- [x] Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Approved plan implemented, 30 new acceptance tests + 23 new vitest tests green, RationalTime contract remediated, generic transport inheritance proven; P16-AC-56 manual Windows GUI QA deferred).
 
 ---
 
 ## 4. In Progress
 
-None. Phases 0–15 are complete. Phase 16 Research Gate is complete. Current active implementation phase: NONE. Implementation of Phase 16 is NOT STARTED. Next action: ChatGPT creates `plan_phase16.md`.
+None. Phases 0–15 are complete. Phase 16 is COMPLETE WITH DEFERRED ITEMS. Current active implementation phase: NONE. Phase 17 is NOT STARTED. Next action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
 
 ---
 
 ## 5. Blockers / Known Issues
 
-### Active Technical Blockers
-None. Phases 0–15 are complete and all 169 automated tests pass cleanly (155 Rust, 14 Vitest).
+### Active Technical Blockers / Technical Debt
+- **Active Technical Blockers**: None. All 235 automated tests pass cleanly (198 Rust, 37 Vitest).
+- **Known Code Defects**: Zero known Phase-16 code defects remain from automated verification.
+- **RationalTime Semantics**: Zero known RationalTime semantic contract violations; representation `Ord`/`Eq` preserved ($a.\text{cmp}(b) == \text{Equal} \iff a == b$), explicit 128-bit cross-multiplication semantic helpers used for all domain timeline decisions.
+- **Schema & Parity**: Zero schema regressions (Schema v3 intact); zero preview/export semantic regressions.
+- **Active Deferred Acceptance Qualification**:
+  ```text
+  P16-AC-56:
+  Manual Windows interactive GUI QA deferred.
+  Automated coverage is green, but real desktop interaction has not been qualified.
+  ```
+  Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable`. The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
 
 ### Phase 15 Technical Status (RESOLVED by ADR-005 & Phase 15 Implementation)
 - **Local Stdio MCP Server**: Exposes `tinixcut mcp` headless command using the official `rmcp` 3.x crate.
@@ -183,6 +203,12 @@ None. Phases 0–15 are complete and all 169 automated tests pass cleanly (155 R
 - **Hardware Fallback Ladder**: `h264_nvenc` -> `h264_qsv` -> `h264_amf` -> `libx264` implemented with automatic fallback to `libx264`.
 
 ### Deferred Items (Non-Blocking for Personal-Use v1)
+
+#### 1. In-Scope Verification Deferred at Completion
+- **P16-AC-56 — Manual Windows Interactive GUI QA**: DEFERRED (NOT PASS). Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable` due to lack of native desktop GUI automation tools. The user elected not to perform the 23-item manual checklist personally. Automated tests (198 Rust + 37 Vitest) are all passing but are not considered a substitute for this interactive qualification. To be revisited before any release milestone where interactive desktop behavior is release-critical.
+
+#### 2. Planned Out-of-Scope Future Features
+- **Phase 16 Out-of-Scope Editing Capabilities**: Shift range selection; marquee / rubber-band selection; multi-clip duplication; ripple insert; ripple trim / Q-W semantics; magnetic timeline; cross-track ripple; persistent timeline markers; track targeting matrix; Project Schema v4.
 - **Draggable graph/curve editor**: DEFERRED (minimal inspector preset/coordinate UI delivered).
 - **Motion paths / spatial tangents**: DEFERRED.
 - **Velocity/tangent editing**: DEFERRED.
@@ -234,6 +260,7 @@ These do not block the current phase unless the user changes scope:
 - **ADR-003**: Video CrossDissolve on adjacent cuts via track-level `CutTransition` (Schema v2); duration invariance ($\Delta T_{\text{project}} = 0$); preview `PreviewTransitionGroup` + `plus-lighter`; export bounded premultiplied `xfade=fade:offset=0`.
 - **ADR-004**: Canonical Keyframe Easing, Clip-Local Lifecycle, and Sampled Export Automation Semantics: Schema v3, canonical Rust 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle, `ExportAutomationSchedule` literal `sendcmd` video commands and sample-accurate mono `f32le` audio envelopes (`amultiply`), coexistence with ADR-003 transitions. Implemented and verified in Phase 14.
 - **ADR-005**: MCP Local Stdio Tools Adapter, Explicit Project Addressing, and Durable Identity: Local stdio transport (`tinixcut mcp`), primary protocol `2026-07-28`, exact 8 authoritative Tools, explicit `projectPath` addressing, caller-supplied ADR-001 structured identity, atomic apply persistence, one process-local async authoritative-write gate shared by the MCP server (Phase-15 authoritative writes serialize across all project paths), `JobManager` export lifecycle, stdout stream purity, clean stdin EOF termination and orphan child/temp cleanup. Accepted and implemented in Phase 15.
+- **Phase 16 Decision & Invariants**: Ephemeral Ctrl multi-select and primary selection (`selectedItemIds`, `primarySelectedItemId`); exact 8px UI snapping; dedicated atomic `ClipGroupMove` command (simultaneous validation, collision detection); bounded single-track `ClipRippleDelete` command (exact downstream shift via `semantic_ge`); centralized shortcut framework with input suppression; non-ripple trim (`[` and `]`); primary-only duplicate (`Ctrl+D`); atomic multi-delete (`Delete`); generic CLI/JSONL/MCP transport inheritance without transport-specific edit logic; canonical `RationalTime` semantic comparison helpers (`semantic_cmp`, `semantic_ge`, `semantic_lt`, etc.) preserving the Rust stdlib representation-based `Ord`/`Eq` invariant ($a.\text{cmp}(b) == \text{Equal} \iff a == b$); Schema v3 unchanged; zero renderer/compositor/export semantic changes; `P16-AC-56` real interactive Windows GUI QA deferred.
 - **Phase 14 Governance Record**: Implementation was executed prior to explicit user approval; detected during ChatGPT completion review; remediated, verified, and explicitly ratified by user (`Duyệt Phase 14`). Normal approval-before-implementation lifecycle must be restored for future phases.
 
 ---
@@ -241,12 +268,18 @@ These do not block the current phase unless the user changes scope:
 ## 7. Verification State
 
 ```text
-Full cargo test: PASS (155 passed, 0 failed)
-- Rust unit tests: 106 passed
+Full cargo test: PASS (198 passed, 0 failed)
+- Rust unit tests: 107 passed
 - Export POC tests: 8 passed
 - Phase 14 acceptance tests: 15 passed
 - Phase 15 acceptance tests: 26 passed
-Frontend tests: PASS (14 vitest passed, 0 failed)
+- Phase 16 research POC tests: 12 passed
+- Phase 16 timeline productivity acceptance tests: 30 passed
+Frontend tests: PASS (37 vitest passed across 4 test suites, 0 failed)
+- timelineSelection.test.ts: 6 passed
+- App.test.ts: 14 passed
+- timelineSnapping.test.ts: 12 passed
+- timelineShortcuts.test.ts: 5 passed
 Typecheck: PASS (tsc --noEmit, 0 errors)
 Lint: PASS (cargo clippy -- -D warnings, 0 warnings)
 Formatting: PASS (cargo fmt --check)
@@ -256,6 +289,9 @@ P14-PREREQ-01: RESOLVED (dynamic keyframes affect full video/audio export)
 Phase 15 Qualification: PASS (Windows real spawned MCP subprocess, stdout purity, EOF cleanup)
 Automation Acceptance: PASS (10-step E2E scenario passed, transition & easing automation verified)
 Preview/Export Parity: PASS (Gate E / POC 2 within <0.1px tolerance, Phase 13/14 fixtures verified)
+ADR-001 Idempotency / Replay: PASS (ClipGroupMove and ClipRippleDelete deduplication and collision verified)
+CLI / JSONL / MCP Generic Transport: PASS (Generic CommandEnvelope dry-run/apply verified without custom transport logic)
+P16-AC-56 (Manual Windows GUI QA): DEFERRED (Desktop GUI automation unavailable in agent environments; manual checklist not executed; not marked PASS)
 Known pre-existing failures: None
 ```
 
@@ -271,16 +307,16 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE. Current active implementation phase: NONE.
-Relevant process/runtime notes: 169 total automated tests passing cleanly (155 Rust [106 unit + 8 POC + 15 Phase 14 acceptance + 26 Phase 15 acceptance], 14 Vitest), clean process cleanup, no background leaks
+Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS. Current active implementation phase: NONE. Phase 17: NOT STARTED.
+Relevant process/runtime notes: 235 total automated tests passing cleanly (198 Rust, 37 Vitest), clean process cleanup, zero background leaks
 ```
 
 ---
 
 ## 9. Next Actions
 
-1. ChatGPT selects next milestone and performs research gate.
-2. Maintain strict approval-before-implementation lifecycle: NO implementation code or Cargo dependency additions may proceed until the phase plan is explicitly approved by the user.
+1. ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
+2. Phase 17 remains NOT STARTED. Do NOT begin Phase 17 implementation without explicit research, plan authoring, and user approval.
 
 ---
 
@@ -289,15 +325,17 @@ Relevant process/runtime notes: 169 total automated tests passing cleanly (155 R
 ```text
 Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
+- Phase 16: COMPLETE WITH DEFERRED ITEMS.
+- Deferred: P16-AC-56 manual Windows GUI qualification.
 - Current active implementation phase: NONE.
-- Selected Milestone: NONE (Phase 15 completed).
-- Phase 15 Status: COMPLETE.
-- ADR-005: ACCEPTED & IMPLEMENTED.
-- Automated tests: 155 Rust tests passed + 14 Vitest tests passed (all green).
-- Next Action: ChatGPT selects next milestone and performs research gate.
+- Selected Milestone: NONE.
+- Project Schema: Schema v3 unchanged.
+- Phase 17: NOT STARTED.
+- Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
+- Next Action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Current Active Phase: NONE -> Next Action: ChatGPT selects next milestone and performs research gate
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Current Active Phase: NONE -> Phase 17: NOT STARTED -> Next Action: ChatGPT reviews Phase-16 durable reconciliation, then decides whether Phase-17 research is required before planning
 ```
 
 ---

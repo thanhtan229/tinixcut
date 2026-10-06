@@ -9,21 +9,35 @@ import { MediaPanel } from "./components/MediaPanel";
 import { PreviewCanvas } from "./components/PreviewCanvas";
 import { Timeline } from "./components/Timeline";
 import { Inspector } from "./components/Inspector";
+import {
+  clearSelection,
+  createInitialSelection,
+  reconcileSelection,
+  selectSingle,
+  SelectionState,
+  toggleSelect,
+} from "./utils/timelineSelection";
+import { useTimelineShortcuts } from "./hooks/useTimelineShortcuts";
 import "./App.css";
 
 export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<SelectionState>(createInitialSelection());
+  const selectedItemId = selection.primarySelectedItemId;
   const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
   const [playheadFrame, setPlayheadFrame] = useState<number>(0);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [zoom, setZoom] = useState<number>(3);
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
 
   const refreshProject = async () => {
     try {
       const p = await editorApi.getCurrentProject();
       setProject(p);
+      setSelection((prev) => reconcileSelection(prev, p));
     } catch (err) {
       console.warn("Could not get current project:", err);
     }
@@ -62,7 +76,7 @@ export function App() {
       const p = await editorApi.newProject("Untitled Video Project");
       setProject(p);
       setSavedFilePath(null);
-      setSelectedItemId(null);
+      setSelection(clearSelection());
       setSelectedTransitionId(null);
       setPlayheadFrame(0);
       setStatusMsg("New project created");
@@ -83,7 +97,7 @@ export function App() {
       const p = await editorApi.openProject(chosenPath);
       setProject(p);
       setSavedFilePath(chosenPath);
-      setSelectedItemId(null);
+      setSelection(clearSelection());
       setSelectedTransitionId(null);
       setPlayheadFrame(0);
       setStatusMsg(`Loaded project: ${p.name}`);
@@ -342,6 +356,26 @@ export function App() {
     );
   };
 
+  const handleGroupMoveClip = (itemIds: string[], deltaFrames: number) => {
+    if (!project || deltaFrames === 0 || itemIds.length === 0) return;
+    const rate = project.settings.frame_rate;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_grp_move_${Date.now()}`,
+          operation: {
+            type: "ClipGroupMove",
+            payload: {
+              item_ids: itemIds,
+              delta: { value: deltaFrames, rate },
+            },
+          },
+        },
+      ],
+      `Move ${itemIds.length} Clip(s)`
+    );
+  };
+
   const handleTrimClip = (
     itemId: string,
     newStartFrame: number,
@@ -385,6 +419,17 @@ export function App() {
     );
   };
 
+  const handleTrimTailToPlayhead = (itemId: string, newDuration: number) => {
+    if (!project) return;
+    for (const track of project.tracks) {
+      const it = track.items.find((i) => i.item_id === itemId);
+      if (it) {
+        handleTrimClip(itemId, it.timeline_range.start.value, newDuration, it.source_range.start.value);
+        break;
+      }
+    }
+  };
+
   const handleSplitClip = (itemId: string, splitFrame: number) => {
     if (!project) return;
     const rate = project.settings.frame_rate;
@@ -405,7 +450,37 @@ export function App() {
     );
   };
 
+  const handleDeleteSelected = (itemIds: string[]) => {
+    if (!project || itemIds.length === 0) return;
+    // P16-TP-27: Multi-delete uses one envelope with ordinary ClipDelete operations
+    const operations = itemIds.map((id, idx) => ({
+      operation_id: `op_del_${Date.now()}_${idx}`,
+      operation: {
+        type: "ClipDelete" as const,
+        payload: {
+          item_id: id,
+        },
+      },
+    }));
+    executeCommandEnvelope(operations, `Delete ${itemIds.length} Clip(s)`);
+    setSelection((prev) => {
+      const newSet = new Set(prev.selectedItemIds);
+      itemIds.forEach((id) => newSet.delete(id));
+      let newPrimary: string | null = null;
+      if (prev.primarySelectedItemId && newSet.has(prev.primarySelectedItemId)) {
+        newPrimary = prev.primarySelectedItemId;
+      } else if (newSet.size > 0) {
+        newPrimary = Array.from(newSet)[0];
+      }
+      return { selectedItemIds: newSet, primarySelectedItemId: newPrimary };
+    });
+  };
+
   const handleDeleteClip = (itemId: string) => {
+    if (selection.selectedItemIds.size > 1 && selection.selectedItemIds.has(itemId)) {
+      handleDeleteSelected(Array.from(selection.selectedItemIds));
+      return;
+    }
     executeCommandEnvelope(
       [
         {
@@ -420,7 +495,62 @@ export function App() {
       ],
       "Delete Clip"
     );
-    setSelectedItemId(null);
+    setSelection((prev) => {
+      const newSet = new Set(prev.selectedItemIds);
+      newSet.delete(itemId);
+      const remaining = Array.from(newSet);
+      return {
+        selectedItemIds: newSet,
+        primarySelectedItemId: remaining.length > 0 ? remaining[0] : null,
+      };
+    });
+  };
+
+  const handleRippleDeletePrimary = (itemId: string) => {
+    if (!project) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_ripple_del_${Date.now()}`,
+          operation: {
+            type: "ClipRippleDelete",
+            payload: {
+              item_id: itemId,
+            },
+          },
+        },
+      ],
+      "Ripple Delete Clip"
+    );
+    setSelection((prev) => {
+      const newSet = new Set(prev.selectedItemIds);
+      newSet.delete(itemId);
+      const remaining = Array.from(newSet);
+      return {
+        selectedItemIds: newSet,
+        primarySelectedItemId: remaining.length > 0 ? remaining[0] : null,
+      };
+    });
+  };
+
+  const handleSelectItem = (itemId: string | null, isCtrl?: boolean) => {
+    if (!itemId) {
+      setSelection(clearSelection());
+      setSelectedTransitionId(null);
+      return;
+    }
+    setSelectedTransitionId(null);
+    if (isCtrl) {
+      setSelection((prev) => toggleSelect(prev, itemId));
+    } else {
+      setSelection((prev) => {
+        if (prev.selectedItemIds.has(itemId)) {
+          return { ...prev, primarySelectedItemId: itemId };
+        } else {
+          return selectSingle(itemId);
+        }
+      });
+    }
   };
 
   const handleDuplicateClip = (itemId: string) => {
@@ -800,6 +930,25 @@ export function App() {
     }
   }
 
+  useTimelineShortcuts({
+    project,
+    selectedItemIds: selection.selectedItemIds,
+    primarySelectedItemId: selection.primarySelectedItemId,
+    playheadFrame,
+    onPlayPauseToggle: () => setIsPlaying((p) => !p),
+    onSplitClip: handleSplitClip,
+    onDuplicatePrimary: handleDuplicateClip,
+    onDeleteSelected: handleDeleteSelected,
+    onRippleDeletePrimary: handleRippleDeletePrimary,
+    onTrimHeadToPlayhead: (itemId, newStart, newDuration, newSourceStart) => {
+      handleTrimClip(itemId, newStart, newDuration, newSourceStart);
+    },
+    onTrimTailToPlayhead: handleTrimTailToPlayhead,
+    onZoomIn: () => setZoom((z) => Math.min(10, z + 0.5)),
+    onZoomOut: () => setZoom((z) => Math.max(1, z - 0.5)),
+    onToggleSnapping: () => setSnapEnabled((s) => !s),
+  });
+
   return (
     <div className="editor-shell">
       <TopBar
@@ -828,35 +977,48 @@ export function App() {
             playheadFrame={playheadFrame}
             selectedItem={selectedItem}
             onPlayheadChange={setPlayheadFrame}
+            isPlaying={isPlaying}
+            onTogglePlay={() => setIsPlaying((p) => !p)}
           />
 
           <Timeline
             project={project}
             selectedItemId={selectedItemId}
+            selectedItemIds={selection.selectedItemIds}
+            primarySelectedItemId={selection.primarySelectedItemId}
             selectedTransitionId={selectedTransitionId}
             playheadFrame={playheadFrame}
-            onSelectItem={(itemId) => {
-              setSelectedItemId(itemId);
-              if (itemId) setSelectedTransitionId(null);
+            snapEnabled={snapEnabled}
+            onToggleSnapping={() => setSnapEnabled((s) => !s)}
+            onSelectItem={handleSelectItem}
+            onClearSelection={() => {
+              setSelection(clearSelection());
+              setSelectedTransitionId(null);
             }}
             onSelectTransition={(transId) => {
               setSelectedTransitionId(transId);
-              if (transId) setSelectedItemId(null);
+              if (transId) setSelection(clearSelection());
             }}
             onPlayheadChange={setPlayheadFrame}
             onMoveClip={handleMoveClip}
+            onGroupMoveClip={handleGroupMoveClip}
             onTrimClip={handleTrimClip}
             onSplitClip={handleSplitClip}
             onDeleteClip={handleDeleteClip}
             onDuplicateClip={handleDuplicateClip}
             onMoveKeyframe={handleMoveKeyframe}
             onCreateCutTransition={handleCreateCutTransition}
+            zoom={zoom}
+            onZoomIn={() => setZoom((z) => Math.min(10, z + 0.5))}
+            onZoomOut={() => setZoom((z) => Math.max(1, z - 0.5))}
+            onSetZoom={setZoom}
           />
         </section>
 
         <Inspector
           selectedItem={selectedItem}
           selectedTransition={selectedTransition}
+          selectedCount={selection.selectedItemIds.size}
           adjacentInfo={adjacentInfo}
           assets={project?.assets ?? []}
           playheadFrame={playheadFrame}

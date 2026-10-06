@@ -7,8 +7,8 @@ use tinixcut_lib::modules::command::{
 };
 use tinixcut_lib::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use tinixcut_lib::modules::domain::{
-    Asset, CutTransition, ItemKind, MediaKind, Project, TimelineItem, Track,
-    TrackKind, TransitionKind, CURRENT_SCHEMA_VERSION,
+    Asset, CutTransition, ItemKind, MediaKind, Project, TimelineItem, Track, TrackKind,
+    TransitionKind, CURRENT_SCHEMA_VERSION,
 };
 
 fn create_test_project_with_asset(fps: u32) -> (Project, String) {
@@ -116,7 +116,10 @@ fn test_case_1_two_adjacent_move_right_order_sensitivity() {
         ],
     );
     let res_natural = svc_natural.execute(env_ab);
-    println!("Case 1 Natural (A then B) Result: {:?}", res_natural.is_ok());
+    println!(
+        "Case 1 Natural (A then B) Result: {:?}",
+        res_natural.is_ok()
+    );
     assert!(
         res_natural.is_err(),
         "Natural left-to-right order MUST fail with intermediate overlap error when moving right!"
@@ -147,7 +150,10 @@ fn test_case_1_two_adjacent_move_right_order_sensitivity() {
         ],
     );
     let res_reverse = svc_reverse.execute(env_ba);
-    println!("Case 1 Reverse (B then A) Result: {:?}", res_reverse.is_ok());
+    println!(
+        "Case 1 Reverse (B then A) Result: {:?}",
+        res_reverse.is_ok()
+    );
     assert!(
         res_reverse.is_ok(),
         "Reverse right-to-left order succeeds when moving right!"
@@ -222,7 +228,10 @@ fn test_case_2_two_adjacent_move_left_order_sensitivity() {
         ],
     );
     let res_ab = svc_ab.execute(env_ab);
-    assert!(res_ab.is_ok(), "Left-to-right order succeeds when moving left!");
+    assert!(
+        res_ab.is_ok(),
+        "Left-to-right order succeeds when moving left!"
+    );
 }
 
 #[test]
@@ -230,9 +239,15 @@ fn test_case_3_and_4_three_adjacent_clips_move_right_and_left() {
     let fps = 30;
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
-    track.items.push(create_clip("clip_a", &asset_id, 0, 4, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 4, 4, fps));
-    track.items.push(create_clip("clip_c", &asset_id, 8, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 4, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_c", &asset_id, 8, 4, fps));
     project.tracks.push(track);
     let rate = FrameRate::new(fps, 1);
 
@@ -242,12 +257,36 @@ fn test_case_3_and_4_three_adjacent_clips_move_right_and_left() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(3 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(7 * fps as i64, rate) }),
-            ("op3", CommandOperation::ClipMove { item_id: "clip_c".to_string(), target_track_id: None, target_start: RationalTime::new(11 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(3 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(7 * fps as i64, rate),
+                },
+            ),
+            (
+                "op3",
+                CommandOperation::ClipMove {
+                    item_id: "clip_c".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(11 * fps as i64, rate),
+                },
+            ),
         ],
     );
-    assert!(svc_nat.execute(env_nat).is_err(), "Natural order fails for 3 clips moving right");
+    assert!(
+        svc_nat.execute(env_nat).is_err(),
+        "Natural order fails for 3 clips moving right"
+    );
 
     // Reverse order (C, B, A) succeeds:
     let mut svc_rev = CommandService::new(project.clone());
@@ -255,12 +294,36 @@ fn test_case_3_and_4_three_adjacent_clips_move_right_and_left() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_c".to_string(), target_track_id: None, target_start: RationalTime::new(11 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(7 * fps as i64, rate) }),
-            ("op3", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(3 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_c".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(11 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(7 * fps as i64, rate),
+                },
+            ),
+            (
+                "op3",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(3 * fps as i64, rate),
+                },
+            ),
         ],
     );
-    assert!(svc_rev.execute(env_rev).is_ok(), "Reverse order succeeds for 3 clips moving right");
+    assert!(
+        svc_rev.execute(env_rev).is_ok(),
+        "Reverse order succeeds for 3 clips moving right"
+    );
 
     // Case 4: Move left -3s (from 3, 7, 11 back to 0, 4, 8)
     let project_shifted = svc_rev.project().clone();
@@ -270,12 +333,36 @@ fn test_case_3_and_4_three_adjacent_clips_move_right_and_left() {
         &project_shifted.project_id,
         project_shifted.revision,
         vec![
-            ("op_rev1", CommandOperation::ClipMove { item_id: "clip_c".to_string(), target_track_id: None, target_start: RationalTime::new(8 * fps as i64, rate) }),
-            ("op_rev2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(4 * fps as i64, rate) }),
-            ("op_rev3", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(0, rate) }),
+            (
+                "op_rev1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_c".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(8 * fps as i64, rate),
+                },
+            ),
+            (
+                "op_rev2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(4 * fps as i64, rate),
+                },
+            ),
+            (
+                "op_rev3",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(0, rate),
+                },
+            ),
         ],
     );
-    assert!(svc_left_rev.execute(env_left_rev).is_err(), "Reverse order fails for 3 clips moving left");
+    assert!(
+        svc_left_rev.execute(env_left_rev).is_err(),
+        "Reverse order fails for 3 clips moving left"
+    );
 
     // Natural order (A, B, C) succeeds when moving left:
     let mut svc_left_nat = CommandService::new(project_shifted.clone());
@@ -283,12 +370,36 @@ fn test_case_3_and_4_three_adjacent_clips_move_right_and_left() {
         &project_shifted.project_id,
         project_shifted.revision,
         vec![
-            ("op_nat1", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(0, rate) }),
-            ("op_nat2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(4 * fps as i64, rate) }),
-            ("op_nat3", CommandOperation::ClipMove { item_id: "clip_c".to_string(), target_track_id: None, target_start: RationalTime::new(8 * fps as i64, rate) }),
+            (
+                "op_nat1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(0, rate),
+                },
+            ),
+            (
+                "op_nat2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(4 * fps as i64, rate),
+                },
+            ),
+            (
+                "op_nat3",
+                CommandOperation::ClipMove {
+                    item_id: "clip_c".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(8 * fps as i64, rate),
+                },
+            ),
         ],
     );
-    assert!(svc_left_nat.execute(env_left_nat).is_ok(), "Natural order succeeds for 3 clips moving left");
+    assert!(
+        svc_left_nat.execute(env_left_nat).is_ok(),
+        "Natural order succeeds for 3 clips moving left"
+    );
 }
 
 #[test]
@@ -297,8 +408,12 @@ fn test_case_5_clips_separated_by_gaps() {
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
     // Clip A [0, 4), Gap [4, 10), Clip B [10, 14)
-    track.items.push(create_clip("clip_a", &asset_id, 0, 4, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 10, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 10, 4, fps));
     project.tracks.push(track);
     let rate = FrameRate::new(fps, 1);
 
@@ -308,8 +423,22 @@ fn test_case_5_clips_separated_by_gaps() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(2 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(12 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(2 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(12 * fps as i64, rate),
+                },
+            ),
         ],
     );
     assert!(svc.execute(env).is_ok());
@@ -320,11 +449,28 @@ fn test_case_5_clips_separated_by_gaps() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(7 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(17 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(7 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(17 * fps as i64, rate),
+                },
+            ),
         ],
     );
-    assert!(svc2.execute(env2).is_err(), "Natural order fails when delta >= gap!");
+    assert!(
+        svc2.execute(env2).is_err(),
+        "Natural order fails when delta >= gap!"
+    );
 }
 
 #[test]
@@ -344,11 +490,28 @@ fn test_case_6_clips_on_different_tracks() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_v".to_string(), target_track_id: None, target_start: RationalTime::new(3 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(3 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_v".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(3 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(3 * fps as i64, rate),
+                },
+            ),
         ],
     );
-    assert!(svc.execute(env).is_ok(), "Cross-track moves have no inter-track overlap conflict");
+    assert!(
+        svc.execute(env).is_ok(),
+        "Cross-track moves have no inter-track overlap conflict"
+    );
 }
 
 #[test]
@@ -356,9 +519,15 @@ fn test_case_7_group_next_to_unselected_clip_conflict_rejection() {
     let fps = 30;
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
-    track.items.push(create_clip("clip_a", &asset_id, 0, 4, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 4, 4, fps));
-    track.items.push(create_clip("clip_c", &asset_id, 10, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 4, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_c", &asset_id, 10, 5, fps));
     project.tracks.push(track);
     let rate = FrameRate::new(fps, 1);
 
@@ -367,14 +536,34 @@ fn test_case_7_group_next_to_unselected_clip_conflict_rejection() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(8 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(4 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(8 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(4 * fps as i64, rate),
+                },
+            ),
         ],
     );
     let res = svc.execute(env);
     assert!(res.is_err(), "Must reject conflict with unselected clip!");
-    assert_eq!(svc.project().tracks[0].items[0].timeline_range.start.value, 0);
-    assert_eq!(svc.project().tracks[0].items[1].timeline_range.start.value, 4 * fps as i64);
+    assert_eq!(
+        svc.project().tracks[0].items[0].timeline_range.start.value,
+        0
+    );
+    assert_eq!(
+        svc.project().tracks[0].items[1].timeline_range.start.value,
+        4 * fps as i64
+    );
 }
 
 #[test]
@@ -409,15 +598,32 @@ fn test_case_8_selected_clips_with_cross_dissolve_FATAL_TRANSITION_DESTRUCTION()
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(7 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(2 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(7 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(2 * fps as i64, rate),
+                },
+            ),
         ],
     );
     let res = svc.execute(env);
     assert!(res.is_ok(), "Moves succeeded in reverse order");
 
     let committed_transitions = &svc.project().tracks[0].transitions;
-    println!("Remaining transitions count: {}", committed_transitions.len());
+    println!(
+        "Remaining transitions count: {}",
+        committed_transitions.len()
+    );
     // Proves that existing ClipMove destroys the CrossDissolve transition!
     assert!(
         committed_transitions.is_empty(),
@@ -435,9 +641,14 @@ fn test_case_9_stale_revision() {
     let env = make_envelope(
         &project.project_id,
         project.revision + 99,
-        vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: None, target_start: RationalTime::new(2 * fps as i64, rate) }),
-        ],
+        vec![(
+            "op1",
+            CommandOperation::ClipMove {
+                item_id: "clip_a".to_string(),
+                target_track_id: None,
+                target_start: RationalTime::new(2 * fps as i64, rate),
+            },
+        )],
     );
     let res = svc.execute(env);
     assert!(matches!(res, Err(CommandError::StaleRevision { .. })));
@@ -448,8 +659,12 @@ fn test_case_10_transaction_rollback_when_one_member_invalid() {
     let fps = 30;
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
-    track.items.push(create_clip("clip_a", &asset_id, 0, 5, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 5, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 5, 5, fps));
     project.tracks.push(track);
     let initial_rev = project.revision;
     let rate = FrameRate::new(fps, 1);
@@ -459,14 +674,31 @@ fn test_case_10_transaction_rollback_when_one_member_invalid() {
         &project.project_id,
         initial_rev,
         vec![
-            ("op1", CommandOperation::ClipMove { item_id: "clip_b".to_string(), target_track_id: None, target_start: RationalTime::new(10 * fps as i64, rate) }),
-            ("op2", CommandOperation::ClipMove { item_id: "clip_a".to_string(), target_track_id: Some("nonexistent_track".to_string()), target_start: RationalTime::new(2 * fps as i64, rate) }),
+            (
+                "op1",
+                CommandOperation::ClipMove {
+                    item_id: "clip_b".to_string(),
+                    target_track_id: None,
+                    target_start: RationalTime::new(10 * fps as i64, rate),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipMove {
+                    item_id: "clip_a".to_string(),
+                    target_track_id: Some("nonexistent_track".to_string()),
+                    target_start: RationalTime::new(2 * fps as i64, rate),
+                },
+            ),
         ],
     );
     let res = svc.execute(env);
     assert!(res.is_err(), "Transaction must fail");
     assert_eq!(svc.project().revision, initial_rev);
-    assert_eq!(svc.project().tracks[0].items[1].timeline_range.start.value, 5 * fps as i64);
+    assert_eq!(
+        svc.project().tracks[0].items[1].timeline_range.start.value,
+        5 * fps as i64
+    );
 }
 
 #[test]
@@ -475,9 +707,15 @@ fn test_multi_selection_delete_safety() {
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
     let track_id = track.track_id.clone();
-    track.items.push(create_clip("clip_a", &asset_id, 0, 5, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 5, 5, fps));
-    track.items.push(create_clip("clip_c", &asset_id, 10, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 5, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_c", &asset_id, 10, 5, fps));
     let rate = FrameRate::new(fps, 1);
     track.transitions.push(CutTransition {
         transition_id: "trans_ab".to_string(),
@@ -494,12 +732,25 @@ fn test_multi_selection_delete_safety() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipDelete { item_id: "clip_a".to_string() }),
-            ("op2", CommandOperation::ClipDelete { item_id: "clip_b".to_string() }),
+            (
+                "op1",
+                CommandOperation::ClipDelete {
+                    item_id: "clip_a".to_string(),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipDelete {
+                    item_id: "clip_b".to_string(),
+                },
+            ),
         ],
     );
     let res = svc.execute(env);
-    assert!(res.is_ok(), "Multi-delete of adjacent clips with transition succeeds");
+    assert!(
+        res.is_ok(),
+        "Multi-delete of adjacent clips with transition succeeds"
+    );
     assert_eq!(svc.project().tracks[0].items.len(), 1);
     assert_eq!(svc.project().tracks[0].items[0].item_id, "clip_c");
     assert_eq!(svc.project().tracks[0].transitions.len(), 0);
@@ -509,8 +760,18 @@ fn test_multi_selection_delete_safety() {
         &project.project_id,
         project.revision,
         vec![
-            ("op1", CommandOperation::ClipDelete { item_id: "clip_b".to_string() }),
-            ("op2", CommandOperation::ClipDelete { item_id: "clip_a".to_string() }),
+            (
+                "op1",
+                CommandOperation::ClipDelete {
+                    item_id: "clip_b".to_string(),
+                },
+            ),
+            (
+                "op2",
+                CommandOperation::ClipDelete {
+                    item_id: "clip_a".to_string(),
+                },
+            ),
         ],
     );
     let res2 = svc2.execute(env2);
@@ -522,17 +783,27 @@ fn test_multi_selection_duplicate_safety() {
     let fps = 30;
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
-    track.items.push(create_clip("clip_a", &asset_id, 0, 5, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 5, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 5, 5, fps));
     project.tracks.push(track);
 
     let mut svc = CommandService::new(project.clone());
     let env = make_envelope(
         &project.project_id,
         project.revision,
-        vec![
-            ("op1", CommandOperation::ClipDuplicate { item_id: "clip_a".to_string(), target_start: None, target_track_id: None, new_item_id: None }),
-        ],
+        vec![(
+            "op1",
+            CommandOperation::ClipDuplicate {
+                item_id: "clip_a".to_string(),
+                target_start: None,
+                target_track_id: None,
+                new_item_id: None,
+            },
+        )],
     );
     let res = svc.execute(env);
     assert!(
@@ -555,11 +826,21 @@ fn test_ripple_delete_candidate_semantics_and_invariants() {
     // trans_ab between A & B
     // trans_bc between B & C
     // trans_de between D & E
-    track.items.push(create_clip("clip_a", &asset_id, 0, 5, fps));
-    track.items.push(create_clip("clip_b", &asset_id, 5, 5, fps));
-    track.items.push(create_clip("clip_c", &asset_id, 10, 5, fps));
-    track.items.push(create_clip("clip_d", &asset_id, 18, 4, fps));
-    track.items.push(create_clip("clip_e", &asset_id, 22, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_a", &asset_id, 0, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_b", &asset_id, 5, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_c", &asset_id, 10, 5, fps));
+    track
+        .items
+        .push(create_clip("clip_d", &asset_id, 18, 4, fps));
+    track
+        .items
+        .push(create_clip("clip_e", &asset_id, 22, 4, fps));
 
     track.transitions.push(CutTransition {
         transition_id: "trans_ab".to_string(),
@@ -614,9 +895,8 @@ fn test_ripple_delete_candidate_semantics_and_invariants() {
         let deleted_duration = deleted_item.timeline_range.duration;
 
         // 5. Remove directly dependent transitions
-        tr.transitions.retain(|t| {
-            t.left_item_id != target_item_id && t.right_item_id != target_item_id
-        });
+        tr.transitions
+            .retain(|t| t.left_item_id != target_item_id && t.right_item_id != target_item_id);
 
         // 6. Shift surviving items on SAME track where timeline_start >= deleted_end
         for item in &mut tr.items {
@@ -636,7 +916,11 @@ fn test_ripple_delete_candidate_semantics_and_invariants() {
 
     // Validate the resulting project against canonical domain rules!
     let val_res = proj.validate();
-    assert!(val_res.is_ok(), "Ripple delete result MUST validate cleanly against domain rules: {:?}", val_res.err());
+    assert!(
+        val_res.is_ok(),
+        "Ripple delete result MUST validate cleanly against domain rules: {:?}",
+        val_res.err()
+    );
 
     let tr = &proj.tracks[t_idx];
     // Check resulting positions:
@@ -661,5 +945,7 @@ fn test_ripple_delete_candidate_semantics_and_invariants() {
     assert_eq!(e.timeline_range.duration.value, 4 * fps as i64);
 
     // Adjacent D & E with trans_de: still perfectly adjacent!
-    assert!(d.timeline_range.is_adjacent_to_with_rate(&e.timeline_range, rate));
+    assert!(d
+        .timeline_range
+        .is_adjacent_to_with_rate(&e.timeline_range, rate));
 }

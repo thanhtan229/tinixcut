@@ -153,7 +153,7 @@ Phase 14 Advanced Keyframe Interpolation (Complete)
    ↓
 Phase 15 MCP Automation Adapter (Complete)
    ↓
-Phase 16 Timeline Editing Productivity (Research Gate Complete — Ready for Planning)
+Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1344,36 +1344,54 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 
 # Phase 16 — Timeline Editing Productivity
 
-## Status: RESEARCH GATE COMPLETE — READY FOR PLANNING
+## Status: COMPLETE WITH DEFERRED ITEMS
 
 **Milestone:** `Phase 16 — Timeline Editing Productivity`  
-**Governed by:** Phase 16 Research Reconciliation (No new ADR required)  
-**Implementation Plan:** `Plans/plan_phase16.md` (Pending — NOT yet created)  
-**Research Gate:** COMPLETE — READY FOR PLANNING  
-**Implementation Status:** NOT STARTED  
+**Governed by:** Phase 16 Research Reconciliation & Approved Plan `Plans/plan_phase16.md`  
+**Implementation Plan:** `Plans/plan_phase16.md` (Approved & Implemented)  
+**Implementation Status:** COMPLETE WITH DEFERRED ITEMS  
 **Schema State:** Schema v3 unchanged  
-**Research POC:** `src-tauri/tests/phase16_research_poc.rs` (12/12 passed — research POC evidence, not implementation acceptance)  
+**Automated Verification:** PASS (198 Rust tests, 37 frontend tests, clean clippy, fmt, build, typecheck)  
+**Deferred Acceptance Item:** `P16-AC-56 — Real interactive Windows GUI qualification`  
 
-### Planned Scope (Ceiling)
-1. Ctrl-based ephemeral multi-select + primary selection (`selectedItemIds`, `primarySelectedItemId`);
-2. UI-only deterministic snapping (8px threshold, playhead/zero/clip edges, Alt disable);
-3. Dedicated `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
-4. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track);
-5. Centralized keyboard shortcut framework (input suppression, Windows-first bindings);
-6. Split-at-playhead shortcut/workflow (Ctrl+K, primary clip or lowest-track fallback);
-7. Normal non-ripple trim-to-playhead shortcuts (`[` and `]`, existing `ClipTrim`);
-8. Multi-selection delete via one atomic envelope (batched `ClipDelete` operations);
-9. Primary-only duplicate shortcut (Ctrl+D);
-10. Timeline zoom and snapping toggle shortcuts (`=`, `-`, `S` as UI behavior).
+### Completed Scope
+1. Ephemeral Ctrl-based multi-select (`selectedItemIds`);
+2. Primary selection (`primarySelectedItemId`);
+3. Exact 8 CSS-pixel UI snapping (playhead, zero, clip edges, Alt bypass);
+4. Dedicated atomic `ClipGroupMove` command (atomic simultaneous translation, delta-based, collision-checked);
+5. Bounded single-track `ClipRippleDelete` command (deletes target, shifts downstream on same track via exact `semantic_ge`);
+6. Centralized shortcut framework with focus suppression and Windows-first bindings;
+7. Deterministic split-at-playhead workflow (`Ctrl+K`, primary clip or lowest-track fallback);
+8. Non-ripple trim-to-playhead shortcuts (`[` and `]`, using existing `ClipTrim`);
+9. Atomic multi-delete via one atomic envelope (batched `ClipDelete` operations);
+10. Primary-only duplicate shortcut (`Ctrl+D`);
+11. Timeline zoom (`=`, `-`) and snapping toggle (`S`) shortcuts;
+12. Generic CLI/JSONL/MCP transport inheritance without transport-specific edit logic;
+13. RationalTime semantic helper remediation (`semantic_cmp`, `semantic_ge`, etc.) and representation-based `Ord`/`Eq` contract preservation.
 
-### Explicitly Out of Scope
+### Verification Baseline
+- 198 Rust tests passed (107 unit, 8 POC, 15 Phase 14 acceptance, 26 Phase 15 acceptance, 12 Phase 16 research POC, 30 Phase 16 timeline productivity acceptance);
+- 37 frontend tests passed across 4 test suites;
+- `cargo clippy -- -D warnings`: PASS (0 warnings);
+- `cargo fmt -- --check`: PASS;
+- `cargo build`: PASS;
+- `tsc --noEmit`: PASS;
+- `pnpm run build`: PASS.
+
+### Deferred Item: P16-AC-56
+- **Identifier:** `P16-AC-56 — Real interactive Windows GUI qualification`
+- **Status:** DEFERRED (NOT PASS)
+- **Execution State:** Not executed. Both Codex and ChatGPT Work environments reported `BLOCKED — GUI interaction capability unavailable` due to lack of native Windows desktop GUI interaction capability. The user elected not to perform the 23-item manual checklist personally.
+- **Guidance:** Automated tests are not considered a substitute for this qualification. This item should be revisited before any release milestone where interactive Windows behavior is release-critical.
+
+### Explicitly Out of Scope / Planned Future Features
+- Shift range selection
+- Marquee / box drag selection
+- Multi-clip duplication
 - Ripple insert
 - Ripple trim / Q-W keyboard semantics
 - Magnetic / FCP-style timeline
 - Cross-track ripple editing
-- Shift range selection
-- Marquee / box drag selection
-- Multi-clip duplication
 - Persistent timeline markers
 - Track targeting matrix
 - Keyframe UX expansion

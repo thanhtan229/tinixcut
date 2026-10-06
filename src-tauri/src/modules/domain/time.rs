@@ -152,12 +152,48 @@ impl RationalTime {
     ///
     /// Uses exact 128-bit cross-multiplication without floating-point drift or truncation.
     pub fn is_same_time(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
+        self.semantic_cmp(other) == std::cmp::Ordering::Equal
     }
 
     /// Alias for [`is_same_time`].
     pub fn semantic_eq(&self, other: &Self) -> bool {
         self.is_same_time(other)
+    }
+
+    /// Semantically compares this time with `other` using exact 128-bit cross-multiplication,
+    /// avoiding floating-point imprecision and rounding artifacts across mixed frame rates.
+    pub fn semantic_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.rate == other.rate {
+            self.value.cmp(&other.value)
+        } else {
+            let lhs = (self.value as i128)
+                * (self.rate.denominator as i128)
+                * (other.rate.numerator as i128);
+            let rhs = (other.value as i128)
+                * (other.rate.denominator as i128)
+                * (self.rate.numerator as i128);
+            lhs.cmp(&rhs)
+        }
+    }
+
+    /// Returns `true` if `self` is semantically greater than or equal to `other` (self >= other).
+    pub fn semantic_ge(&self, other: &Self) -> bool {
+        self.semantic_cmp(other) != std::cmp::Ordering::Less
+    }
+
+    /// Returns `true` if `self` is semantically greater than `other` (self > other).
+    pub fn semantic_gt(&self, other: &Self) -> bool {
+        self.semantic_cmp(other) == std::cmp::Ordering::Greater
+    }
+
+    /// Returns `true` if `self` is semantically less than or equal to `other` (self <= other).
+    pub fn semantic_le(&self, other: &Self) -> bool {
+        self.semantic_cmp(other) != std::cmp::Ordering::Greater
+    }
+
+    /// Returns `true` if `self` is semantically less than `other` (self < other).
+    pub fn semantic_lt(&self, other: &Self) -> bool {
+        self.semantic_cmp(other) == std::cmp::Ordering::Less
     }
 }
 
@@ -173,6 +209,11 @@ impl std::fmt::Display for RationalTime {
     }
 }
 
+/// Canonical representation ordering for RationalTime.
+/// Invariant: `a.cmp(&b) == Ordering::Equal <=> a == b`.
+///
+/// For timeline/domain semantic comparisons across differing frame rates, use explicit semantic helpers:
+/// [`RationalTime::semantic_cmp`], [`RationalTime::semantic_ge`], [`RationalTime::semantic_lt`], etc.
 impl PartialOrd for RationalTime {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -181,18 +222,9 @@ impl PartialOrd for RationalTime {
 
 impl Ord for RationalTime {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.rate == other.rate {
-            self.value.cmp(&other.value)
-        } else {
-            // Compare as cross-multiplication: value1 * den1 * num2 * den2 ...
-            let lhs = (self.value as i128)
-                * (self.rate.denominator as i128)
-                * (other.rate.numerator as i128);
-            let rhs = (other.value as i128)
-                * (other.rate.denominator as i128)
-                * (self.rate.numerator as i128);
-            lhs.cmp(&rhs)
-        }
+        self.value
+            .cmp(&other.value)
+            .then_with(|| self.rate.cmp(&other.rate))
     }
 }
 
@@ -260,18 +292,11 @@ impl TimeRange {
     }
 
     pub fn contains_time(&self, time: RationalTime) -> bool {
-        let t = if time.rate == self.start.rate {
-            time
-        } else {
-            time.rescaled_to(self.start.rate)
-        };
-        t >= self.start && t < self.end()
+        time.semantic_ge(&self.start) && time.semantic_lt(&self.end())
     }
 
     pub fn overlaps(&self, other: &TimeRange) -> bool {
-        let other_start = other.start.rescaled_to(self.start.rate);
-        let other_end = other.end().rescaled_to(self.start.rate);
-        self.start < other_end && other_start < self.end()
+        self.start.semantic_lt(&other.end()) && other.start.semantic_lt(&self.end())
     }
 
     pub fn rescaled_to(&self, rate: FrameRate) -> Self {
@@ -437,5 +462,43 @@ mod tests {
         );
         assert!(r1.is_adjacent_to(&r2));
         assert!(r1.is_adjacent_to_with_rate(&r2, FrameRate::FPS_30));
+    }
+
+    #[test]
+    fn test_representation_vs_semantic_equality_and_btreeset_contract() {
+        let a = RationalTime::new(100, FrameRate::FPS_25); // 4.0s
+        let b = RationalTime::new(120, FrameRate::FPS_30); // 4.0s
+
+        // 1. Representation equality: must be false (different value and rate representations)
+        assert_ne!(a, b);
+        assert!(!(a == b));
+
+        // 2. Semantic equality and comparison helpers: must be exact
+        assert_eq!(a.semantic_cmp(&b), std::cmp::Ordering::Equal);
+        assert!(a.semantic_eq(&b));
+        assert!(a.is_same_time(&b));
+        assert!(a.semantic_ge(&b));
+        assert!(a.semantic_le(&b));
+        assert!(!a.semantic_lt(&b));
+        assert!(!a.semantic_gt(&b));
+
+        // 3. Rust Ord / Eq contract consistency invariant:
+        // `a.cmp(&b) == Ordering::Equal <=> a == b`
+        // Since a != b, a.cmp(&b) MUST NOT be Ordering::Equal!
+        assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+
+        // 4. Ordered collection (BTreeSet) regression test:
+        // Two representation-distinct RationalTimes that represent the same semantic instant
+        // must NOT be accidentally collapsed in a BTreeSet.
+        let mut set = std::collections::BTreeSet::new();
+        set.insert(a);
+        set.insert(b);
+        assert_eq!(
+            set.len(),
+            2,
+            "BTreeSet must not collapse distinct representations of the same semantic time"
+        );
+        assert!(set.contains(&a));
+        assert!(set.contains(&b));
     }
 }

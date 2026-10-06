@@ -96,6 +96,19 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipGroupMove";
+      payload: {
+        item_ids: string[];
+        delta: RationalTime;
+      };
+    }
+  | {
+      type: "ClipRippleDelete";
+      payload: {
+        item_id: string;
+      };
+    }
+  | {
       type: "ClipDelete";
       payload: {
         item_id: string;

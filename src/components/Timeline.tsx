@@ -2,22 +2,33 @@ import React, { useState, useRef, useEffect } from "react";
 import { isRangeAdjacent, Keyframe, KeyframeProperty, Project, TimelineItem } from "../types/project";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
+import { buildSnapTargets, calculateSnap, SnapCandidate } from "../utils/timelineSnapping";
 
 interface TimelineProps {
   project: Project | null;
-  selectedItemId: string | null;
+  selectedItemId?: string | null;
+  selectedItemIds?: Set<string>;
+  primarySelectedItemId?: string | null;
   selectedTransitionId?: string | null;
   playheadFrame: number;
-  onSelectItem: (itemId: string | null) => void;
+  snapEnabled?: boolean;
+  onToggleSnapping?: () => void;
+  onSelectItem: (itemId: string | null, isCtrl?: boolean) => void;
+  onClearSelection?: () => void;
   onSelectTransition?: (transitionId: string | null) => void;
   onPlayheadChange: (frame: number) => void;
   onMoveClip: (itemId: string, newStartFrame: number) => void;
+  onGroupMoveClip?: (itemIds: string[], deltaFrames: number) => void;
   onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number, newSourceStartFrame?: number) => void;
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDeleteClip: (itemId: string) => void;
   onDuplicateClip: (itemId: string) => void;
   onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
   onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
+  zoom?: number;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onSetZoom?: (zoom: number) => void;
 }
 
 const HEADER_WIDTH = 110; // Fixed width for track header column and ruler origin in pixels
@@ -26,20 +37,41 @@ const RULER_HEIGHT = 28; // Height of the time ruler in pixels
 export const Timeline: React.FC<TimelineProps> = ({
   project,
   selectedItemId,
+  selectedItemIds,
+  primarySelectedItemId,
   selectedTransitionId,
   playheadFrame,
+  snapEnabled = true,
+  onToggleSnapping,
   onSelectItem,
+  onClearSelection,
   onSelectTransition,
   onPlayheadChange,
   onMoveClip,
+  onGroupMoveClip,
   onTrimClip,
   onSplitClip,
   onDeleteClip,
   onDuplicateClip,
   onMoveKeyframe,
   onCreateCutTransition,
+  zoom: externalZoom,
+  onZoomIn,
+  onZoomOut,
+  onSetZoom,
 }) => {
-  const [zoom, setZoom] = useState<number>(3); // pixels per frame
+  const [internalZoom, setInternalZoom] = useState<number>(3); // pixels per frame
+  const zoom = externalZoom !== undefined ? externalZoom : internalZoom;
+  const setZoom = onSetZoom || setInternalZoom;
+
+  const effectiveSelectedItemIds = React.useMemo(() => {
+    if (selectedItemIds) return selectedItemIds;
+    if (selectedItemId) return new Set([selectedItemId]);
+    return new Set<string>();
+  }, [selectedItemIds, selectedItemId]);
+
+  const effectivePrimarySelectedItemId = primarySelectedItemId ?? selectedItemId ?? null;
+
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
   const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
 
@@ -52,6 +84,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     initialDurationFrames: number;
     initialSourceStartFrame: number;
     currentDeltaFrames: number;
+    isMulti: boolean;
   } | null>(null);
 
   // Transient keyframe drag state (Section B6)
@@ -93,11 +126,11 @@ export const Timeline: React.FC<TimelineProps> = ({
     }
   }, [project, waveforms]);
 
-  // Find currently selected item
+  // Find currently selected primary item
   let selectedItem: TimelineItem | null = null;
-  if (project && selectedItemId) {
+  if (project && effectivePrimarySelectedItemId) {
     for (const track of project.tracks) {
-      const it = track.items.find((i) => i.item_id === selectedItemId);
+      const it = track.items.find((i) => i.item_id === effectivePrimarySelectedItemId);
       if (it) {
         selectedItem = it;
         break;
@@ -201,7 +234,20 @@ export const Timeline: React.FC<TimelineProps> = ({
     item: TimelineItem
   ) => {
     e.stopPropagation();
-    onSelectItem(item.item_id);
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (isCtrl) {
+      // Ctrl+Click: toggle item in selection, DO NOT start drag (P16-TP-05, P16-AC-06)
+      onSelectItem(item.item_id, true);
+      return;
+    }
+
+    const isAlreadySelected = effectiveSelectedItemIds.has(item.item_id);
+    const isMulti = isAlreadySelected && effectiveSelectedItemIds.size > 1;
+
+    // Normal click / pointer down:
+    onSelectItem(item.item_id, false);
+
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -216,6 +262,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialDurationFrames: item.timeline_range.duration.value,
       initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
+      isMulti,
     });
   };
 
@@ -225,7 +272,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     mode: "trim-left" | "trim-right"
   ) => {
     e.stopPropagation();
-    onSelectItem(item.item_id);
+    onSelectItem(item.item_id, false);
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -240,6 +287,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialDurationFrames: item.timeline_range.duration.value,
       initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
+      isMulti: false,
     });
   };
 
@@ -249,7 +297,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     kf: Keyframe
   ) => {
     e.stopPropagation();
-    onSelectItem(item.item_id);
+    onSelectItem(item.item_id, false);
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -269,8 +317,54 @@ export const Timeline: React.FC<TimelineProps> = ({
   const handlePointerMove = (e: React.PointerEvent) => {
     if (transientDrag) {
       const deltaPixels = e.clientX - transientDrag.initialPointerX;
-      const deltaFrames = Math.round(deltaPixels / zoom);
-      setTransientDrag((prev) => (prev ? { ...prev, currentDeltaFrames: deltaFrames } : null));
+      const rawDeltaFrames = Math.round(deltaPixels / zoom);
+
+      // Collect unselected clip edges for snap targets
+      // Selected clips do NOT contribute snap targets during their own move (P16-TP-09, P16-AC-18)
+      const unselectedClipEdges: Array<{ start: number; end: number; itemId: string }> = [];
+      if (project) {
+        for (const track of project.tracks) {
+          for (const item of track.items) {
+            if (!effectiveSelectedItemIds.has(item.item_id)) {
+              unselectedClipEdges.push({
+                start: item.timeline_range.start.value,
+                end: item.timeline_range.start.value + item.timeline_range.duration.value,
+                itemId: item.item_id,
+              });
+            }
+          }
+        }
+      }
+
+      const snapTargets = buildSnapTargets(playheadFrame, unselectedClipEdges);
+
+      let snapCandidates: SnapCandidate[] = [];
+      if (transientDrag.mode === "move") {
+        snapCandidates = [
+          { anchorFrame: transientDrag.initialStartFrame, anchorKind: "start" },
+          { anchorFrame: transientDrag.initialStartFrame + transientDrag.initialDurationFrames, anchorKind: "end" },
+        ];
+      } else if (transientDrag.mode === "trim-left") {
+        snapCandidates = [
+          { anchorFrame: transientDrag.initialStartFrame, anchorKind: "start" },
+        ];
+      } else if (transientDrag.mode === "trim-right") {
+        snapCandidates = [
+          { anchorFrame: transientDrag.initialStartFrame + transientDrag.initialDurationFrames, anchorKind: "end" },
+        ];
+      }
+
+      const snapRes = calculateSnap(
+        snapCandidates,
+        rawDeltaFrames,
+        snapTargets,
+        zoom,
+        snapEnabled,
+        e.altKey
+      );
+
+      const effectiveDelta = snapRes.snappedDeltaFrames;
+      setTransientDrag((prev) => (prev ? { ...prev, currentDeltaFrames: effectiveDelta } : null));
     } else if (transientKfDrag) {
       const deltaPixels = e.clientX - transientKfDrag.initialPointerX;
       const deltaFrames = Math.round(deltaPixels / zoom);
@@ -290,14 +384,20 @@ export const Timeline: React.FC<TimelineProps> = ({
         // Ignore if not captured
       }
 
-      const { mode, itemId, initialStartFrame, initialDurationFrames, initialSourceStartFrame, currentDeltaFrames } = transientDrag;
+      const { mode, itemId, initialStartFrame, initialDurationFrames, initialSourceStartFrame, currentDeltaFrames, isMulti } = transientDrag;
       setTransientDrag(null);
 
       // Commit single authoritative domain command
       if (mode === "move") {
-        const finalStart = Math.max(0, initialStartFrame + currentDeltaFrames);
-        if (finalStart !== initialStartFrame) {
-          onMoveClip(itemId, finalStart);
+        if (isMulti && onGroupMoveClip && effectiveSelectedItemIds.size > 1) {
+          if (currentDeltaFrames !== 0) {
+            onGroupMoveClip(Array.from(effectiveSelectedItemIds), currentDeltaFrames);
+          }
+        } else {
+          const finalStart = Math.max(0, initialStartFrame + currentDeltaFrames);
+          if (finalStart !== initialStartFrame) {
+            onMoveClip(itemId, finalStart);
+          }
         }
       } else if (mode === "trim-left") {
         const proposedStart = Math.max(0, initialStartFrame + currentDeltaFrames);
@@ -405,6 +505,11 @@ export const Timeline: React.FC<TimelineProps> = ({
   const handleTracksAreaClick = (e: React.MouseEvent<HTMLDivElement>) => {
     // Only seek when clicking on empty background, not on buttons or clips
     if (e.target === e.currentTarget || (e.target as HTMLElement).dataset.trackLane) {
+      if (onClearSelection) {
+        onClearSelection();
+      } else {
+        onSelectItem(null);
+      }
       seekFromPointerEvent(e);
     }
   };
@@ -423,7 +528,7 @@ export const Timeline: React.FC<TimelineProps> = ({
             className="btn-action"
             disabled={!canSplit}
             onClick={() => selectedItem && onSplitClip(selectedItem.item_id, playheadFrame)}
-            title="Split selected clip at playhead"
+            title="Split selected clip at playhead (Ctrl+K)"
           >
             ✂ Split at Playhead
           </button>
@@ -431,22 +536,49 @@ export const Timeline: React.FC<TimelineProps> = ({
             className="btn-action"
             disabled={!selectedItem}
             onClick={() => selectedItem && onDuplicateClip(selectedItem.item_id)}
-            title="Duplicate selected clip"
+            title="Duplicate selected primary clip (Ctrl+D)"
           >
             📋 Duplicate
           </button>
           <button
             className="btn-action"
-            disabled={!selectedItem}
-            onClick={() => selectedItem && onDeleteClip(selectedItem.item_id)}
-            title="Delete selected clip"
+            disabled={effectiveSelectedItemIds.size === 0}
+            onClick={() => {
+              if (effectiveSelectedItemIds.size > 0) {
+                // If single item, existing onDeleteClip works; if multi, App.tsx will handle
+                if (selectedItem) onDeleteClip(selectedItem.item_id);
+              }
+            }}
+            title="Delete selected clip(s) (Delete / Backspace)"
           >
-            🗑 Delete
+            🗑 Delete {effectiveSelectedItemIds.size > 1 ? `(${effectiveSelectedItemIds.size})` : ""}
           </button>
         </div>
 
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <button
+            className="btn-action"
+            style={{
+              padding: "4px 8px",
+              fontSize: "11px",
+              backgroundColor: snapEnabled ? "var(--accent-primary, #3b82f6)" : "transparent",
+              color: snapEnabled ? "#fff" : "var(--text-muted)",
+              border: "1px solid var(--border-color)",
+            }}
+            onClick={onToggleSnapping}
+            title="Toggle Snapping (S)"
+          >
+            🧲 Snap {snapEnabled ? "ON" : "OFF"}
+          </button>
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Zoom</span>
+          <button
+            className="btn-action"
+            style={{ padding: "2px 8px", fontSize: "12px" }}
+            onClick={() => (onZoomOut ? onZoomOut() : setZoom(Math.max(1, zoom - 0.5)))}
+            title="Zoom Out (-)"
+          >
+            -
+          </button>
           <input
             type="range"
             min="1"
@@ -454,9 +586,17 @@ export const Timeline: React.FC<TimelineProps> = ({
             step="0.5"
             value={zoom}
             onChange={(e) => setZoom(parseFloat(e.target.value))}
-            style={{ width: "80px", cursor: "pointer" }}
-            title="Timeline Zoom level"
+            style={{ width: "70px", cursor: "pointer" }}
+            title="Timeline Zoom level (= / -)"
           />
+          <button
+            className="btn-action"
+            style={{ padding: "2px 8px", fontSize: "12px" }}
+            onClick={() => (onZoomIn ? onZoomIn() : setZoom(Math.min(10, zoom + 0.5)))}
+            title="Zoom In (+)"
+          >
+            +
+          </button>
           <span style={{ fontSize: "12px", fontFamily: "ui-monospace, monospace", color: "var(--accent-primary)" }}>
             Frame {playheadFrame}
           </span>
@@ -634,23 +774,31 @@ export const Timeline: React.FC<TimelineProps> = ({
 
               {/* Items in Track */}
               {track.items.map((item) => {
-                const isSelected = item.item_id === selectedItemId;
-                const isDragging = transientDrag?.itemId === item.item_id;
+                const isSelected = effectiveSelectedItemIds.has(item.item_id);
+                const isPrimary = item.item_id === effectivePrimarySelectedItemId;
+                const isDraggingThis = transientDrag?.itemId === item.item_id;
+                const isGroupMoving = transientDrag?.mode === "move" && transientDrag.isMulti && isSelected;
 
                 let startF = item.timeline_range.start.value;
                 let durF = item.timeline_range.duration.value;
 
                 // Apply transient geometry offsets without committing to backend
-                if (isDragging && transientDrag) {
+                if (transientDrag) {
                   if (transientDrag.mode === "move") {
-                    startF = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
-                  } else if (transientDrag.mode === "trim-left") {
-                    const proposed = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
-                    const delta = proposed - transientDrag.initialStartFrame;
-                    startF = proposed;
-                    durF = Math.max(1, transientDrag.initialDurationFrames - delta);
-                  } else if (transientDrag.mode === "trim-right") {
-                    durF = Math.max(1, transientDrag.initialDurationFrames + transientDrag.currentDeltaFrames);
+                    if (isGroupMoving) {
+                      startF = Math.max(0, item.timeline_range.start.value + transientDrag.currentDeltaFrames);
+                    } else if (isDraggingThis) {
+                      startF = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
+                    }
+                  } else if (isDraggingThis) {
+                    if (transientDrag.mode === "trim-left") {
+                      const proposed = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
+                      const delta = proposed - transientDrag.initialStartFrame;
+                      startF = proposed;
+                      durF = Math.max(1, transientDrag.initialDurationFrames - delta);
+                    } else if (transientDrag.mode === "trim-right") {
+                      durF = Math.max(1, transientDrag.initialDurationFrames + transientDrag.currentDeltaFrames);
+                    }
                   }
                 }
 
@@ -664,8 +812,12 @@ export const Timeline: React.FC<TimelineProps> = ({
                       bottom: "4px",
                       left: `${HEADER_WIDTH + startF * zoom}px`,
                       width: `${Math.max(8, durF * zoom)}px`,
-                      backgroundColor: isSelected ? "#2563eb" : "#1e40af",
-                      border: isSelected ? "2px solid #60a5fa" : "1px solid #3b82f6",
+                      backgroundColor: isPrimary ? "#1d4ed8" : isSelected ? "#2563eb" : "#1e40af",
+                      border: isPrimary
+                        ? "2px solid #93c5fd"
+                        : isSelected
+                        ? "2px solid #60a5fa"
+                        : "1px solid #3b82f6",
                       borderRadius: "4px",
                       cursor: "grab",
                       display: "flex",
@@ -676,8 +828,12 @@ export const Timeline: React.FC<TimelineProps> = ({
                       color: "#fff",
                       fontSize: "11px",
                       fontWeight: 500,
-                      boxShadow: isSelected ? "0 0 10px rgba(59, 130, 246, 0.6)" : "none",
-                      zIndex: isSelected ? 8 : 5,
+                      boxShadow: isPrimary
+                        ? "0 0 12px rgba(147, 197, 253, 0.8)"
+                        : isSelected
+                        ? "0 0 8px rgba(59, 130, 246, 0.6)"
+                        : "none",
+                      zIndex: isPrimary ? 9 : isSelected ? 8 : 5,
                     }}
                   >
                     {/* Audio Waveform Visualization (Trim-aware & Zoom-resilient) */}
@@ -724,6 +880,20 @@ export const Timeline: React.FC<TimelineProps> = ({
                         zIndex: 4,
                       }}
                     >
+                      {isPrimary && effectiveSelectedItemIds.size > 1 && (
+                        <span
+                          style={{
+                            fontSize: "9px",
+                            backgroundColor: "#1e3a8a",
+                            padding: "1px 4px",
+                            borderRadius: "3px",
+                            border: "1px solid #93c5fd",
+                            fontWeight: 700,
+                          }}
+                        >
+                          Primary
+                        </span>
+                      )}
                       <span style={{ fontWeight: 600 }}>{item.name}</span>
                       {item.text_content && item.text_content.trim() !== "" && (
                         <span

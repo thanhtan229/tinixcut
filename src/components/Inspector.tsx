@@ -4,6 +4,7 @@ import { Asset, CutTransition, KeyframeEasing, KeyframeProperty, TimelineItem } 
 interface InspectorProps {
   selectedItem: TimelineItem | null;
   selectedTransition?: CutTransition | null;
+  selectedCount?: number;
   adjacentInfo?: {
     prevClip?: TimelineItem;
     nextClip?: TimelineItem;
@@ -34,6 +35,7 @@ interface InspectorProps {
 export const Inspector: React.FC<InspectorProps> = ({
   selectedItem,
   selectedTransition,
+  selectedCount,
   adjacentInfo,
   assets,
   playheadFrame = 0,
@@ -337,7 +339,23 @@ export const Inspector: React.FC<InspectorProps> = ({
 
   return (
     <aside className="right-panel">
-      <div className="panel-header">Inspector: {selectedItem.name}</div>
+      <div className="panel-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>Inspector: {selectedItem.name}</span>
+        {selectedCount && selectedCount > 1 ? (
+          <span
+            style={{
+              fontSize: "10px",
+              backgroundColor: "var(--accent-primary, #3b82f6)",
+              padding: "2px 6px",
+              borderRadius: "8px",
+              color: "#fff",
+              fontWeight: 600,
+            }}
+          >
+            {selectedCount} clips selected (Primary)
+          </span>
+        ) : null}
+      </div>
       <div className="panel-content" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         {/* Clip Summary */}
         <section>
