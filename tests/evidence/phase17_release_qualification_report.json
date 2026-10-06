@@ -1,0 +1,281 @@
+{
+  "report_version": "1.2.0",
+  "phase": "Phase 17 — Performance Requalification & Release Foundation",
+  "timestamp_utc": "2026-10-06T14:18:00Z",
+  "provenance": {
+    "git_planning_checkpoint_sha": "c35b4e3138d653c132355b07a8ce6464fdec4169",
+    "git_head_sha": "c35b4e3138d653c132355b07a8ce6464fdec4169",
+    "working_tree_clean": false,
+    "tinixcut_version": "0.1.0",
+    "schema_version": 3
+  },
+  "environment": {
+    "os": "Microsoft Windows NT 10.0.26200.0 (Windows 11)",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13400F (10 cores, 16 logical processors)",
+    "ram_gb": 64,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "bundled_ffmpeg_version": "9.0.2 (git-2026-03-29-373a216)",
+    "bundled_ffprobe_version": "9.0.2 (git-2026-03-29-373a216)"
+  },
+  "binaries_and_hashes": {
+    "ffmpeg_sha256": "3256173F3F8BFFD7DF12227C68ADF68025EDB1832273A9530688A7BB1ED8EDEC",
+    "ffprobe_sha256": "F0D36ECBBDD3BCFAC3EFA078C96C7271C2E68B3810595552AC3B7F17E9A65C52",
+    "installer_sha256": "18639B7ACFFFD7FCE76A75C6F71A5CD73D8EF7120D80493C476FD806522BE55F",
+    "installer_path": "src-tauri/target/release/bundle/nsis/TinixCut_0.1.0_x64-setup.exe",
+    "installer_size_bytes": 59091894,
+    "tinixcut_bin_sha256": "44C7EDA23417AAB1659187A2CF6A83D9F721275D00060111683976948C379060"
+  },
+  "installer_and_distribution_metadata": {
+    "install_mode": "currentUser",
+    "admin_elevation_required": false,
+    "webview_install_mode": "downloadBootstrapper",
+    "shortcut_scope": "perUserStartMenu",
+    "historical_invalid_mcp_calibration_note": "The research figure of ~0.238 ms was calibrated on a minimal 1-track / 0-item project (where load takes 0.19 ms), NOT on the 200-item scale Fixture B. In Fixture B (20 tracks, 200 items, 20 transitions, 180 keyframes), disk read + serde parse alone takes 4.8-7.2 ms. Stateless tools reloading Fixture B from disk on every invocation cannot physically execute under 1.0 ms without caching or session state. The historical ~0.06 ms value is explicitly superseded as invalid/measurement-contaminated."
+  },
+  "fixture_specifications": {
+    "fixture_a": {
+      "duration_sec": 6.0,
+      "frame_rate": "30/1 fps",
+      "tracks_count": 3,
+      "video_tracks": 2,
+      "audio_tracks": 1,
+      "video_clips": 2,
+      "transitions": 1,
+      "transition_kind": "CrossDissolve",
+      "title_cards": 1,
+      "audio_beds": 1,
+      "audio_volume_keyframes": 3,
+      "schema_version": 3,
+      "validated_domain_invariants": true,
+      "topology_description": "Track 0 (Video): 2 sequential primary video clips + 1 track-owned CrossDissolve; Track 1 (Video): 1 Title Card (ItemKind::Text) with nonlinear KeyframeEasing::CubicBezier easing; Track 2 (Audio): 1 audio bed with nonlinear KeyframeEasing::CubicBezier volume automation"
+    },
+    "fixture_b": {
+      "duration_sec": 10.0,
+      "frame_rate": "30/1 fps",
+      "tracks_count": 20,
+      "video_tracks_count": 14,
+      "audio_tracks_count": 4,
+      "text_tracks_count": 2,
+      "total_items_count": 200,
+      "cross_dissolve_transitions_count": 20,
+      "visual_nonlinear_keyframes_count": 80,
+      "audio_volume_keyframes_count": 120,
+      "schema_version": 3,
+      "validated_domain_invariants": true
+    }
+  },
+  "benchmarks": {
+    "fixture_b_scale_operations": {
+      "iterations": 50,
+      "save_project_atomic_ms": {
+        "min": 4.801,
+        "median": 5.590,
+        "p95": 7.996,
+        "max": 8.876,
+        "ceiling_ms": 200.0,
+        "reference_budget_ms": 10.0,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "load_project_ms": {
+        "min": 4.801,
+        "median": 5.491,
+        "p95": 6.641,
+        "max": 7.280,
+        "ceiling_ms": 200.0,
+        "reference_budget_ms": 10.0,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "composition_plan_compilation_ms": {
+        "min": 0.283,
+        "median": 0.362,
+        "p95": 0.754,
+        "max": 2.000,
+        "ceiling_ms": 20.0,
+        "reference_budget_ms": 1.0,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "preview_semantic_sampling_latency_ms": {
+        "min": 0.160,
+        "median": 0.199,
+        "p95": 0.420,
+        "max": 1.387,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.5,
+        "ceiling_pass": true,
+        "budget_pass": true
+      }
+    },
+    "phase16_command_scale_on_fixture_b": {
+      "iterations": 50,
+      "clip_group_move_dry_run_ms": {
+        "min": 0.090,
+        "median": 0.103,
+        "p95": 0.328,
+        "max": 1.729,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.2,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "clip_group_move_execute_ms": {
+        "min": 0.092,
+        "median": 0.103,
+        "p95": 0.493,
+        "max": 0.718,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.2,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "clip_ripple_delete_dry_run_ms": {
+        "min": 0.086,
+        "median": 0.088,
+        "p95": 0.130,
+        "max": 0.192,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.2,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "batched_multi_delete_dry_run_ms": {
+        "min": 0.094,
+        "median": 0.097,
+        "p95": 0.125,
+        "max": 0.234,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.2,
+        "ceiling_pass": true,
+        "budget_pass": true
+      }
+    },
+    "jsonl_os_stdio_session": {
+      "iterations": 50,
+      "transport": "Real Release `tinixcut session` Subprocess over OS Stdio",
+      "project_inspect_ms": {
+        "min": 0.070,
+        "median": 0.081,
+        "p95": 0.133,
+        "max": 0.165,
+        "aggregate_wall_ms": 5.171,
+        "aggregate_avg_ms": 0.103,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.1,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "command_dry_run_ms": {
+        "min": 0.089,
+        "median": 0.110,
+        "p95": 0.149,
+        "max": 0.246,
+        "aggregate_wall_ms": 6.578,
+        "aggregate_avg_ms": 0.132,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.1,
+        "ceiling_pass": true,
+        "budget_pass": false
+      },
+      "command_apply_in_memory_ms": {
+        "min": 0.079,
+        "median": 0.085,
+        "p95": 0.151,
+        "max": 0.157,
+        "aggregate_wall_ms": 5.458,
+        "aggregate_avg_ms": 0.109,
+        "ceiling_ms": 10.0,
+        "reference_budget_ms": 0.1,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "overall_ac31_pass": false,
+      "ac31_status_note": "FAIL reference-host budget (dryRun median 110 µs > 100 µs reference budget due to staged transaction clone and stdio pipe serialization; ceiling < 10 ms passes)"
+    },
+    "mcp_os_stdio_protocol": {
+      "iterations": 30,
+      "transport": "Real Release `tinixcut mcp` Subprocess over OS Stdio",
+      "tinixcut_inspect_ms": {
+        "min": 3.164,
+        "median": 3.570,
+        "p95": 4.169,
+        "max": 4.888,
+        "aggregate_wall_ms": 110.574,
+        "aggregate_avg_ms": 3.686,
+        "ceiling_ms": 20.0,
+        "reference_budget_ms": 1.0,
+        "ceiling_pass": true,
+        "budget_pass": false
+      },
+      "tinixcut_dry_run_ms": {
+        "min": 3.096,
+        "median": 3.549,
+        "p95": 3.894,
+        "max": 3.929,
+        "aggregate_wall_ms": 108.090,
+        "aggregate_avg_ms": 3.603,
+        "ceiling_ms": 20.0,
+        "reference_budget_ms": 1.0,
+        "ceiling_pass": true,
+        "budget_pass": false
+      },
+      "tinixcut_apply_persistent_ms": {
+        "min": 6.833,
+        "median": 7.506,
+        "p95": 9.626,
+        "max": 15.664,
+        "aggregate_wall_ms": 651.829,
+        "aggregate_avg_ms": 21.728,
+        "ceiling_ms": 100.0,
+        "reference_budget_ms": 20.0,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "apply_persistence_verified_independent_reload": true,
+      "overall_ac34_pass": false,
+      "ac34_status_note": "FAIL reference-host budget (inspect median 3.570 ms > 1.0 ms and dry_run median 3.549 ms > 1.0 ms because stateless MCP tools reload the 200-item Fixture B project from disk on every invocation; qualification ceiling < 20 ms passes)"
+    },
+    "cpu_libx264_export_qualification": {
+      "iterations_per_resolution": 5,
+      "encoder": "libx264",
+      "audio_codec": "aac",
+      "export_720p30": {
+        "runs_wall_sec": [1.692, 1.805, 1.843, 1.779, 1.707],
+        "runs_rtf": [3.55, 3.32, 3.26, 3.37, 3.52],
+        "median_wall_sec": 1.779,
+        "median_rtf": 3.37,
+        "min_rtf": 3.26,
+        "max_rtf": 3.55,
+        "ceiling_rtf": 1.0,
+        "reference_budget_rtf": 2.20,
+        "ceiling_pass": true,
+        "budget_pass": true
+      },
+      "export_1080p30": {
+        "runs_wall_sec": [3.612, 3.287, 3.317, 3.202, 3.241],
+        "runs_rtf": [1.66, 1.83, 1.81, 1.87, 1.85],
+        "median_wall_sec": 3.287,
+        "median_rtf": 1.83,
+        "min_rtf": 1.66,
+        "max_rtf": 1.87,
+        "ceiling_rtf": 0.7,
+        "reference_budget_rtf": 1.0,
+        "ceiling_pass": true,
+        "budget_pass": true
+      }
+    }
+  },
+  "clean_machine_qualification_summary": {
+    "total_tests": 7,
+    "passed_tests": 7,
+    "failed_tests": 0,
+    "qualification_verdict": "PASS (Isolated Workstation Qualification)",
+    "detailed_report_path": "tests/evidence/clean_machine_qualification_report.json"
+  },
+  "deferred_gates_status": {
+    "true_clean_windows_vm_qualification": "DEFERRED / NON-BLOCKING (Host-isolated execution PASSED; True fresh clean Windows 10/11 VM qualification DEFERRED for personal-use v1)",
+    "hardware_acceleration_nvenc_qsv_amf": "DEFERRED / BEST-EFFORT (libx264 qualified as sole authoritative production export backend)",
+    "p16_ac_56_interactive_gui_qa": "DEFERRED / NOT PASS (External human pre-release GUI qualification)"
+  }
+}

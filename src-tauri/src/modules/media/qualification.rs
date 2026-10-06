@@ -4,8 +4,8 @@
 
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{
-    Asset, Crop, ItemKind, Keyframe, MediaKind, Project, ProjectSettings, TimelineItem, Track,
-    TrackKind, Transform, Transition, TransitionKind,
+    Asset, Crop, CutTransition, ItemKind, Keyframe, KeyframeEasing, KeyframeProperty, MediaKind,
+    Project, ProjectSettings, TimelineItem, Track, TrackKind, Transform, TransitionKind,
 };
 use crate::modules::export::{ExportEngine, ExportProfile};
 use crate::modules::media::ffmpeg::FFmpegService;
@@ -305,19 +305,19 @@ impl Phase12QualificationHarness {
             file_size: 512,
         });
 
-        // Track 1: Video track with clip + transform/opacity + fade transition
+        // Track 1: Video track with two sequential clips + track-owned CutTransition CrossDissolve + nonlinear keyframe
         let mut v_track = Track::new("Main Video".to_string(), TrackKind::Video);
         let mut item1 = TimelineItem::new(
-            Some(v_id),
+            Some(v_id.clone()),
             "Video Clip 1".to_string(),
             ItemKind::Video,
             TimeRange::new(
                 RationalTime::new(0, FrameRate::FPS_30),
-                RationalTime::new(60, FrameRate::FPS_30),
+                RationalTime::new(30, FrameRate::FPS_30),
             ),
             TimeRange::new(
                 RationalTime::new(0, FrameRate::FPS_30),
-                RationalTime::new(60, FrameRate::FPS_30),
+                RationalTime::new(30, FrameRate::FPS_30),
             ),
         )
         .unwrap();
@@ -335,11 +335,60 @@ impl Phase12QualificationHarness {
             right: 0.0,
             bottom: 0.0,
         };
-        item1.transition = Some(Transition {
-            kind: TransitionKind::FadeBlack,
-            duration: RationalTime::new(10, FrameRate::FPS_30),
-        });
+        let mut kf1 = Keyframe::new(
+            KeyframeProperty::Opacity,
+            RationalTime::new(0, FrameRate::FPS_30),
+            1.0,
+        );
+        kf1.outgoing_easing = KeyframeEasing::CubicBezier {
+            x1: 0.42,
+            y1: 0.0,
+            x2: 0.58,
+            y2: 1.0,
+        };
+        let kf2 = Keyframe::new(
+            KeyframeProperty::Opacity,
+            RationalTime::new(30, FrameRate::FPS_30),
+            0.9,
+        );
+        item1.keyframes.push(kf1);
+        item1.keyframes.push(kf2);
+
+        let mut item2 = TimelineItem::new(
+            Some(v_id),
+            "Video Clip 2".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::new(30, FrameRate::FPS_30),
+                RationalTime::new(30, FrameRate::FPS_30),
+            ),
+            TimeRange::new(
+                RationalTime::new(30, FrameRate::FPS_30),
+                RationalTime::new(30, FrameRate::FPS_30),
+            ),
+        )
+        .unwrap();
+        item2.transform = Transform {
+            position_x: 0.0,
+            position_y: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            rotation: 0.0,
+        };
+        item2.opacity = 1.0;
+
+        let cut_trans = CutTransition::new(
+            v_track.track_id.clone(),
+            item1.item_id.clone(),
+            item2.item_id.clone(),
+            TransitionKind::CrossDissolve,
+            RationalTime::new(10, FrameRate::FPS_30),
+        )
+        .unwrap();
+
         v_track.items.push(item1);
+        v_track.items.push(item2);
+        v_track.transitions.push(cut_trans);
         project.tracks.push(v_track);
 
         // Track 2: Text Overlay Track
@@ -359,6 +408,19 @@ impl Phase12QualificationHarness {
         )
         .unwrap();
         text_item.text_content = Some("TinixCut Release Candidate".to_string());
+        let mut kf_t1 = Keyframe::new(
+            KeyframeProperty::ScaleX,
+            RationalTime::new(0, FrameRate::FPS_30),
+            1.0,
+        );
+        kf_t1.outgoing_easing = KeyframeEasing::EaseInOut;
+        let kf_t2 = Keyframe::new(
+            KeyframeProperty::ScaleX,
+            RationalTime::new(30, FrameRate::FPS_30),
+            1.1,
+        );
+        text_item.keyframes.push(kf_t1);
+        text_item.keyframes.push(kf_t2);
         t_track.items.push(text_item);
         project.tracks.push(t_track);
 
@@ -378,16 +440,20 @@ impl Phase12QualificationHarness {
             ),
         )
         .unwrap();
-        audio_item.keyframes.push(Keyframe::new(
-            crate::modules::domain::KeyframeProperty::Volume,
+        let mut kf_a1 = Keyframe::new(
+            KeyframeProperty::Volume,
             RationalTime::new(0, FrameRate::FPS_30),
             0.2,
-        ));
-        audio_item.keyframes.push(Keyframe::new(
-            crate::modules::domain::KeyframeProperty::Volume,
+        );
+        kf_a1.outgoing_easing = KeyframeEasing::EaseIn;
+        audio_item.keyframes.push(kf_a1);
+
+        let kf_a2 = Keyframe::new(
+            KeyframeProperty::Volume,
             RationalTime::new(30, FrameRate::FPS_30),
             0.8,
-        ));
+        );
+        audio_item.keyframes.push(kf_a2);
         a_track.items.push(audio_item);
         project.tracks.push(a_track);
 

@@ -1,55 +1,69 @@
-{
-    "report_version": "1.1.0",
-    "timestamp_utc": "2026-10-04T15:13:18Z",
-    "qualification_type": "Isolated Workstation Qualification",
-    "environment": "Windows Isolated Workstation (Sanitized PATH, repo and toolchain dependencies excluded from execution path; executed on host Windows, not fresh clean VM)",
-    "os_info": "Microsoft Windows NT 10.0.26200.0",
-    "total_tests": 5,
-    "passed_tests": 5,
-    "failed_tests": 0,
-    "qualification_verdict": "PASS (Isolated Workstation Qualification)",
-    "clean_machine_verdict": "DEFERRED / NON-BLOCKING (Host-isolated execution PASSED; True fresh clean Windows 10/11 VM qualification DEFERRED for personal-use v1)",
-    "qualification_notes": "PATH was sanitized and repository/toolchain dependencies were excluded from the execution path. However, tests executed on the current host Windows environment and therefore do not prove behavior on a fresh, pristine Windows installation.",
-    "deferred_items": [
-        "True clean Windows 10/11 VM qualification: DEFERRED / non-blocking for personal-use v1.",
-        "Hardware acceleration NVENC/QSV/AMF qualification: DEFERRED / best-effort.",
-        "CPU/libx264 remains the only required qualified export path."
-    ],
-    "results": [
-        {
-            "id": "CM-01",
-            "name": "Isolated install via NSIS and app-owned resource staging",
-            "passed": true,
-            "duration_ms": 8208,
-            "details": "Installer exit code: 0, App exe: True, FFmpeg hash match: True"
-        },
-        {
-            "id": "CM-02",
-            "name": "Bundled FFmpeg and FFprobe binary execution in sanitized PATH",
-            "passed": true,
-            "duration_ms": 287,
-            "details": "FFmpeg: ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers, FFprobe: ffprobe version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers"
-        },
-        {
-            "id": "CM-03",
-            "name": "Probe, thumbnail, and proxy generation using bundled binaries in isolated environment",
-            "passed": true,
-            "duration_ms": 1006,
-            "details": "Probe 1080p30: True, Thumb: True (size: 35076 bytes), Proxy 540p: True"
-        },
-        {
-            "id": "CM-04",
-            "name": "Software libx264 export and project save/reopen round-trip in isolated environment",
-            "passed": true,
-            "duration_ms": 397,
-            "details": "Export MP4 valid: True, Video: h264 (1920x1080), Audio: aac, Project round-trip: True"
-        },
-        {
-            "id": "CM-05",
-            "name": "Upgrade rehearsal and uninstallation with user data preservation in isolated environment",
-            "passed": true,
-            "duration_ms": 13170,
-            "details": "Upgrade exit code: 0, App binaries cleanly removed: True, User project & export preserved: True"
-        }
-    ]
+﻿{
+    "report_version":  "1.2.0",
+    "timestamp_utc":  "2026-10-06T13:42:49Z",
+    "qualification_type":  "Isolated Workstation Qualification (CM-01..CM-07)",
+    "environment":  "Windows Isolated Workstation (Sanitized PATH, repo and toolchain dependencies excluded from execution path; executed on host Windows, not fresh clean VM)",
+    "os_info":  "Microsoft Windows NT 10.0.26200.0",
+    "total_tests":  7,
+    "passed_tests":  7,
+    "failed_tests":  0,
+    "qualification_verdict":  "PASS (Isolated Workstation Qualification)",
+    "clean_machine_verdict":  "DEFERRED / NON-BLOCKING (Host-isolated execution PASSED; True fresh clean Windows 10/11 VM qualification DEFERRED for personal-use v1)",
+    "qualification_notes":  "PATH was sanitized and repository/toolchain dependencies were excluded from the execution path. All 7 CM criteria validated against current Schema-v3 semantics.",
+    "deferred_items":  [
+                           "True clean Windows 10/11 VM qualification: DEFERRED / non-blocking for personal-use v1.",
+                           "Hardware acceleration NVENC/QSV/AMF qualification: DEFERRED / best-effort.",
+                           "P16-AC-56 interactive Windows GUI qualification: DEFERRED / NOT PASS."
+                       ],
+    "results":  [
+                    {
+                        "id":  "CM-06",
+                        "name":  "Clean User-Scope Installation",
+                        "passed":  true,
+                        "duration_ms":  8226,
+                        "details":  "Installer exit code: 0, installMode: currentUser (currentUser, no admin elevation required), webviewInstallMode: downloadBootstrapper (downloadBootstrapper), tinixcut.exe exists: True, bundled resources staged: True, startMenuShortcut: True"
+                    },
+                    {
+                        "id":  "CM-01",
+                        "name":  "Bundled Binary Self-Sufficiency",
+                        "passed":  true,
+                        "duration_ms":  803,
+                        "details":  "FFmpeg: 9.0.2, FFprobe: 9.0.2, FFmpeg SHA256 match: True, FFprobe SHA256 match: True"
+                    },
+                    {
+                        "id":  "CM-02",
+                        "name":  "Mandatory Software Fallback",
+                        "passed":  true,
+                        "duration_ms":  697,
+                        "details":  "Software libx264 fallback render successful, video: h264, audio: aac"
+                    },
+                    {
+                        "id":  "CM-03",
+                        "name":  "Spaces and Unicode Path Robustness",
+                        "passed":  true,
+                        "duration_ms":  314,
+                        "details":  "Unicode probe: True, Schema v3 project round-trip: True, Export to Unicode path: True"
+                    },
+                    {
+                        "id":  "CM-04",
+                        "name":  "Read-Only Media Protection",
+                        "passed":  true,
+                        "duration_ms":  272,
+                        "details":  "Read-only enforced: True, Probed: True, Exported: True, Unmutated hash match: True"
+                    },
+                    {
+                        "id":  "CM-05",
+                        "name":  "Atomic Persistence \u0026 Recovery",
+                        "passed":  true,
+                        "duration_ms":  16,
+                        "details":  "Canonical project preserved: True, Schema v3 intact at revision 10"
+                    },
+                    {
+                        "id":  "CM-07",
+                        "name":  "User Data Preservation on Uninstall",
+                        "passed":  true,
+                        "duration_ms":  4068,
+                        "details":  "Application binaries cleanly removed: True, .tcproj preserved (SHA256: 853CEB50871E87E4CB046D035E3600CD45CDB74B994AF3C8CEE470CE4BAE94F0, match: True), external media preserved (SHA256: A382A120C2D333DC088FA5648D40438AFC83BA5D92A0AE4DDDF977294691FE42, match: True), rendered export preserved (SHA256: 223CD4B4DF54F071377581AF8E440CE15B0533C3847DBA6C315A33C0B65A8BA3, match: True)"
+                    }
+                ]
 }
