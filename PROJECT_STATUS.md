@@ -44,11 +44,11 @@ Phase 17 Research Gate is COMPLETE — READY FOR PLANNING; implementation is NOT
   1. `P16-AC-56`: Real interactive Windows GUI qualification deferred (environment constraint; automated tests do not substitute).
   2. `True Clean Windows 10/11 VM Qualification`: Provisioning a sanitized clean virtual machine without dev tools remains an external release gate prior to distribution.
 - **Reconciled Research Conclusions**:
-  1. Dual-fixture benchmark framework standardized: Fixture A (semantic-rich Schema-v3, 6.0s @ 30fps) and Fixture B (scale Schema-v3, 20 tracks, 200 items, 10 CrossDissolves, 10.0s @ 30fps).
-  2. Empirical release baselines verified on reference workstation: Fixture B save ~3.89 ms, load ~2.99 ms, compile ~0.28 ms, sampling ~0.22 ms; Phase-16 commands 49–64 µs; JSONL 18–23 µs; MCP inspect ~0.24 ms, dry-run ~0.24 ms, apply ~12.20 ms; CPU export 720p RTF $\ge 2.20\times$, 1080p RTF $\ge 1.00\times$.
+  1. Dual-fixture benchmark framework standardized: Fixture A (semantic-rich Schema-v3, 6.0s @ 30fps) and Fixture B (scale Schema-v3, 20 tracks [14 video, 4 audio, 2 text], 200 items, 20 CrossDissolves, 10.0s @ 30fps).
+  2. Empirical release baselines verified on reference workstation: Fixture B save ~3.89 ms, load ~2.99 ms, compile ~0.28 ms, sampling ~0.22 ms; Phase-16 commands 49–64 µs; JSONL 18–23 µs; MCP inspect ~0.24 ms, dry-run ~0.24 ms, apply ~12.20 ms; CPU export (preset fast, CRF 23) 720p RTF $\ge 2.20\times$, 1080p RTF $\ge 1.00\times$.
   3. Prior invalid MCP ~0.06 ms measurements disclosed and superseded: root cause was wire parameter `_meta` formatting error returning JSON-RPC `-32602` before tool dispatch. Validated ~12.2 ms OS-stdio measurements durably recorded.
   4. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
-  5. Host-Isolated Workstation qualification contract (`CM-01` through `CM-07`).
+  5. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
   6. Normative contract `PR-01` through `PR-18` accepted.
 - **Next Action**: ChatGPT authors plan_phase17.md using reconciled research state.
 

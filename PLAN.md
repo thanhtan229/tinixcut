@@ -1418,12 +1418,12 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 **ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  
 
 ### High-Level Scope Ceiling
-1. **Schema-v3 Performance Requalification Harness:** Empirical qualification of core operations, long-project scale (Fixture B), Phase-16 commands, and transports (JSONL and MCP stdio).
-2. **Reproducible Non-Flaky Regression Evidence:** Dedicated opt-in performance benchmark suite isolated from functional CI under `#[ignore]`.
-3. **Release Packaging Synchronization:** Pinned Tauri 2.12 NSIS installer profile and synchronization of packaging qualification tests (`src-tauri/tests/qualification.rs`) to Schema v3.
-4. **Host-Isolated Workstation Qualification:** Formal verification under `CM-01` through `CM-07` protocols.
-5. **Formalization of External Release Gates:** Explicit tracking and preservation of `P16-AC-56` (interactive Windows GUI QA) and True Clean VM qualification.
-6. **Provenance & Test Baseline Verification:** Complete functional test pass and release artifact hygiene verification.
+1. **Deterministic Dual Schema-v3 Fixtures:** Standardization of Fixture A (semantic-rich) and Fixture B (20 tracks [14 video, 4 audio, 2 text], 200 items, 20 CrossDissolves scale).
+2. **Opt-in Performance Qualification Harness:** Dedicated release-profile benchmark suite isolated from functional CI under `#[ignore]`.
+3. **Host-Isolated Workstation CM-01..CM-07:** Formal verification of bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic save, user-scope install, and uninstall data preservation.
+4. **Current Release/Package Synchronization:** Pinned Tauri 2.12 NSIS installer profile (`downloadBootstrapper`, `currentUser`) and synchronization of qualification module (`src-tauri/src/modules/media/qualification.rs`) to Schema v3.
+5. **Durable Release Evidence:** Cryptographic SHA-256 hashes, build provenance, environment metadata, and qualification reports.
+6. **External Gate Documentation:** Explicit tracking and preservation of `P16-AC-56` (interactive Windows GUI QA) and True Clean VM qualification.
 
 ### Explicit Exclusions
 - NVENC/QSV/AMF hardware acceleration qualification without suitable multi-vendor hardware environments;

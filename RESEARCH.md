@@ -2690,12 +2690,17 @@ To ensure deterministic, reproducible benchmarking across runs, two canonical fi
 - **Target:** Scale sensitivity, serialization/deserialization limits, composition compilation, multi-item commands, and transport serialization cost.
 - **Duration:** 10.0 seconds @ 30 fps (300 frames canonical duration).
 - **Topology:**
-  - 20 timeline tracks (12 video tracks, 8 audio tracks);
-  - 200 timeline items (120 video clips, 80 audio clips);
-  - 10 video `CrossDissolve` cut transitions;
+  - 20 tracks total:
+    - 14 video tracks (Tracks 0..13)
+    - 4 audio tracks (Tracks 14..17)
+    - 2 text/overlay tracks (Tracks 18..19)
+  - 200 items total (10 sequential items per track, 30 frames each = 300 frames / 10.0 seconds total);
+  - 20 video `CrossDissolve` cut transitions:
+    - Distributed across Video Tracks 0..3 (4 tracks)
+    - 5 pairwise cut transitions per track (20 total)
   - Mixed timeline rates and source timebases;
-  - Nonlinear Bézier keyframes distributed across clips;
-  - Audio gain automation schedules across multiple audio tracks.
+  - 60+ nonlinear visual Bézier keyframes (distributed across video clips);
+  - 120 audio volume keyframes (3 keyframes per clip across 40 audio items).
 
 ---
 
@@ -2755,16 +2760,16 @@ Physical disk operations on Fixture B account for $0.19\text{ ms}$ (`load_projec
 4. `CommandService` transactional execution and receipt generation;
 5. Atomic temporary write, fsync, and replace persistence;
 6. JSON-RPC response serialization and OS pipe write.  
-Sequential throughput across 30 measured requests was verified in aggregate at $12.31\text{ ms/call}$, demonstrating $< 1\%$ variance.
+Sequential throughput across 30 measured requests was verified in aggregate at $12.31\text{ ms/call}$, demonstrating $< 1\%$ variance. Validated execution confirmed: JSON-RPC IDs matched, `isError == false`, `operationsApplied == 1`, single revision increment, and durable on-disk persistence.
 
-### 4.5 Export Throughput on Fixture A (5 repeated runs, 6.0s timeline, bundled FFmpeg 9.0.2, CPU `libx264` ultrafast)
+### 4.5 Export Throughput on Fixture A (5 repeated runs, 6.0s timeline, bundled FFmpeg 9.0.2, CPU `libx264` preset `fast`, CRF 23)
 
 | Profile | Median Time | Min RTF | Median RTF | Reference-Host Budget | Qualification Ceiling |
 |---|---|---|---|---|---|
 | 720p30 (1280x720) | 2.343 s | 2.42x | 2.56x | $\text{RTF} \ge 2.20\times$ | $\text{RTF} \ge 1.00\times$ |
 | 1080p30 (1920x1080) | 4.791 s | 1.15x | 1.25x | $\text{RTF} \ge 1.00\times$ | $\text{RTF} \ge 0.50\times$ |
 
-*Clarification: The minimum observed 720p RTF across 5 runs was 2.42x (exceeding the 2.20x budget). The 1080p budget of $\text{RTF} \ge 1.00\times$ is strictly a reference-host baseline; slower multi-core hardware will exhibit proportionally lower RTF under CPU encoding.*
+*Clarification: The empirical benchmark was conducted with `libx264` preset `fast` (CRF 23). The minimum observed 720p RTF across 5 runs was 2.42x (exceeding the 2.20x budget). The 1080p budget of $\text{RTF} \ge 1.00\times$ is strictly a reference-host baseline; slower multi-core hardware will exhibit proportionally lower RTF under CPU encoding.*
 
 ---
 
@@ -2774,7 +2779,7 @@ Sequential throughput across 30 measured requests was verified in aggregate at $
 To reconcile the tension between detecting performance degradation and preventing flaky test failures across divergent hardware, performance criteria are classified into three distinct tiers:
 
 1. **Qualification Ceilings (Hard Guardrails):**  
-   Generous upper bounds designed to catch gross algorithmic regressions ($O(N^2)$ loops, deadlocks, memory leaks) on any reasonably capable workstation. Failure indicates a fundamental defect.
+   Generous upper bounds designed to catch gross algorithmic regressions ($O(N^2)$ loops, deadlocks, memory leaks) on any reasonably capable workstation in the opt-in qualification suite. Failure indicates a fundamental defect.
 2. **Reference-Host Budgets (Target Baselines):**  
    Concrete latency targets calibrated against the specified reference developer workstation (Intel i5-13400F, NVMe SSD). Used during milestone qualification and performance audits to confirm efficiency on target-class hardware.
 3. **Informational Baselines (Tracking Only):**  
@@ -2802,34 +2807,55 @@ Machine-dependent latency assertions **MUST NEVER** run inside default automated
 
 ## 7. Packaging & Installer Synchronization Policy
 
-1. **Product Identity & Version:**  
+1. **Product Identity & Version (Authoritative `tauri.conf.json`):**  
    - Application Name: `TinixCut`
    - Identifier: `com.tinixcut.editor`
    - Current Version: `0.1.0`
-   - Packaging Format: NSIS standalone executable installer configured for per-user installation (`currentUser`, `downloadBootstrapper = false`).
+   - WebView2 Install Mode: `"webviewInstallMode": { "type": "downloadBootstrapper" }`
+   - NSIS Configuration: `"nsis": { "installMode": "currentUser", "languages": ["English"] }`
 2. **App-Owned Bundled Binaries:**  
-   Bundled FFmpeg and FFprobe 9.0.2 Essentials executables reside in `src-tauri/bin/` as app-owned packaged resources resolved via `MediaBinaryResolver`.
+   Bundled FFmpeg and FFprobe 9.0.2 Essentials executables reside in `src-tauri/resources/bin/` as app-owned packaged resources resolved via `MediaBinaryResolver`.
 3. **Binary Tracking Prohibition:**  
    Compiled distribution binaries (e.g., `TinixCut_0.1.0_x64-setup.exe`, `.pdb` debug symbols) **MUST NOT** be committed to the Git repository. Release integrity is preserved durably via:
    - Cryptographic SHA-256 checksums;
    - Build provenance and toolchain metadata;
    - Automated packaging qualification test reports.
 4. **Qualification Harness Synchronization:**  
-   The Phase 12 packaging qualification suite (`src-tauri/tests/qualification.rs`) contains stale Schema-v1 mock transition markers (`"Dissolve"`). It must be synchronized to Schema v3 (`CrossDissolve`) during Phase 17 implementation planning.
+   The actual qualification module resides at `src-tauri/src/modules/media/qualification.rs` (orchestrated via `tests/clean_machine_qualification.ps1`). It contains stale Schema-v1 mock transition markers (`item.transition: Some(Transition { kind: TransitionKind::FadeBlack, ... })`). It must be synchronized to Schema v3 (`track.transitions` with `CutTransition` / `CrossDissolve` and nonlinear keyframes) during Phase 17.
 
 ---
 
 ## 8. Host-Isolated Workstation Qualification Contract (`CM-01` through `CM-07`)
 
-The Host-Isolated Workstation qualification protocol establishes a rigorous local environment standard that complements, but does not replace, clean virtual machine testing:
+The accepted Host-Isolated Workstation qualification contract verifies essential release properties in a controlled developer workstation environment:
 
-- **`CM-01` Controlled Workspace:** Working directory verified 100% clean against an authoritative Git commit hash; no untracked artifacts or uncommitted modifications.
-- **`CM-02` Pinned Toolchain:** Verification executed under pinned, approved toolchain versions (Rust 1.85+, Node 20+, pnpm 9+, Vite 6+, Tauri 2.12).
-- **`CM-03` Bundled Media Binaries:** Cryptographic verification that bundled FFmpeg/ffprobe binaries in `src-tauri/bin/` match known release signatures.
-- **`CM-04` Release Compilation:** All performance benchmarks and qualification binaries compiled under `--release` profile with maximum optimization (`opt-level = 3`, LTO enabled).
-- **`CM-05` Disposable Cache Cleanliness:** All derived caches (waveforms, thumbnails, export temp directories) generated in isolated temporary paths and verified for zero leakage upon completion.
-- **`CM-06` Background Interference Suppression:** Verification executed without concurrent background indexing, compilations, or high-CPU workloads.
-- **`CM-07` Qualification Complementarity:** Explicit recognition that Host-Isolated Workstation qualification provides high confidence on developer hardware, but does NOT replace formal Clean VM qualification.
+- **`CM-01` — Bundled Binary Self-Sufficiency:**  
+  Run with developer FFmpeg/toolchains stripped from `PATH`. Packaged application resolves bundled FFmpeg/ffprobe exclusively through `MediaBinaryResolver`.
+- **`CM-02` — Mandatory Software Fallback:**  
+  When hardware acceleration is unavailable or failing, bundled CPU `libx264` succeeds without crash or project corruption.
+- **`CM-03` — Spaces and Unicode Path Robustness:**  
+  Projects and media located under file paths containing spaces and non-ASCII Unicode characters open, save, probe, and export correctly.
+- **`CM-04` — Read-Only Media Protection:**  
+  External read-only media assets can be imported, probed, and rendered without modification or write-permission failure.
+- **`CM-05` — Atomic Persistence & Recovery:**  
+  Interrupted save preserves valid project and recovery state; zero file truncation or corrupted project overwrite.
+- **`CM-06` — Clean User-Scope Installation:**  
+  NSIS `currentUser` installation succeeds without admin elevation and creates the expected application executables, shortcuts, and registry entries.
+- **`CM-07` — User Data Preservation on Uninstall:**  
+  Application uninstall cleanly removes binaries and program files while strictly preserving user data: `.tcproj` project files, external source media, and rendered export artifacts.
+
+### Test-Environment Prerequisites
+The following operational conditions serve as test-environment prerequisites for executing `CM-01..CM-07`, but do NOT replace the semantic contracts above:
+- Clean working directory verified against authoritative Git commit hash;
+- Pinned toolchain versions (Rust 1.85+, Node 20+, pnpm 9+, Vite 6+, Tauri 2.12);
+- Release compilation with full optimization (`opt-level = 3`, LTO enabled);
+- Cryptographic SHA-256 verification of bundled FFmpeg/ffprobe binaries;
+- Disposable cache cleanliness with zero temp leakage;
+- Background workload suppression during benchmark runs;
+- Host hardware and environment metadata logging.
+
+### Qualification Complementarity
+`Host-Isolated Workstation Qualification COMPLEMENTS but does not replace True Clean Windows VM Qualification.`
 
 ---
 
@@ -2850,22 +2876,35 @@ Two external release gates remain explicitly tracked and deferred:
 
 The following eighteen (18) normative requirements govern the definition, planning, and execution of Phase 17:
 
-- **`PR-01` Scope Ceiling:** Phase 17 is strictly bounded to performance requalification, release package synchronization, host-isolated workstation qualification, and external gate formalization.
-- **`PR-02` Production Code Protection:** Phase 17 is qualification-first; zero modifications to production code in `src/` or `src-tauri/src/` are authorized unless an unambiguous defect is verified.
-- **`PR-03` Schema v3 Invariance:** The project schema remains strictly Schema v3; no Schema v4 or domain persistence migration is permitted.
-- **`PR-04` ADR-006 Omission:** ADR-006 is NOT required because Phase 17 introduces zero architectural, schema, or protocol changes.
-- **`PR-05` Fixture A Standardization:** Fixture A (6.0s @ 30fps, 3 tracks, 720p/1080p, CrossDissolve, Bézier keyframes, audio automation) is the canonical semantic-rich fixture.
-- **`PR-06` Fixture B Standardization:** Fixture B (10.0s @ 30fps, 20 tracks, 200 items, 10 CrossDissolves, scale stress) is the canonical long-project scale fixture.
-- **`PR-07` Semantic Sampling Terminology:** `sample_preview_at` measurements must be identified as composition sampling latency, not interactive display pacing.
-- **`PR-08` Empirical Benchmark Rigor:** Benchmarks must be executed on Rust release profile with warmup iterations, isolated directories, and verified response payloads.
-- **`PR-09` MCP Validation Rigor:** All MCP benchmarks must validate JSON-RPC success envelopes; invalid ~0.06 ms measurements are durably superseded by validated ~12.2 ms OS-stdio figures.
-- **`PR-10` Three-Tier Timing Budgets:** Performance assertions must adhere to the three-tier model (Qualification Ceilings, Reference-Host Budgets, Informational Baselines).
-- **`PR-11` CI Isolation Guarantee:** Machine-dependent latency assertions must remain isolated under `#[ignore]` and never execute in standard functional CI.
-- **`PR-12` CPU Authoritative Export:** Bundled FFmpeg CPU `libx264` is the sole authoritative export backend; export throughput targets are $\text{RTF} \ge 2.20\times$ (720p) and $\text{RTF} \ge 1.00\times$ (1080p) on reference hardware.
-- **`PR-13` Hardware Acceleration Deferral:** GPU hardware acceleration remains non-authoritative fallback; hardware qualification is deferred.
-- **`PR-14` Packaging Synchronization:** Release package configuration and qualification tests (`qualification.rs`) must be synchronized to Schema v3.
-- **`PR-15` Binary Tracking Prohibition:** Transient installer binaries must not be committed to Git; release evidence is preserved via SHA-256 hashes and build metadata.
-- **`PR-16` Host-Isolated Execution:** Workstation qualification must comply with conditions `CM-01` through `CM-07`.
-- **`PR-17` P16-AC-56 Tracking:** `P16-AC-56` interactive GUI qualification remains explicitly `DEFERRED / NOT PASS`.
-- **`PR-18` True Clean-VM Tracking:** Pristine clean virtual machine qualification remains an external release gate.
+- **`PR-01`:** Two deterministic Schema-v3 workloads: Fixture A semantic-rich (6.0s @ 30fps, 3 tracks, 720p/1080p, CrossDissolve, Bézier keyframes, audio volume automation) + Fixture B 20-track/200-item scale (14 video tracks, 4 audio tracks, 2 text tracks, 20 CrossDissolves, 60+ Bézier keyframes, 120 audio keyframes).
+- **`PR-02`:** Release-profile benchmark methodology with warmups and median/P95/aggregate reporting where applicable.
+- **`PR-03`:** Ordinary functional CI **MUST NEVER** fail on machine-dependent wall-clock or RTF thresholds.
+- **`PR-04`:** Performance budgets execute only through explicit opt-in release qualification suite (`--ignored`).
+- **`PR-05`:** Strict distinction between:
+  - Qualification Ceilings (guardrails against gross regressions across any machine);
+  - Reference-Host Regression Budgets (calibrated against reference workstation);
+  - Informational Baselines (longitudinal tracking).
+- **`PR-06`:** `sample_preview_at` = preview semantic sampling latency, **NOT** physical display/playback qualification.
+- **`PR-07`:** CPU/`libx264` = sole authoritative required export baseline. Hardware encoders remain best-effort with software fallback.
+- **`PR-08`:** Reference-host CPU export budgets:
+  - 720p30 RTF $\ge 2.20\times$
+  - 1080p30 RTF $\ge 1.00\times$
+  (using `libx264` preset `fast`, CRF 23).
+- **`PR-09`:** Exported MP4 must satisfy accepted container/stream validity and timeline duration invariance. No unsupported claim of physical A/V sync or live dropped frames.
+- **`PR-10`:** Phase-16 scale commands on Fixture B: Reference-host median $< 200\text{ µs}$.
+- **`PR-11A`:** JSONL steady-state OS-stdio in-memory operations (`saveAfter:false`): Reference-host median $< 100\text{ µs}$.
+- **`PR-11B`:** MCP OS-stdio inspect/dry-run: Reference-host median $< 1.0\text{ ms}$. Explicit qualification ceiling $< 20\text{ ms}$.
+- **`PR-11C`:** MCP OS-stdio persistent apply: full reload + CommandService transaction + atomic save. Reference-host median $< 20\text{ ms}$. Explicit qualification ceiling $< 100\text{ ms}$.
+- **`PR-12`:** True Clean Windows 10/11 VM qualification remains **DEFERRED / EXTERNAL RELEASE GATE**.
+- **`PR-13`:** Host-Isolated Workstation `CM-01..CM-07` complements, but does not replace, True Clean VM qualification.
+- **`PR-14`:** `P16-AC-56` remains **DEFERRED / NOT PASS** as external human pre-release GUI qualification.
+- **`PR-15`:** Generated installer/release executables are transient artifacts and **MUST NOT** be committed to Git.
+- **`PR-16`:** Durable release evidence records:
+  - SHA-256 hashes;
+  - Version metadata;
+  - Git provenance;
+  - Environment metadata;
+  - Qualification results/logs.
+- **`PR-17`:** Schema v3 invariant. No Schema v4 or creator-feature expansion in Phase 17.
+- **`PR-18`:** Phase 17 is qualification-first. Production optimization/refactoring is unauthorized unless a measured accepted ceiling is violated and remediation scope is explicitly approved.
 
