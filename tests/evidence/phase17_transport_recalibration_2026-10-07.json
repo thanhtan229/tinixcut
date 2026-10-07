@@ -1,0 +1,257 @@
+{
+  "measured_local_date": "2026-10-07",
+  "git_head": "92a225899686e0440536b59f30f9fb16d3156511",
+  "release_binary": {
+    "path": "src-tauri/target/release/tinixcut.exe",
+    "sha256": "98bdd0efd23a73366f94d85f16cfdbf7a2ff05d5cf61d6a99fd5f7930a0208a1",
+    "last_write_utc": "2026-10-07T09:50:35.1839207Z"
+  },
+  "method": {
+    "jsonl": "5 warmups + 50 measured requests per operation/workload; real Release tinixcut session over OS stdin/stdout; saveAfter=false for apply",
+    "mcp": "5 warmups + 30 measured requests per operation/workload; real Release tinixcut mcp over OS stdin/stdout; process startup and server/discovery handshake excluded",
+    "timer": "Includes stdin write+flush and correlated response readline; excludes client-side request serialization and response JSON parsing",
+    "percentiles": "median and nearest-rank P95; aggregate average is arithmetic mean of timed samples",
+    "response_validation": "Successful JSONL ok and requestId match; successful MCP result and JSON-RPC id match",
+    "workloads": [
+      {
+        "bytes": 772,
+        "name": "W0",
+        "items": 0,
+        "tracks": 1
+      },
+      {
+        "bytes": 11868,
+        "name": "W1",
+        "items": 4,
+        "tracks": 3
+      },
+      {
+        "bytes": 415240,
+        "name": "W2",
+        "items": 200,
+        "tracks": 20
+      }
+    ]
+  },
+  "results": [
+    {
+      "workload": "W0",
+      "transport": "jsonl_stdio",
+      "metrics": {
+        "command.dryRun": {
+          "n": 50,
+          "median_ms": 0.0642,
+          "p95_ms": 0.0957,
+          "aggregate_wall_ms": 26.8131,
+          "aggregate_avg_ms": 0.065514,
+          "wall_throughput_avg_ms": 0.536262,
+          "min_ms": 0.0485,
+          "max_ms": 0.1081
+        },
+        "project.inspect": {
+          "n": 50,
+          "median_ms": 0.04355,
+          "p95_ms": 0.0849,
+          "aggregate_wall_ms": 16.6231,
+          "aggregate_avg_ms": 0.0515,
+          "wall_throughput_avg_ms": 0.332462,
+          "min_ms": 0.0402,
+          "max_ms": 0.0891
+        },
+        "command.apply.saveAfterFalse": {
+          "n": 50,
+          "median_ms": 0.05245,
+          "p95_ms": 0.0891,
+          "aggregate_wall_ms": 16.1519,
+          "aggregate_avg_ms": 0.057348,
+          "wall_throughput_avg_ms": 0.323038,
+          "min_ms": 0.0447,
+          "max_ms": 0.0937
+        }
+      }
+    },
+    {
+      "workload": "W0",
+      "transport": "mcp_stdio",
+      "metrics": {
+        "tinixcut_dry_run": {
+          "n": 30,
+          "median_ms": 0.2217,
+          "p95_ms": 0.3276,
+          "aggregate_wall_ms": 15.7098,
+          "aggregate_avg_ms": 0.22696,
+          "wall_throughput_avg_ms": 0.52366,
+          "min_ms": 0.1622,
+          "max_ms": 0.4234
+        },
+        "tinixcut_apply": {
+          "n": 30,
+          "median_ms": 9.703,
+          "p95_ms": 13.7358,
+          "aggregate_wall_ms": 319.062,
+          "aggregate_avg_ms": 9.632717,
+          "wall_throughput_avg_ms": 10.6354,
+          "min_ms": 4.4787,
+          "max_ms": 14.1054
+        },
+        "tinixcut_inspect": {
+          "n": 30,
+          "median_ms": 0.24065,
+          "p95_ms": 0.3396,
+          "aggregate_wall_ms": 21.5371,
+          "aggregate_avg_ms": 0.249963,
+          "wall_throughput_avg_ms": 0.717903,
+          "min_ms": 0.1739,
+          "max_ms": 0.4565
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "workload": "W1",
+      "transport": "jsonl_stdio",
+      "metrics": {
+        "command.dryRun": {
+          "n": 50,
+          "median_ms": 0.0673,
+          "p95_ms": 0.0851,
+          "aggregate_wall_ms": 21.5565,
+          "aggregate_avg_ms": 0.068134,
+          "wall_throughput_avg_ms": 0.43113,
+          "min_ms": 0.0535,
+          "max_ms": 0.1327
+        },
+        "project.inspect": {
+          "n": 50,
+          "median_ms": 0.05765,
+          "p95_ms": 0.1069,
+          "aggregate_wall_ms": 25.5148,
+          "aggregate_avg_ms": 0.063648,
+          "wall_throughput_avg_ms": 0.510296,
+          "min_ms": 0.051,
+          "max_ms": 0.1137
+        },
+        "command.apply.saveAfterFalse": {
+          "n": 50,
+          "median_ms": 0.0758,
+          "p95_ms": 0.0987,
+          "aggregate_wall_ms": 21.442,
+          "aggregate_avg_ms": 0.075174,
+          "wall_throughput_avg_ms": 0.42884,
+          "min_ms": 0.0588,
+          "max_ms": 0.1092
+        }
+      }
+    },
+    {
+      "workload": "W1",
+      "transport": "mcp_stdio",
+      "metrics": {
+        "tinixcut_dry_run": {
+          "n": 30,
+          "median_ms": 0.3368,
+          "p95_ms": 0.4195,
+          "aggregate_wall_ms": 22.9641,
+          "aggregate_avg_ms": 0.355473,
+          "wall_throughput_avg_ms": 0.76547,
+          "min_ms": 0.291,
+          "max_ms": 0.8054
+        },
+        "tinixcut_apply": {
+          "n": 30,
+          "median_ms": 10.11,
+          "p95_ms": 14.4644,
+          "aggregate_wall_ms": 337.7317,
+          "aggregate_avg_ms": 10.369227,
+          "wall_throughput_avg_ms": 11.257723,
+          "min_ms": 6.4789,
+          "max_ms": 16.9514
+        },
+        "tinixcut_inspect": {
+          "n": 30,
+          "median_ms": 0.32305,
+          "p95_ms": 0.421,
+          "aggregate_wall_ms": 28.8956,
+          "aggregate_avg_ms": 0.332273,
+          "wall_throughput_avg_ms": 0.963187,
+          "min_ms": 0.2841,
+          "max_ms": 0.441
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "workload": "W2",
+      "transport": "jsonl_stdio",
+      "metrics": {
+        "command.dryRun": {
+          "n": 50,
+          "median_ms": 0.1098,
+          "p95_ms": 0.1449,
+          "aggregate_wall_ms": 19.9262,
+          "aggregate_avg_ms": 0.11412,
+          "wall_throughput_avg_ms": 0.398524,
+          "min_ms": 0.0949,
+          "max_ms": 0.155
+        },
+        "project.inspect": {
+          "n": 50,
+          "median_ms": 0.08,
+          "p95_ms": 0.1452,
+          "aggregate_wall_ms": 64.8668,
+          "aggregate_avg_ms": 0.097056,
+          "wall_throughput_avg_ms": 1.297336,
+          "min_ms": 0.0664,
+          "max_ms": 0.3316
+        },
+        "command.apply.saveAfterFalse": {
+          "n": 50,
+          "median_ms": 0.1034,
+          "p95_ms": 0.1369,
+          "aggregate_wall_ms": 20.5033,
+          "aggregate_avg_ms": 0.11053,
+          "wall_throughput_avg_ms": 0.410066,
+          "min_ms": 0.0943,
+          "max_ms": 0.1648
+        }
+      }
+    },
+    {
+      "workload": "W2",
+      "transport": "mcp_stdio",
+      "metrics": {
+        "tinixcut_dry_run": {
+          "n": 30,
+          "median_ms": 3.5426,
+          "p95_ms": 4.9322,
+          "aggregate_wall_ms": 128.068,
+          "aggregate_avg_ms": 3.684323,
+          "wall_throughput_avg_ms": 4.268933,
+          "min_ms": 3.2216,
+          "max_ms": 5.0947
+        },
+        "tinixcut_apply": {
+          "n": 30,
+          "median_ms": 16.76025,
+          "p95_ms": 24.496,
+          "aggregate_wall_ms": 536.7769,
+          "aggregate_avg_ms": 17.273583,
+          "wall_throughput_avg_ms": 17.892563,
+          "min_ms": 12.0933,
+          "max_ms": 25.4381
+        },
+        "tinixcut_inspect": {
+          "n": 30,
+          "median_ms": 3.41165,
+          "p95_ms": 3.8771,
+          "aggregate_wall_ms": 131.9033,
+          "aggregate_avg_ms": 3.495387,
+          "wall_throughput_avg_ms": 4.396777,
+          "min_ms": 3.1598,
+          "max_ms": 4.2329
+        }
+      },
+      "stderr": ""
+    }
+  ]
+}

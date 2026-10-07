@@ -11,33 +11,33 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS, PHASE 17 RESEARCH GATE COMPLETE  
-**Current Selected Milestone:** Phase 17 — Performance Requalification & Release Foundation (Research Gate Complete)  
-**Current Active Implementation Phase:** NONE  
+**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS, PHASE 17 PERFORMANCE CONTRACT AMENDED
+**Current Selected Milestone:** Phase 17 — Performance Requalification & Release Foundation
+**Current Active Implementation Phase:** Phase 17
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
-**Implementation:** Phases 0–16 COMPLETE; Phase 17 Implementation NOT STARTED  
+**Implementation:** Phases 0–16 COMPLETE; Phase 17 implementation begins after planning amendment checkpoint
 **ADR:** No new ADR required (ADR-006 NOT required)  
-**Plan Status:** Phase 17 Research Gate Reconciled; implementation plan to be authored in `Plans/plan_phase17.md`  
+**Plan Status:** Phase 17 transport calibration amendment self-reviewed and locked in `Plans/plan_phase17.md`
 **Project Schema:** Schema v3 unchanged  
-**Phase 17:** RESEARCH GATE COMPLETE — READY FOR PLANNING (Implementation: NOT STARTED)  
+**Phase 17:** PERFORMANCE CONTRACT AMENDED — READY FOR IMPLEMENTATION CHECKPOINT
 **Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Next Action:** ChatGPT authors plan_phase17.md using reconciled research state.  
-**Last Updated:** 2026-10-06  
+**Next Action:** Commit the research/plan amendment, then continue Phase-17 implementation and acceptance.
+**Last Updated:** 2026-10-07
 
 ---
 
 ## 1. Current Objective
 
-Phase 17 Research Gate is COMPLETE — READY FOR PLANNING; implementation is NOT STARTED:
+Phase 17 transport performance contract has been recalibrated; implementation remains NOT STARTED until the dedicated amendment checkpoint commit:
 - **Phases 0–15 Final State**: `COMPLETE`.
 - **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS` (`P16-AC-56` real interactive Windows GUI QA deferred).
 - **Phase 17 Milestone**: `Phase 17 — Performance Requalification & Release Foundation`.
-- **Phase 17 Research Status**: `COMPLETE — READY FOR PLANNING`.
-- **Current Active Implementation Phase**: NONE.
+- **Phase 17 Research Status**: `COMPLETE — transport calibration amendment recorded`.
+- **Current Active Implementation Phase**: Phase 17.
 - **Phase 17 Implementation Status**: `NOT STARTED`.
 - **ADR Decision**: No new ADR required (ADR-006 NOT required; Phase 17 is qualification-first; zero production architecture, schema, or protocol changes).
-- **Plan Status**: Reconciled research state in `RESEARCH.md` and roadmap in `PLAN.md`; `Plans/plan_phase17.md` to be authored by ChatGPT.
+- **Plan Status**: `RESEARCH.md`, `PLAN.md`, and `Plans/plan_phase17.md` record the self-reviewed workload calibration amendment; P17-AC identifiers are unchanged.
 - **Project Schema**: Schema v3 invariant (no Schema v4).
 - **Automated Verification**: PASS (198 Rust tests + 37 frontend tests, clean clippy, fmt, build, typecheck).
 - **Deferred External Acceptance Gates**:
@@ -45,12 +45,13 @@ Phase 17 Research Gate is COMPLETE — READY FOR PLANNING; implementation is NOT
   2. `True Clean Windows 10/11 VM Qualification`: Provisioning a sanitized clean virtual machine without dev tools remains an external release gate prior to distribution.
 - **Reconciled Research Conclusions**:
   1. Dual-fixture benchmark framework standardized: Fixture A (semantic-rich Schema-v3, 6.0s @ 30fps) and Fixture B (scale Schema-v3, 20 tracks [14 video, 4 audio, 2 text], 200 items, 20 CrossDissolves, 10.0s @ 30fps).
-  2. Empirical release baselines verified on reference workstation: Fixture B save ~3.89 ms, load ~2.99 ms, compile ~0.28 ms, sampling ~0.22 ms; Phase-16 commands 49–64 µs; JSONL 18–23 µs; MCP inspect ~0.24 ms, dry-run ~0.24 ms, apply ~12.20 ms; CPU export (preset fast, CRF 23) 720p RTF $\ge 2.20\times$, 1080p RTF $\ge 1.00\times$.
-  3. Prior invalid MCP ~0.06 ms measurements disclosed and superseded: root cause was wire parameter `_meta` formatting error returning JSON-RPC `-32602` before tool dispatch. Validated ~12.2 ms OS-stdio measurements durably recorded.
-  4. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
-  5. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
-  6. Normative contract `PR-01` through `PR-18` accepted.
-- **Next Action**: ChatGPT authors plan_phase17.md using reconciled research state.
+  2. Historical baselines: Fixture B save ~3.89 ms, load ~2.99 ms, compile ~0.28 ms, sampling ~0.22 ms; Phase-16 commands 49–64 µs; historical JSONL 18–23 µs (documented W2); historical MCP inspect/dry-run ~0.24 ms has conflicting W0/W2 documentation and is now classified unknown; historical MCP apply ~12.20 ms is documented W2. CPU export (preset fast, CRF 23) 720p RTF $\ge 2.20\times$, 1080p RTF $\ge 1.00\times$.
+  3. Recalibrated Release OS-stdio evidence on W0/W1/W2 is in `tests/evidence/phase17_transport_recalibration_2026-10-07.json`; normative W2 reference medians are JSONL <150 µs, MCP inspect/dry-run <5 ms, MCP persistent apply <20 ms. Qualification ceilings remain unchanged.
+  4. Prior invalid MCP ~0.06 ms measurements remain excluded: retained investigation identifies malformed wire `_meta` returning JSON-RPC `-32602` before tool dispatch.
+  5. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
+  6. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
+  7. Normative contract `PR-01` through `PR-18` accepted.
+- **Next Action**: Create the dedicated research/plan amendment checkpoint commit, then implement and verify Phase 17.
 
 ---
 
@@ -102,13 +103,13 @@ Phase 17 Research Gate is COMPLETE — READY FOR PLANNING; implementation is NOT
 - [x] Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 promoted, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved, 129 Rust tests + 14 Vitest tests passing; accepted by ChatGPT and ratified by user post-implementation).
 - [x] Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented & verified, `rmcp` 3.x local stdio adapter, `2026-07-28` modern protocol, exact 8 tools, explicit `projectPath`, caller-supplied structured identity, atomic apply persistence, process-local write gate, `JobManager` export lifecycle, pure stdout, clean EOF termination, Schema v3 unchanged, 26 Phase-15 acceptance tests passing, 155 total Rust tests green; accepted by ChatGPT after implementation and remediation).
 - [x] Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Approved plan implemented, 30 new acceptance tests + 23 new vitest tests green, RationalTime contract remediated, generic transport inheritance proven; P16-AC-56 manual Windows GUI QA deferred).
-- [x] Phase 17 Research Gate: Performance Requalification & Release Foundation: **COMPLETE — READY FOR PLANNING** (Milestone defined, dual fixtures standardized, empirical release baselines established, invalid MCP measurement disclosed & superseded, hybrid timing policy defined, host-isolated workstation contract CM-01..CM-07 formalized, external gates preserved, normative contract PR-01..PR-18 accepted).
+- [x] Phase 17 Research Gate and transport calibration amendment: **COMPLETE — READY FOR IMPLEMENTATION CHECKPOINT** (W2 transport baselines remeasured; amended reference budgets and provenance recorded in `RESEARCH.md`, `Plans/plan_phase17.md`, and durable evidence).
 
 ---
 
 ## 4. In Progress
 
-None. Phases 0–15 are complete. Phase 16 is COMPLETE WITH DEFERRED ITEMS. Phase 17 Research Gate is COMPLETE. Current active implementation phase: NONE. Phase 17 implementation is NOT STARTED. Next action: ChatGPT authors plan_phase17.md using reconciled research state.
+Phase 17 implementation has not begun while the dedicated planning amendment checkpoint is prepared. The current active phase is Phase 17; next action is to commit that checkpoint, then begin implementation.
 
 ---
 
@@ -302,7 +303,7 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 Research Gate COMPLETE. Current active implementation phase: NONE. Phase 17 Implementation: NOT STARTED.
+Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 performance contract amended. Current active phase: Phase 17; implementation has not started pending the dedicated plan amendment commit.
 Relevant process/runtime notes: 235 total automated tests passing cleanly (198 Rust, 37 Vitest), clean process cleanup, zero background leaks
 ```
 
@@ -310,8 +311,8 @@ Relevant process/runtime notes: 235 total automated tests passing cleanly (198 R
 
 ## 9. Next Actions
 
-1. ChatGPT authors plan_phase17.md using reconciled research state.
-2. Phase 17 implementation remains NOT STARTED. Do NOT begin Phase 17 implementation without approved plan and explicit user instruction.
+1. Commit the research and plan amendment as the Phase-17 planning checkpoint.
+2. Continue Phase-17 implementation and acceptance using the amended W2 reference-host budgets.
 
 ---
 
@@ -321,17 +322,17 @@ Relevant process/runtime notes: 235 total automated tests passing cleanly (198 R
 Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
 - Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
-- Phase 17 Research Gate: COMPLETE — READY FOR PLANNING.
-- Phase 17 Implementation: NOT STARTED.
-- Current active implementation phase: NONE.
+- Phase 17 Research Gate: COMPLETE — transport performance contract recalibrated.
+- Phase 17 Implementation: NOT STARTED; authorized after planning checkpoint commit.
+- Current active implementation phase: Phase 17 (implementation starts after planning amendment checkpoint).
 - Selected Milestone: Phase 17 — Performance Requalification & Release Foundation.
 - Project Schema: Schema v3 unchanged.
 - ADR Decision: ADR-006 NOT REQUIRED.
 - Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: ChatGPT authors plan_phase17.md using reconciled research state.
+- Next Action: Commit the plan amendment checkpoint, then continue Phase-17 implementation.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase 17 Research Gate COMPLETE -> Current Active Phase: NONE -> Phase 17 Implementation: NOT STARTED -> Next Action: ChatGPT authors plan_phase17.md using reconciled research state.
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> Planning amendment checkpoint -> Phase-17 implementation and acceptance.
 ```
 
 ---

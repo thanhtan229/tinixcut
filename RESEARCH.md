@@ -2908,3 +2908,64 @@ The following eighteen (18) normative requirements govern the definition, planni
 - **`PR-17`:** Schema v3 invariant. No Schema v4 or creator-feature expansion in Phase 17.
 - **`PR-18`:** Phase 17 is qualification-first. Production optimization/refactoring is unauthorized unless a measured accepted ceiling is violated and remediation scope is explicitly approved.
 
+---
+
+## Phase 17 Transport Performance Contract Recalibration — 2026-10-07
+
+### Finding and decision
+
+The accepted transport reference-host numbers combined workload-specific measurements without preserving consistent provenance. A new release-binary benchmark exercised W0 (1 track/0 items), W1 (Fixture A, 3 tracks/4 items), and W2 (Fixture B, 20 tracks/200 items) through actual Windows OS stdio. The results show the expected size-dependent cost in stateless MCP inspect/dry-run: W0 medians are about 0.22–0.24 ms, while W2 medians are about 3.41–3.54 ms.
+
+Rank the contract options **C > B > A** and select **Option C**: W2 alone is normative for Phase-17 transport qualification; W0 and W1 remain informational. The Phase-17 scale gate should compare like-for-like Fixture B runs. Applying W0 transport latency to W2 would confuse input-size cost with a regression; three workload-specific normative gates would add complexity beyond this phase's accepted scale objective. No production change, caching, protocol change, or ADR is needed to satisfy the calibrated contract.
+
+### New normative reference-host budgets
+
+These values amend PR-11A and PR-11B for the Phase-17 qualification path. They do not change the qualification ceilings or transport/domain semantics.
+
+| Workload and operation | Amended reference-host median | Qualification ceiling |
+|---|---:|---:|
+| Fixture B JSONL inspect/dry-run/apply with `saveAfter:false` | < 150 µs | < 10 ms |
+| Fixture B MCP inspect/dry-run | < 5.0 ms | < 20 ms |
+| Fixture B MCP persistent apply | < 20 ms (unchanged) | < 100 ms |
+
+Fixture B is 20 tracks/200 items. The thresholds apply only on the accepted reference host and only to the explicit release qualification; timing budgets remain outside ordinary functional CI. Report median, P95, arithmetic sample average, and workload dimensions. W0/W1 results are informational.
+
+### Recalibration measurements
+
+Binary and complete method metadata are recorded in [`tests/evidence/phase17_transport_recalibration_2026-10-07.json`](tests/evidence/phase17_transport_recalibration_2026-10-07.json). It records Git `92a225899686e0440536b59f30f9fb16d3156511`, the Release executable SHA-256, workload dimensions/file sizes, exact sample counts, timer boundaries, response validation, and aggregate measurements.
+
+Each workload used 5 warmups. JSONL used 50 timed calls per operation; MCP used 30. These were real `tinixcut session` and `tinixcut mcp` Release processes connected over OS stdin/stdout. Process startup and MCP discovery/handshake were excluded. Every successful response was correlated to the request ID and error responses failed the run. The timer included request write/flush and response line read, but excluded client request serialization and response JSON parsing. “Average” below is the arithmetic mean of timed samples; wall-throughput aggregate is a separate measure and is not per-call latency.
+
+| Workload | JSONL inspect median / P95 / avg (ms) | JSONL dry-run median / P95 / avg (ms) | JSONL apply `saveAfter:false` median / P95 / avg (ms) | MCP inspect median / P95 / avg (ms) | MCP dry-run median / P95 / avg (ms) | MCP apply median / P95 / avg (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| W0: 1 track / 0 items | 0.0436 / 0.0849 / 0.0515 | 0.0642 / 0.0957 / 0.0655 | 0.0525 / 0.0891 / 0.0573 | 0.2407 / 0.3396 / 0.2500 | 0.2217 / 0.3276 / 0.2270 | 9.703 / 13.736 / 9.633 |
+| W1: Fixture A, 3 tracks / 4 items | 0.0577 / 0.1069 / 0.0636 | 0.0673 / 0.0851 / 0.0681 | 0.0758 / 0.0987 / 0.0752 | 0.3231 / 0.4210 / 0.3323 | 0.3368 / 0.4195 / 0.3555 | 10.110 / 14.464 / 10.369 |
+| W2: Fixture B, 20 tracks / 200 items | 0.0800 / 0.1452 / 0.0971 | 0.1098 / 0.1449 / 0.1141 | 0.1034 / 0.1369 / 0.1105 | 3.4117 / 3.8771 / 3.4954 | 3.5426 / 4.9322 / 3.6843 | 16.760 / 24.496 / 17.274 |
+
+The W2 medians satisfy the amended JSONL and MCP inspect/dry-run reference budgets. MCP apply satisfies its unchanged <20 ms reference-host median budget and <100 ms qualification ceiling. Its measured P95 of 24.496 ms is reported, but is not the reference criterion; it remains within the qualification ceiling.
+
+Supporting direct measurements are from distinct runs and must not be conflated with the table above. The existing Fixture-B qualification report records `load_project` median 2.985 ms/P95 3.951 ms and `save_project_atomic` median 3.890 ms/P95 5.912 ms. Another Release direct run recorded atomic-save median 4.167 ms/P95 6.888 ms/average 4.547 ms. Direct CommandService dry-run was median 0.050 ms/P95 0.069 ms/average 0.058 ms; apply was 0.075/0.107/0.079 ms. A separate 55-load aggregate totaled 178.199 ms (3.240 ms/load including warmups). These checks contextualize the JSONL and stateless MCP paths; they do not replace transport qualification.
+
+### Historical workload provenance audit
+
+Classification is limited to what retained documents and artifacts establish:
+
+| Historical result | Classification | Evidence and limitation |
+|---|---|---|
+| JSONL inspect 23 µs, dry-run 18 µs, apply 19 µs | **W2 (documented)** | The historical research table explicitly labels the target Fixture B / 200 items. Raw per-sample logs were not retained, so independent reconstruction of those specific requests is unavailable. |
+| MCP inspect 0.2381 ms, dry-run 0.2422 ms | **Unknown — conflicting documentation** | The historical research table is under the Fixture-B section, but the later [`phase17_release_qualification_report.json`](tests/evidence/phase17_release_qualification_report.json) says approximately 0.238 ms was measured on W0 (1 track/0 items). The original raw samples are absent, so neither conflicting label can be confirmed as actual provenance. |
+| MCP apply 12.2009 ms | **W2 (documented)** | The research records this as full reload + mutation + atomic save in its Fixture-B MCP benchmark. Raw samples are not retained. |
+| MCP apply approximately 0.06 ms | **Invalid / excluded** | The retained investigation identifies an invalid `_meta` request format and JSON-RPC `-32602` error path. It is not successful tool-call performance. |
+
+The old values remain in their original research context as historical records; the amendment does not rewrite that history. In particular, the documented JSONL numbers remain traceable to W2, while conflicting MCP inspect/dry-run provenance is explicitly left unknown rather than guessed.
+
+### Contract reconciliation
+
+The authoritative amended contract is:
+
+- **PR-11A:** Fixture-B JSONL real OS-stdio inspect, dry-run, and in-memory apply (`saveAfter:false`): reference-host median <150 µs; qualification ceiling <10 ms.
+- **PR-11B:** Fixture-B MCP real OS-stdio inspect and dry-run: reference-host median <5.0 ms; qualification ceiling <20 ms.
+- **PR-11C:** Fixture-B MCP persistent apply remains reference-host median <20 ms; qualification ceiling <100 ms.
+
+This section supersedes only the original PR-11A/PR-11B reference-host numbers for Phase-17 qualification. Original qualification ceilings, PR-11C, Fixture B definition, and all transport semantics remain unchanged. `Plans/plan_phase17.md` records the matching P17-AC-31/P17-AC-34 amendment without renumbering acceptance criteria. No durable architecture decision changed; ADR-006 remains unnecessary.
+

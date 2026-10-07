@@ -155,7 +155,7 @@ Phase 15 MCP Automation Adapter (Complete)
    ↓
 Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
    ↓
-Phase 17 Performance Requalification & Release Foundation (Research Gate Complete — Ready for Planning)
+Phase 17 Performance Requalification & Release Foundation (Transport Calibration Amended — Planning Checkpoint)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1407,13 +1407,13 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 
 # Phase 17 — Performance Requalification & Release Foundation
 
-## Status: RESEARCH GATE COMPLETE — READY FOR PLANNING
+## Status: PERFORMANCE CONTRACT AMENDED — SELF-REVIEWED AND LOCKED FOR IMPLEMENTATION
 
 **Milestone:** `Phase 17 — Performance Requalification & Release Foundation`  
 **Governing Inputs:** `RESEARCH.md` (Phase 17 Research Gate), `ARCHITECTURE.md`, ADR-001 through ADR-005  
-**Research Status:** COMPLETE — ACCEPTED  
-**Implementation Status:** NOT STARTED  
-**Current Active Implementation Phase:** NONE  
+**Research Status:** COMPLETE — transport performance contract recalibrated 2026-10-07
+**Implementation Status:** NOT STARTED
+**Current Active Implementation Phase:** Phase 17
 **Schema State:** Schema v3 invariant (no Schema v4)  
 **ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  
 
@@ -1434,7 +1434,7 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 - Compositor, timeline, or renderer architectural redesign;
 - Production code modifications (Phase 17 is strictly qualification-first).
 
-*Note: Detailed acceptance criteria (ACs), implementation sequence, and task breakdown will be authored by ChatGPT in `Plans/plan_phase17.md` from the reconciled research state. No implementation ACs are defined in this high-level roadmap section.*
+The authoritative acceptance criteria and implementation sequence are in `Plans/plan_phase17.md`. Its P17-AC identifiers are unchanged; P17-AC-31 and P17-AC-34 transport reference-host budgets were calibrated to Fixture B and documented in the 2026-10-07 amendment. W0/W1 remain informational; qualification ceilings and P17-AC-37 remain unchanged.
 
 ---
 
