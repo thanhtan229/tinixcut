@@ -303,16 +303,18 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 implementation and qualification in progress following checkpoint `36e19af`.
-Relevant process/runtime notes: 235 total automated tests passing cleanly (198 Rust, 37 Vitest), clean process cleanup, zero background leaks
+Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 qualification evidence reconciled but phase NOT COMPLETE.
+Phase 17 checkpoint: planning amendment `36e19af`; qualification commit `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 is a known in-scope failure because qualification code was included in the planning checkpoint. Do not mark Phase 17 COMPLETE.
+Deferred: true clean Windows 10/11 VM qualification and P16-AC-56 interactive GUI QA. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
+Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evidence/phase17_transport_recalibration_2026-10-07.json`, `tests/evidence/clean_machine_qualification_report.json`. Installer SHA-256: `59a3bd697713e2ab50081175155926a18f8e3b1d65fae23f6ec6a966debb841f`.
 ```
 
 ---
 
 ## 9. Next Actions
 
-1. Execute release, package, transport, functional, and CM-01..CM-07 qualification against the amended W2 budgets.
-2. Reconcile the actual Phase-17 results, package hashes, deferred gates, and any deviations.
+1. Keep Phase 17 open unless the user explicitly resolves the P17-AC-03 checkpoint deviation.
+2. Before release, complete the external clean Windows VM and P16-AC-56 GUI gates.
 
 ---
 
@@ -323,16 +325,16 @@ Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
 - Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
 - Phase 17 Research Gate: COMPLETE — transport performance contract recalibrated.
-- Phase 17 Implementation: IN PROGRESS after planning checkpoint `36e19af`.
+- Phase 17 Implementation: qualification run complete; reconciliation records an in-scope P17-AC-03 failure, so Phase 17 remains NOT COMPLETE.
 - Current active implementation phase: Phase 17.
 - Selected Milestone: Phase 17 — Performance Requalification & Release Foundation.
 - Project Schema: Schema v3 unchanged.
 - ADR Decision: ADR-006 NOT REQUIRED.
 - Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: Execute Phase-17 acceptance criteria and release qualification.
+- Next Action: Resolve disposition of P17-AC-03; complete external VM and GUI gates before any completion claim.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> Planning amendment checkpoint `36e19af` -> Phase-17 implementation and acceptance in progress.
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> planning checkpoint `36e19af` -> qualification checkpoint `28f94c6` -> Phase 17 NOT COMPLETE (P17-AC-03 failure; VM/GUI gates deferred).
 ```
 
 ---

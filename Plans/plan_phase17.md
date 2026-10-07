@@ -4,7 +4,7 @@
 **Phase:** 17  
 **Title:** Performance Requalification & Release Foundation  
 **Plan status:** AMENDED — SELF-REVIEWED AND LOCKED FOR IMPLEMENTATION
-**Implementation status:** IN PROGRESS
+**Implementation status:** QUALIFICATION RUN COMPLETE — PHASE NOT COMPLETE
 **Research gate:** COMPLETE — PERFORMANCE CONTRACT AMENDED
 **Research reconciliation baseline:** `8b9f752` (`docs: correct phase 17 research reconciliation`)  
 **Schema:** v3 — invariant for this phase  
@@ -1409,6 +1409,12 @@ The following criteria are normative and must not be renumbered or silently rewr
 **P17-AC-77** — Codex report identifies all files changed, generated-but-untracked artifacts, benchmark environment, package artifact path/hash, known issues, deviations, and technical debt.
 
 **P17-AC-78** — The agent does not mark Phase 17 COMPLETE in durable roadmap docs before independent self-review and mandatory reconciliation.
+
+### Reconciliation checkpoint — 2026-10-07
+
+The release benchmark suite passed 5/5, host-isolated CM-01..CM-07 passed 7/7, the current NSIS package built, and the required functional and build gates passed. Durable results and package hashes are recorded in `tests/evidence/phase17_release_qualification_report.json`; detailed host-isolated outcomes are in `tests/evidence/clean_machine_qualification_report.json`.
+
+Phase 17 remains **NOT COMPLETE** because P17-AC-03 failed: the planning checkpoint `36e19af` includes Phase-17 transport calibration/qualification code. The commit history is retained as-is. CM-05 in the PowerShell harness is only an interrupted-write simulation; Rust storage tests separately cover application atomic-save/recovery behavior. True clean Windows 10/11 VM qualification and P16-AC-56 interactive GUI QA remain `DEFERRED / NOT PASS`. Do not promote this phase to COMPLETE.
 
 ---
 
