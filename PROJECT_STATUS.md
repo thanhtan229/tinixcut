@@ -11,31 +11,33 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE, PHASE 16 COMPLETE WITH DEFERRED ITEMS, PHASE 17 PERFORMANCE CONTRACT AMENDED
-**Current Selected Milestone:** Phase 17 — Performance Requalification & Release Foundation
-**Current Active Implementation Phase:** Phase 17
+**Overall Status:** PHASES 0–17 COMPLETE; PHASES 16–17 HAVE DEFERRED ITEMS
+**Current Selected Milestone:** Post-Phase-17 roadmap gap analysis
+**Current Active Implementation Phase:** None — next phase not yet selected
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
-**Implementation:** Phases 0–16 COMPLETE; Phase 17 IN PROGRESS
+**Implementation:** Phases 0–15 COMPLETE; Phases 16–17 COMPLETE WITH DEFERRED ITEMS
 **ADR:** No new ADR required (ADR-006 NOT required)  
-**Plan Status:** Phase 17 transport calibration amendment self-reviewed and locked in `Plans/plan_phase17.md`
+**Plan Status:** Phase 17 qualification reconciled against locked criteria in `Plans/plan_phase17.md`
 **Project Schema:** Schema v3 unchanged  
-**Phase 17:** IMPLEMENTATION IN PROGRESS — transport contract amendment checkpoint `36e19af`
+**Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit `28f94c6`; durable reconciliation recorded
 **Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Next Action:** Execute Phase-17 acceptance criteria and release qualification.
+**Next Action:** Inspect the roadmap, deferred items, and product state to select the next justified phase.
 **Last Updated:** 2026-10-07
 
 ---
 
 ## 1. Current Objective
 
-Phase 17 transport performance contract has been recalibrated and the dedicated planning amendment checkpoint is committed; implementation and qualification are now in progress:
+Phase 17 performance requalification and release foundation has been reconciled as COMPLETE WITH DEFERRED ITEMS:
 - **Phases 0–15 Final State**: `COMPLETE`.
 - **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS` (`P16-AC-56` real interactive Windows GUI QA deferred).
 - **Phase 17 Milestone**: `Phase 17 — Performance Requalification & Release Foundation`.
 - **Phase 17 Research Status**: `COMPLETE — transport calibration amendment recorded`.
-- **Current Active Implementation Phase**: Phase 17.
-- **Phase 17 Implementation Status**: `IN PROGRESS`.
+- **Approved planning checkpoint**: `c35b4e3138d653c132355b07a8ce6464fdec4169` (plan-only; P17-AC-03 PASS).
+- **Transport contract amendment**: `36e19af` (research calibration artifacts; distinct from the approved planning checkpoint).
+- **Qualification checkpoint**: `28f94c6`.
+- **Phase 17 Implementation Status**: `COMPLETE WITH DEFERRED ITEMS`.
 - **ADR Decision**: No new ADR required (ADR-006 NOT required; Phase 17 is qualification-first; zero production architecture, schema, or protocol changes).
 - **Plan Status**: `RESEARCH.md`, `PLAN.md`, and `Plans/plan_phase17.md` record the self-reviewed workload calibration amendment; P17-AC identifiers are unchanged.
 - **Project Schema**: Schema v3 invariant (no Schema v4).
@@ -107,9 +109,9 @@ Phase 17 transport performance contract has been recalibrated and the dedicated 
 
 ---
 
-## 4. In Progress
+## 4. Current Checkpoint
 
-Phase 17 implementation and qualification are in progress following checkpoint `36e19af`.
+Phase 17 implementation, qualification, self-review, and durable reconciliation are complete with deferred items. The next phase has not yet been selected.
 
 ---
 
@@ -303,9 +305,9 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 qualification evidence reconciled but phase NOT COMPLETE.
-Phase 17 checkpoint: planning amendment `36e19af`; qualification commit `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 is a known in-scope failure because qualification code was included in the planning checkpoint. Do not mark Phase 17 COMPLETE.
-Deferred: true clean Windows 10/11 VM qualification and P16-AC-56 interactive GUI QA. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
+Current development mode: Phases 0–15 COMPLETE, Phases 16–17 COMPLETE WITH DEFERRED ITEMS.
+Phase 17 approved planning checkpoint: `c35b4e3138d653c132355b07a8ce6464fdec4169`; transport research amendment: `36e19af`; qualification commit: `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 PASS: the approved planning checkpoint contains the plan only; the later calibration harness/seed/evidence are research artifacts in a distinct amendment commit.
+Deferred: true clean Windows 10/11 VM qualification, P16-AC-56 interactive GUI QA, and hardware encoder qualification. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
 Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evidence/phase17_transport_recalibration_2026-10-07.json`, `tests/evidence/clean_machine_qualification_report.json`. Installer SHA-256: `59a3bd697713e2ab50081175155926a18f8e3b1d65fae23f6ec6a966debb841f`.
 ```
 
@@ -313,8 +315,9 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ## 9. Next Actions
 
-1. Keep Phase 17 open unless the user explicitly resolves the P17-AC-03 checkpoint deviation.
-2. Before release, complete the external clean Windows VM and P16-AC-56 GUI gates.
+1. Reconcile Phase 17 completion in a dedicated documentation commit.
+2. Inspect the roadmap, deferred items, and current product state; select and plan the next justified phase.
+3. Complete external VM, interactive GUI, and hardware encoder qualification before making claims that depend on those gates.
 
 ---
 
@@ -325,16 +328,16 @@ Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
 - Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
 - Phase 17 Research Gate: COMPLETE — transport performance contract recalibrated.
-- Phase 17 Implementation: qualification run complete; reconciliation records an in-scope P17-AC-03 failure, so Phase 17 remains NOT COMPLETE.
-- Current active implementation phase: Phase 17.
-- Selected Milestone: Phase 17 — Performance Requalification & Release Foundation.
+- Phase 17 Implementation: COMPLETE WITH DEFERRED ITEMS; all in-scope acceptance criteria pass.
+- Current active implementation phase: None; next phase selection is pending roadmap gap analysis.
+- Selected Milestone: Post-Phase-17 roadmap gap analysis.
 - Project Schema: Schema v3 unchanged.
 - ADR Decision: ADR-006 NOT REQUIRED.
 - Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: Resolve disposition of P17-AC-03; complete external VM and GUI gates before any completion claim.
+- Next Action: Complete post-Phase-17 roadmap gap analysis and plan the next justified phase.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> planning checkpoint `36e19af` -> qualification checkpoint `28f94c6` -> Phase 17 NOT COMPLETE (P17-AC-03 failure; VM/GUI gates deferred).
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase 17 approved plan checkpoint `c35b4e3` -> initial implementation baseline `92a2258` -> transport research amendment `36e19af` -> final qualification checkpoint `28f94c6` -> Phase 17 COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 pass; true VM, GUI, and hardware gates deferred).
 ```
 
 ---

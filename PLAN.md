@@ -155,7 +155,7 @@ Phase 15 MCP Automation Adapter (Complete)
    ↓
 Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
    ↓
-Phase 17 Performance Requalification & Release Foundation (Transport Calibration Amended — Planning Checkpoint)
+Phase 17 Performance Requalification & Release Foundation (Complete with Deferred Items)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1407,13 +1407,13 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 
 # Phase 17 — Performance Requalification & Release Foundation
 
-## Status: PERFORMANCE CONTRACT AMENDED — SELF-REVIEWED AND LOCKED FOR IMPLEMENTATION
+## Status: COMPLETE WITH DEFERRED ITEMS
 
 **Milestone:** `Phase 17 — Performance Requalification & Release Foundation`  
 **Governing Inputs:** `RESEARCH.md` (Phase 17 Research Gate), `ARCHITECTURE.md`, ADR-001 through ADR-005  
 **Research Status:** COMPLETE — transport performance contract recalibrated 2026-10-07
-**Implementation Status:** IN PROGRESS
-**Current Active Implementation Phase:** Phase 17
+**Implementation Status:** COMPLETE WITH DEFERRED ITEMS — P17-AC-01..78 PASS
+**Current Active Implementation Phase:** None; next phase requires roadmap gap analysis
 **Schema State:** Schema v3 invariant (no Schema v4)  
 **ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  
 

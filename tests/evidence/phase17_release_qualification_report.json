@@ -5,10 +5,11 @@
   "provenance": {
     "repository_baseline_before_implementation": "92a225899686e0440536b59f30f9fb16d3156511",
     "research_reconciliation_commit": "8b9f752",
-    "planning_checkpoint_commit": "36e19af",
+    "planning_checkpoint_commit": "c35b4e3138d653c132355b07a8ce6464fdec4169",
+    "transport_contract_research_amendment_commit": "36e19af",
     "qualification_commit": "28f94c6b05914449b033fa17dae75fb7b9b435c4",
     "release_package_built_before_qualification_commit": true,
-    "release_package_source_note": "The only post-planning-checkpoint source changes before packaging were qualification tests and the workstation harness; application runtime/frontend source and configuration were unchanged.",
+    "release_package_source_note": "Relative to the transport research amendment checkpoint 36e19af, the only source changes before packaging were qualification tests and the workstation harness; application runtime/frontend source and configuration were unchanged. The initial Phase-17 implementation foundation is recorded separately at 92a2258.",
     "schema_version": 3,
     "working_tree_at_report_creation": "contains this evidence/report reconciliation and status updates"
   },
@@ -182,9 +183,9 @@
   },
   "deviations_and_open_issues": [
     {
-      "criterion": "P17-AC-03",
-      "status": "FAIL",
-      "detail": "The committed planning checkpoint 36e19af contains the transport calibration seed test and evidence. The plan requires a planning-only checkpoint with no Phase-17 qualification code. History is retained; it was not rewritten."
+      "criterion": "Deferred qualification",
+      "status": "DEFERRED / NOT PASS",
+      "detail": "True clean Windows 10/11 VM qualification, P16-AC-56 interactive GUI QA, and NVENC/QSV/AMF hardware encoder qualification remain deferred. These are external/deferred gates and are not claimed as passed."
     },
     {
       "criterion": "CM-05",
@@ -193,8 +194,8 @@
     },
     {
       "criterion": "Phase-17 completion",
-      "status": "NOT COMPLETE",
-      "detail": "P17-AC-03 is an in-scope failure. External GUI and clean-VM gates also remain deferred. Do not promote Phase 17 to COMPLETE."
+      "status": "COMPLETE WITH DEFERRED ITEMS",
+      "detail": "P17-AC-01..78 pass. Section 22 permits COMPLETE WITH DEFERRED ITEMS when only the identified external gates remain deferred."
     }
   ],
   "changed_files_in_qualification_commit": [
@@ -214,7 +215,7 @@
   "acceptance_statuses": {
     "P17-AC-01": "PASS",
     "P17-AC-02": "PASS",
-    "P17-AC-03": "FAIL — planning checkpoint 36e19af contains Phase-17 calibration/qualification code.",
+    "P17-AC-03": "PASS — approved planning checkpoint c35b4e3138d653c132355b07a8ce6464fdec4169 adds only Plans/plan_phase17.md; the 36e19af research amendment is a distinct later checkpoint with calibration research artifacts.",
     "P17-AC-04": "PASS",
     "P17-AC-05": "PASS",
     "P17-AC-06": "PASS",
@@ -289,7 +290,7 @@
     "P17-AC-75": "PASS",
     "P17-AC-76": "PASS — every P17-AC-01..78 is mapped here and in the completion report.",
     "P17-AC-77": "PASS",
-    "P17-AC-78": "PASS — independent self-review/reconciliation performed; phase remains NOT COMPLETE."
+    "P17-AC-78": "PASS — independent self-review and durable reconciliation completed before marking COMPLETE WITH DEFERRED ITEMS."
   },
   "evidence_files": [
     "tests/evidence/phase17_release_qualification_report.json",
