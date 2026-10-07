@@ -691,6 +691,9 @@ impl AutomationAdapter {
             "CutTransitionCreate".to_string(),
             "CutTransitionUpdateDuration".to_string(),
             "CutTransitionRemove".to_string(),
+            "AudioCrossfadeCreate".to_string(),
+            "AudioCrossfadeUpdateDuration".to_string(),
+            "AudioCrossfadeRemove".to_string(),
             "ClipGroupMove".to_string(),
             "ClipRippleDelete".to_string(),
         ]
@@ -1473,7 +1476,10 @@ pub mod tests {
 
         // Verify reloaded project has cut transition in Schema v2
         let reloaded = load_project(&project_path).unwrap();
-        assert_eq!(reloaded.schema_version, 3);
+        assert_eq!(
+            reloaded.schema_version,
+            crate::modules::domain::CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(reloaded.tracks[0].transitions.len(), 1);
         assert_eq!(reloaded.tracks[0].transitions[0].transition_id, "auto_tr1");
     }

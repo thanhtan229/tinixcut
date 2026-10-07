@@ -11,7 +11,7 @@ use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -50,6 +50,16 @@ pub enum DomainError {
 
     #[error("Transition with ID '{0}' not found on track")]
     TransitionNotFound(String),
+
+    #[error("Audio crossfade participants must be standalone audio items on an audio track")]
+    UnsupportedAudioCrossfadeMedia,
+
+    #[error("Audio crossfade participants '{left_id}' and '{right_id}' are not adjacent on track '{track_id}'")]
+    NonAdjacentAudioCrossfade {
+        track_id: String,
+        left_id: String,
+        right_id: String,
+    },
 
     #[error("Cut transition participants must be video items (found non-video item)")]
     UnsupportedTransitionMedia,
@@ -287,6 +297,34 @@ pub struct CutTransition {
     pub duration: RationalTime,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioCrossfade {
+    pub transition_id: String,
+    pub track_id: String,
+    pub left_item_id: String,
+    pub right_item_id: String,
+    pub duration: RationalTime,
+}
+
+impl AudioCrossfade {
+    pub fn validate_basic(&self) -> Result<(), DomainError> {
+        for id in [
+            &self.transition_id,
+            &self.track_id,
+            &self.left_item_id,
+            &self.right_item_id,
+        ] {
+            if !is_valid_id(id) {
+                return Err(DomainError::InvalidId(id.clone()));
+            }
+        }
+        if self.duration.value <= 0 {
+            return Err(DomainError::NonPositiveDuration);
+        }
+        Ok(())
+    }
+}
+
 impl CutTransition {
     pub fn new(
         track_id: String,
@@ -466,6 +504,8 @@ pub struct Track {
     pub items: Vec<TimelineItem>,
     #[serde(default)]
     pub transitions: Vec<CutTransition>,
+    #[serde(default)]
+    pub audio_transitions: Vec<AudioCrossfade>,
 }
 
 impl Track {
@@ -478,6 +518,7 @@ impl Track {
             locked: false,
             items: Vec::new(),
             transitions: Vec::new(),
+            audio_transitions: Vec::new(),
         }
     }
 
@@ -550,6 +591,73 @@ impl Track {
                 return Err(DomainError::Validation(format!(
                     "CutTransition duration (L={}, R={}) exceeds participant editorial extent (left={}, right={})",
                     l_ticks, r_ticks, left_extent, right_extent
+                )));
+            }
+        }
+
+        let mut audio_transition_ids = std::collections::HashSet::new();
+        let mut audio_transition_cuts = std::collections::HashSet::new();
+        for trans in &self.audio_transitions {
+            trans.validate_basic()?;
+            if trans.track_id != self.track_id {
+                return Err(DomainError::Validation(format!(
+                    "AudioCrossfade track_id '{}' does not match track '{}'",
+                    trans.track_id, self.track_id
+                )));
+            }
+            if !audio_transition_ids.insert(trans.transition_id.as_str()) {
+                return Err(DomainError::Validation(format!(
+                    "Duplicate audio crossfade ID '{}'",
+                    trans.transition_id
+                )));
+            }
+            if !audio_transition_cuts
+                .insert((trans.left_item_id.as_str(), trans.right_item_id.as_str()))
+            {
+                return Err(DomainError::Validation(format!(
+                    "Duplicate audio crossfade at cut between '{}' and '{}'",
+                    trans.left_item_id, trans.right_item_id
+                )));
+            }
+            if self.kind != TrackKind::Audio {
+                return Err(DomainError::UnsupportedAudioCrossfadeMedia);
+            }
+            let left = self
+                .find_item(&trans.left_item_id)
+                .ok_or_else(|| DomainError::ItemNotFound(trans.left_item_id.clone()))?;
+            let right = self
+                .find_item(&trans.right_item_id)
+                .ok_or_else(|| DomainError::ItemNotFound(trans.right_item_id.clone()))?;
+            if left.kind != ItemKind::Audio || right.kind != ItemKind::Audio {
+                return Err(DomainError::UnsupportedAudioCrossfadeMedia);
+            }
+            if !left
+                .timeline_range
+                .is_adjacent_to_with_rate(&right.timeline_range, trans.duration.rate)
+            {
+                return Err(DomainError::NonAdjacentAudioCrossfade {
+                    track_id: self.track_id.clone(),
+                    left_id: left.item_id.clone(),
+                    right_id: right.item_id.clone(),
+                });
+            }
+            let duration = trans.duration;
+            let left_ticks = left
+                .timeline_range
+                .duration
+                .rescaled_to(duration.rate)
+                .value;
+            let right_ticks = right
+                .timeline_range
+                .duration
+                .rescaled_to(duration.rate)
+                .value;
+            let l_ticks = duration.value / 2;
+            let r_ticks = duration.value - l_ticks;
+            if left_ticks < l_ticks || right_ticks < r_ticks {
+                return Err(DomainError::Validation(format!(
+                    "AudioCrossfade duration exceeds participant editorial extent (left={}, right={})",
+                    left_ticks, right_ticks
                 )));
             }
         }
@@ -630,6 +738,20 @@ impl Track {
         } else {
             None
         }
+    }
+
+    pub fn find_audio_transition(&self, transition_id: &str) -> Option<&AudioCrossfade> {
+        self.audio_transitions
+            .iter()
+            .find(|transition| transition.transition_id == transition_id)
+    }
+
+    pub fn remove_audio_transition(&mut self, transition_id: &str) -> Option<AudioCrossfade> {
+        let position = self
+            .audio_transitions
+            .iter()
+            .position(|transition| transition.transition_id == transition_id)?;
+        Some(self.audio_transitions.remove(position))
     }
 }
 
@@ -735,6 +857,77 @@ impl Project {
                     if !self.assets.iter().any(|a| &a.asset_id == asset_id) {
                         return Err(DomainError::AssetNotFound(asset_id.clone()));
                     }
+                }
+            }
+            for crossfade in &track.audio_transitions {
+                let (left_track, left) = self
+                    .find_item_and_track(&crossfade.left_item_id)
+                    .ok_or_else(|| DomainError::ItemNotFound(crossfade.left_item_id.clone()))?;
+                let (right_track, right) = self
+                    .find_item_and_track(&crossfade.right_item_id)
+                    .ok_or_else(|| DomainError::ItemNotFound(crossfade.right_item_id.clone()))?;
+                if left_track.track_id != track.track_id || right_track.track_id != track.track_id {
+                    return Err(DomainError::UnsupportedAudioCrossfadeMedia);
+                }
+                let rate = crossfade.duration.rate;
+                let left_asset_id = left.asset_id.as_deref().ok_or_else(|| {
+                    DomainError::Validation(format!(
+                        "Audio crossfade outgoing item '{}' has no asset",
+                        left.item_id
+                    ))
+                })?;
+                let right_asset_id = right.asset_id.as_deref().ok_or_else(|| {
+                    DomainError::Validation(format!(
+                        "Audio crossfade incoming item '{}' has no asset",
+                        right.item_id
+                    ))
+                })?;
+                let left_asset = self
+                    .find_asset(left_asset_id)
+                    .ok_or_else(|| DomainError::AssetNotFound(left_asset_id.to_string()))?;
+                let right_asset = self
+                    .find_asset(right_asset_id)
+                    .ok_or_else(|| DomainError::AssetNotFound(right_asset_id.to_string()))?;
+                if left_asset.media_kind != MediaKind::Audio
+                    || right_asset.media_kind != MediaKind::Audio
+                {
+                    return Err(DomainError::UnsupportedAudioCrossfadeMedia);
+                }
+                let left_media_end = left_asset
+                    .duration
+                    .ok_or_else(|| {
+                        DomainError::Validation(format!(
+                            "Audio crossfade outgoing asset '{}' has no probed duration",
+                            left_asset_id
+                        ))
+                    })?
+                    .rescaled_to(rate)
+                    .value;
+                let left_source_start = left.source_range.start.rescaled_to(rate).value;
+                let left_source_duration = left.source_range.duration.rescaled_to(rate).value;
+                let right_preroll = right.source_range.start.rescaled_to(rate).value;
+                let l_ticks = crossfade.duration.value / 2;
+                let r_ticks = crossfade.duration.value - l_ticks;
+                let left_postroll = left_media_end - left_source_start - left_source_duration;
+                if left_postroll < r_ticks || right_preroll < l_ticks {
+                    return Err(DomainError::Validation(format!(
+                        "Audio crossfade source handles are insufficient: postroll {} < {} or preroll {} < {}",
+                        left_postroll, r_ticks, right_preroll, l_ticks
+                    )));
+                }
+                if right_asset.duration.is_none() {
+                    return Err(DomainError::Validation(format!(
+                        "Audio crossfade incoming asset '{}' has no probed duration",
+                        right_asset_id
+                    )));
+                }
+                let right_media_end = right_asset.duration.unwrap().rescaled_to(rate).value;
+                let right_source_end = right.source_range.end().rescaled_to(rate).value;
+                if right_source_end > right_media_end {
+                    return Err(DomainError::Validation(format!(
+                        "Audio crossfade incoming source range ends at {} beyond probed asset duration {}",
+                        right_source_end, right_media_end
+                    )));
                 }
             }
         }

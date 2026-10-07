@@ -3003,3 +3003,9 @@ For duration `D` rescaled to the cut's exact rational rate, set `L=floor(D/2)` a
 
 Proceed with a bounded Phase 18: Schema v4 `Track.audio_transitions`, lossless v1–v3 migration to an empty collection, existing Command Service/history and automation paths, canonical equal-power gain sampling, standalone Audio-track preview playback, and sample-grid export envelopes. No new dependency, audio engine, microservice, or persisted FFmpeg syntax is justified by the evidence. Keep embedded Video-item audio, alternate curves, and native audio-engine selection deferred. ADR-006 records the durable semantics; `Plans/plan_phase18.md` contains the 14 acceptance criteria and stop conditions.
 
+## Implementation reconciliation
+
+Phase 18 is implemented as `COMPLETE WITH DEFERRED ITEMS`. The v4 model/migration, command/history lifecycle, dependent-edit rules, canonical preview/export gain evaluation, MCP path, and real-media export are covered by passing automated acceptance tests. Review exposed and fixed a mixed-frame-rate defect in clip-local fade evaluation by normalizing offsets to the clip's time rate before evaluating fades.
+
+The runtime implementation now includes standalone Audio-track WebView playback and timeline/inspector crossfade controls. Interactive Windows qualification for audible transport, UI accessibility/editing flow, and direct typed `app_health_check` remains deferred because no native application surface was available for this session. Automated checks and the local development runtime restart passed; see `Plans/plan_phase18.md` and `PROJECT_STATUS.md` for exact evidence. The implementation conforms to ADR-006, with no change to the research conclusions or architecture.
+

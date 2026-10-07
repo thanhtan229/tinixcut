@@ -157,7 +157,7 @@ Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
    ↓
 Phase 17 Performance Requalification & Release Foundation (Complete with Deferred Items)
    ↓
-Phase 18 Audio Crossfade Semantics & Preview/Export Parity (Planned)
+Phase 18 Audio Crossfade Semantics & Preview/Export Parity (Complete with Deferred Items)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -1753,9 +1753,9 @@ This sequence protects the two aspects that will be hardest to retrofit later: *
 
 **Milestone:** `Phase 18 — Audio Crossfade Semantics & Preview/Export Parity`
 **Governing inputs:** `Plans/plan_phase18.md`, ADR-006, `RESEARCH.md` Phase 18, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
-**Status:** Plan self-reviewed and locked; implementation not started.
-**Schema:** Planned v4 with lossless v1→v4 migration.
+**Status:** COMPLETE WITH DEFERRED ITEMS — automated acceptance passes; interactive Windows qualification remains deferred.
+**Schema:** v4 implemented with lossless v1→v4 migration.
 
 Phase 18 adds persistent equal-power crossfades between adjacent standalone audio clips on Audio tracks. Audio timeline ranges remain adjacent; verified source handles provide audio across the centered cut interval, and project duration remains invariant. One canonical gain evaluator drives preview samples and sample-grid export envelopes. Standalone Audio-track media becomes audible in preview. All create/update/remove operations use the existing Command Service and automation surfaces.
 
-The authoritative scope, semantics, 14 acceptance criteria, validation path, and stop conditions are in `Plans/plan_phase18.md`. ADR-006 governs durable semantics. Historical deferrals in earlier phase records describe their state at those phase completions; Phase 18 is the newly selected implementation phase.
+The authoritative scope, semantics, 14 acceptance criteria, evidence, validation path, and deferred gates are in `Plans/plan_phase18.md`. ADR-006 governs durable semantics. Historical deferrals in earlier phase records describe their state at those phase completions.

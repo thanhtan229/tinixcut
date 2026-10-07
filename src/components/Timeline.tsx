@@ -25,6 +25,7 @@ interface TimelineProps {
   onDuplicateClip: (itemId: string) => void;
   onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
   onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
+  onCreateAudioCrossfade?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
   zoom?: number;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
@@ -55,6 +56,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onDuplicateClip,
   onMoveKeyframe,
   onCreateCutTransition,
+  onCreateAudioCrossfade,
   zoom: externalZoom,
   onZoomIn,
   onZoomOut,
@@ -1044,6 +1046,107 @@ export const Timeline: React.FC<TimelineProps> = ({
                   </div>
                 );
               })}
+
+              {track.audio_transitions?.map((trans) => {
+                const leftItem = track.items.find((item) => item.item_id === trans.left_item_id);
+                if (!leftItem) return null;
+                const cutF = leftItem.timeline_range.start.value + leftItem.timeline_range.duration.value;
+                const durF = trans.duration.value;
+                const leftF = Math.floor(durF / 2);
+                const startF = cutF - leftF;
+                const isSelected = selectedTransitionId === trans.transition_id;
+                return (
+                  <div
+                    key={trans.transition_id}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectTransition?.(trans.transition_id);
+                      onSelectItem(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onSelectTransition?.(trans.transition_id);
+                        onSelectItem(null);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select audio crossfade between ${leftItem.name} and ${track.items.find((item) => item.item_id === trans.right_item_id)?.name ?? "incoming clip"}, ${durF} frames`}
+                    style={{
+                      position: "absolute",
+                      top: "6px",
+                      bottom: "6px",
+                      left: `${HEADER_WIDTH + startF * zoom}px`,
+                      width: `${Math.max(16, durF * zoom)}px`,
+                      background: isSelected ? "rgba(34, 197, 94, 0.95)" : "rgba(22, 163, 74, 0.72)",
+                      border: isSelected ? "2px solid #86efac" : "1px solid #4ade80",
+                      borderRadius: "3px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      zIndex: 13,
+                      color: "#fff",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
+                      userSelect: "none",
+                    }}
+                    title={`Audio Crossfade: ${durF} frames (click to edit)`}
+                  >
+                    ◖ {durF}f ◗
+                  </div>
+                );
+              })}
+
+              {track.kind === "Audio" &&
+                track.items.map((item, index) => {
+                  if (index >= track.items.length - 1) return null;
+                  const nextItem = track.items[index + 1];
+                  if (!isRangeAdjacent(item.timeline_range, nextItem.timeline_range)) return null;
+                  const hasCrossfade = track.audio_transitions?.some(
+                    (transition) =>
+                      transition.left_item_id === item.item_id &&
+                      transition.right_item_id === nextItem.item_id
+                  );
+                  if (hasCrossfade) return null;
+                  const cutF = item.timeline_range.start.value + item.timeline_range.duration.value;
+                  return (
+                    <button
+                      key={`audio-crossfade-${item.item_id}-${nextItem.item_id}`}
+                      aria-label={`Create audio crossfade between ${item.name} and ${nextItem.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCreateAudioCrossfade?.(track.track_id, item.item_id, nextItem.item_id, 30);
+                      }}
+                      style={{
+                        position: "absolute",
+                        top: "13px",
+                        left: `${HEADER_WIDTH + cutF * zoom - 9}px`,
+                        width: "18px",
+                        height: "18px",
+                        borderRadius: "50%",
+                        backgroundColor: "#16a34a",
+                        color: "#fff",
+                        border: "1px solid #86efac",
+                        fontSize: "11px",
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        zIndex: 15,
+                        padding: 0,
+                      }}
+                      title={`Create Audio Crossfade between "${item.name}" and "${nextItem.name}". Source handles and clip lengths are validated when applied.`}
+                    >
+                      ◖
+                    </button>
+                  );
+                })}
 
               {/* Seam Cut Handles for Adjacent Video Clips Without Transition */}
               {track.kind === "Video" &&

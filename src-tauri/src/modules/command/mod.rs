@@ -6,9 +6,9 @@
 use crate::modules::domain::id::*;
 use crate::modules::domain::time::{RationalTime, TimeRange};
 use crate::modules::domain::{
-    CommandLedgerEntry, Crop, CutTransition, DomainError, ItemKind, Keyframe, KeyframeEasing,
-    KeyframeProperty, Project, TimelineItem, Track, TrackKind, Transform, Transition,
-    TransitionKind, CURRENT_SCHEMA_VERSION,
+    AudioCrossfade, CommandLedgerEntry, Crop, CutTransition, DomainError, ItemKind, Keyframe,
+    KeyframeEasing, KeyframeProperty, MediaKind, Project, TimelineItem, Track, TrackKind,
+    Transform, Transition, TransitionKind, CURRENT_SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -226,6 +226,20 @@ pub enum CommandOperation {
     CutTransitionRemove {
         transition_id: String,
     },
+    AudioCrossfadeCreate {
+        transition_id: Option<String>,
+        track_id: String,
+        left_item_id: String,
+        right_item_id: String,
+        duration: RationalTime,
+    },
+    AudioCrossfadeUpdateDuration {
+        transition_id: String,
+        new_duration: RationalTime,
+    },
+    AudioCrossfadeRemove {
+        transition_id: String,
+    },
     ClipGroupMove {
         item_ids: Vec<String>,
         delta: RationalTime,
@@ -359,6 +373,17 @@ pub enum DiffChange {
         new_duration: RationalTime,
     },
     CutTransitionRemoved {
+        transition_id: String,
+    },
+    AudioCrossfadeCreated {
+        transition_id: String,
+        track_id: String,
+    },
+    AudioCrossfadeUpdated {
+        transition_id: String,
+        new_duration: RationalTime,
+    },
+    AudioCrossfadeRemoved {
         transition_id: String,
     },
 }
@@ -539,6 +564,11 @@ impl CommandService {
                             DiffChange::CutTransitionRemoved { transition_id } => {
                                 Some(transition_id.clone())
                             }
+                            DiffChange::AudioCrossfadeCreated { transition_id, .. }
+                            | DiffChange::AudioCrossfadeUpdated { transition_id, .. }
+                            | DiffChange::AudioCrossfadeRemoved { transition_id } => {
+                                Some(transition_id.clone())
+                            }
                             _ => None,
                         },
                         affected_track_id: None,
@@ -649,6 +679,14 @@ impl CommandService {
                         (Some(transition_id.clone()), None)
                     }
                     Some(DiffChange::CutTransitionRemoved { transition_id }) => {
+                        (Some(transition_id.clone()), None)
+                    }
+                    Some(DiffChange::AudioCrossfadeCreated {
+                        transition_id,
+                        track_id,
+                    }) => (Some(transition_id.clone()), Some(track_id.clone())),
+                    Some(DiffChange::AudioCrossfadeUpdated { transition_id, .. })
+                    | Some(DiffChange::AudioCrossfadeRemoved { transition_id }) => {
                         (Some(transition_id.clone()), None)
                     }
                     None => (None, None),
@@ -1085,6 +1123,42 @@ impl CommandService {
             }
         }
 
+        let mut audio_crossfades_to_remove = Vec::new();
+        for track in &project.tracks {
+            for crossfade in &track.audio_transitions {
+                if id_set.contains(crossfade.left_item_id.as_str())
+                    || id_set.contains(crossfade.right_item_id.as_str())
+                {
+                    let valid = track
+                        .find_item(&crossfade.left_item_id)
+                        .zip(track.find_item(&crossfade.right_item_id))
+                        .is_some_and(|(left, right)| {
+                            left.timeline_range
+                                .is_adjacent_to_with_rate(&right.timeline_range, target_rate)
+                        })
+                        && Self::validate_audio_crossfade_handles(
+                            project,
+                            &track.track_id,
+                            &crossfade.left_item_id,
+                            &crossfade.right_item_id,
+                            crossfade.duration,
+                            op_id,
+                        )
+                        .is_ok();
+                    if !valid {
+                        audio_crossfades_to_remove
+                            .push((track.track_id.clone(), crossfade.transition_id.clone()));
+                    }
+                }
+            }
+        }
+        for (track_id, transition_id) in audio_crossfades_to_remove {
+            if let Some(track) = project.find_track_mut(&track_id) {
+                track.remove_audio_transition(&transition_id);
+                diff_changes.push(DiffChange::AudioCrossfadeRemoved { transition_id });
+            }
+        }
+
         Ok(diff_changes)
     }
 
@@ -1134,6 +1208,14 @@ impl CommandService {
             }
             !is_dep
         });
+        let mut removed_audio_crossfades = Vec::new();
+        track.audio_transitions.retain(|t| {
+            let is_dep = t.left_item_id == item_id || t.right_item_id == item_id;
+            if is_dep {
+                removed_audio_crossfades.push(t.transition_id.clone());
+            }
+            !is_dep
+        });
 
         // Shift surviving items on SAME track where timeline_start >= deleted_end
         // Semantic RationalTime comparison via exact 128-bit cross-multiplication (ZERO float conversion)
@@ -1161,6 +1243,9 @@ impl CommandService {
             diff_changes.push(DiffChange::CutTransitionRemoved {
                 transition_id: trans_id,
             });
+        }
+        for transition_id in removed_audio_crossfades {
+            diff_changes.push(DiffChange::AudioCrossfadeRemoved { transition_id });
         }
 
         Ok(diff_changes)
@@ -1273,6 +1358,7 @@ impl CommandService {
 
                 // Dependent transition reconciliation for move
                 Self::reconcile_dependent_transitions_after_move(project, item_id, op_id);
+                Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
 
                 Ok(Some(DiffChange::ClipMoved {
                     item_id: item_id.clone(),
@@ -1321,6 +1407,7 @@ impl CommandService {
                 }
 
                 Self::cleanup_broken_transitions_after_trim(project, item_id);
+                Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
 
                 Ok(Some(DiffChange::ClipTrimmed {
                     item_id: item_id.clone(),
@@ -1384,6 +1471,31 @@ impl CommandService {
                                         message: format!(
                                             "Cannot split clip '{}' inside active transition region [{:?}, {:?})",
                                             item_id, cut, t1
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        for crossfade in &track.audio_transitions {
+                            if crossfade.left_item_id == *item_id
+                                || crossfade.right_item_id == *item_id
+                            {
+                                let cut = if crossfade.left_item_id == *item_id {
+                                    item.timeline_range.end()
+                                } else {
+                                    item.timeline_range.start
+                                };
+                                let duration = crossfade.duration.rescaled_to(target_rate).value;
+                                let left = RationalTime::new(duration / 2, target_rate);
+                                let right = RationalTime::new(duration - duration / 2, target_rate);
+                                let active_start = cut - left;
+                                let active_end = cut + right;
+                                if *split_time >= active_start && *split_time < active_end {
+                                    return Err(CommandError::OperationValidationFailed {
+                                        operation_id: op_id.to_string(),
+                                        message: format!(
+                                            "Cannot split clip '{}' inside active audio crossfade region [{:?}, {:?})",
+                                            item_id, active_start, active_end
                                         ),
                                     });
                                 }
@@ -1607,6 +1719,11 @@ impl CommandService {
                                 t.left_item_id = right_id.clone();
                             }
                         }
+                        for crossfade in &mut track.audio_transitions {
+                            if crossfade.left_item_id == *item_id {
+                                crossfade.left_item_id = right_id.clone();
+                            }
+                        }
 
                         split_result = Some(right_id);
                         break;
@@ -1628,12 +1745,21 @@ impl CommandService {
 
             CommandOperation::ClipDelete { item_id } => {
                 let mut found = false;
+                let mut removed_audio_crossfades = Vec::new();
                 for track in &mut project.tracks {
                     if let Some(pos) = track.items.iter().position(|i| &i.item_id == item_id) {
                         track.items.remove(pos);
                         track
                             .transitions
                             .retain(|t| t.left_item_id != *item_id && t.right_item_id != *item_id);
+                        track.audio_transitions.retain(|t| {
+                            let affected =
+                                t.left_item_id == *item_id || t.right_item_id == *item_id;
+                            if affected {
+                                removed_audio_crossfades.push(t.transition_id.clone());
+                            }
+                            !affected
+                        });
                         found = true;
                         break;
                     }
@@ -1646,6 +1772,9 @@ impl CommandService {
                     });
                 }
 
+                // The command receipt has a single-change shape; the project snapshot remains
+                // authoritative and history captures the complete mutation.
+                let _ = removed_audio_crossfades;
                 Ok(Some(DiffChange::ClipDeleted {
                     item_id: item_id.clone(),
                 }))
@@ -1701,6 +1830,16 @@ impl CommandService {
                     if let (Some(l), Some(r)) = (l, r) {
                         l.timeline_range
                             .is_adjacent_to_with_rate(&r.timeline_range, target_rate)
+                    } else {
+                        false
+                    }
+                });
+                dest_track.audio_transitions.retain(|t| {
+                    let l = items.iter().find(|i| i.item_id == t.left_item_id);
+                    let r = items.iter().find(|i| i.item_id == t.right_item_id);
+                    if let (Some(left), Some(right)) = (l, r) {
+                        left.timeline_range
+                            .is_adjacent_to_with_rate(&right.timeline_range, target_rate)
                     } else {
                         false
                     }
@@ -2368,6 +2507,114 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::AudioCrossfadeCreate {
+                transition_id,
+                track_id,
+                left_item_id,
+                right_item_id,
+                duration,
+            } => {
+                Self::validate_audio_crossfade_handles(
+                    project,
+                    track_id,
+                    left_item_id,
+                    right_item_id,
+                    *duration,
+                    op_id,
+                )?;
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                if track
+                    .audio_transitions
+                    .iter()
+                    .any(|t| t.left_item_id == *left_item_id || t.right_item_id == *right_item_id)
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "An audio crossfade already uses one of these clips".to_string(),
+                    });
+                }
+                let tid = transition_id.clone().unwrap_or_else(generate_transition_id);
+                track.audio_transitions.push(AudioCrossfade {
+                    transition_id: tid.clone(),
+                    track_id: track_id.clone(),
+                    left_item_id: left_item_id.clone(),
+                    right_item_id: right_item_id.clone(),
+                    duration: *duration,
+                });
+                Ok(Some(DiffChange::AudioCrossfadeCreated {
+                    transition_id: tid,
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::AudioCrossfadeUpdateDuration {
+                transition_id,
+                new_duration,
+            } => {
+                let (track_id, left_id, right_id) = project
+                    .tracks
+                    .iter()
+                    .find_map(|track| {
+                        track.find_audio_transition(transition_id).map(|t| {
+                            (
+                                track.track_id.clone(),
+                                t.left_item_id.clone(),
+                                t.right_item_id.clone(),
+                            )
+                        })
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Audio crossfade '{}' not found", transition_id),
+                    })?;
+                Self::validate_audio_crossfade_handles(
+                    project,
+                    &track_id,
+                    &left_id,
+                    &right_id,
+                    *new_duration,
+                    op_id,
+                )?;
+                let transition = project
+                    .find_track_mut(&track_id)
+                    .and_then(|track| {
+                        track
+                            .audio_transitions
+                            .iter_mut()
+                            .find(|t| t.transition_id == *transition_id)
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Audio crossfade '{}' not found", transition_id),
+                    })?;
+                transition.duration = *new_duration;
+                Ok(Some(DiffChange::AudioCrossfadeUpdated {
+                    transition_id: transition_id.clone(),
+                    new_duration: *new_duration,
+                }))
+            }
+
+            CommandOperation::AudioCrossfadeRemove { transition_id } => {
+                let removed = project
+                    .tracks
+                    .iter_mut()
+                    .find_map(|track| track.remove_audio_transition(transition_id));
+                if removed.is_none() {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Audio crossfade '{}' not found", transition_id),
+                    });
+                }
+                Ok(Some(DiffChange::AudioCrossfadeRemoved {
+                    transition_id: transition_id.clone(),
+                }))
+            }
+
             CommandOperation::ClipGroupMove { .. } | CommandOperation::ClipRippleDelete { .. } => {
                 unreachable!(
                     "Group and ripple operations are handled in apply_operation_to_project"
@@ -2531,6 +2778,115 @@ impl CommandService {
         Ok(())
     }
 
+    fn validate_audio_crossfade_handles(
+        project: &Project,
+        track_id: &str,
+        left_item_id: &str,
+        right_item_id: &str,
+        duration: RationalTime,
+        op_id: &str,
+    ) -> Result<(), CommandError> {
+        let track = project.find_track(track_id).ok_or_else(|| {
+            CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: format!("Track '{}' not found", track_id),
+            }
+        })?;
+        if track.kind != TrackKind::Audio {
+            return Err(CommandError::UnsupportedTransitionMedia {
+                operation_id: op_id.to_string(),
+                code: "UNSUPPORTED_AUDIO_CROSSFADE_MEDIA".to_string(),
+            });
+        }
+        let left = track.find_item(left_item_id).ok_or_else(|| {
+            CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: format!("Outgoing clip '{}' not found", left_item_id),
+            }
+        })?;
+        let right = track.find_item(right_item_id).ok_or_else(|| {
+            CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: format!("Incoming clip '{}' not found", right_item_id),
+            }
+        })?;
+        if left.kind != ItemKind::Audio || right.kind != ItemKind::Audio {
+            return Err(CommandError::UnsupportedTransitionMedia {
+                operation_id: op_id.to_string(),
+                code: "UNSUPPORTED_AUDIO_CROSSFADE_MEDIA".to_string(),
+            });
+        }
+        let rate = project.settings.frame_rate;
+        if !left
+            .timeline_range
+            .is_adjacent_to_with_rate(&right.timeline_range, rate)
+        {
+            return Err(CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: "Audio crossfade clips must be immediately adjacent".to_string(),
+            });
+        }
+        let d = duration.rescaled_to(rate).value;
+        if d <= 0 {
+            return Err(CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: "Audio crossfade duration must be strictly positive".to_string(),
+            });
+        }
+        let l = d / 2;
+        let r = d - l;
+        let asset_duration = |item: &TimelineItem| -> Result<i64, CommandError> {
+            let asset_id = item.asset_id.as_deref().ok_or_else(|| {
+                CommandError::TransitionHandleUnverifiable {
+                    operation_id: op_id.to_string(),
+                    code: "TRANSITION_HANDLE_UNVERIFIABLE".to_string(),
+                    reason: format!("Audio clip '{}' has no asset", item.item_id),
+                }
+            })?;
+            let asset = project.find_asset(asset_id).ok_or_else(|| {
+                CommandError::TransitionHandleUnverifiable {
+                    operation_id: op_id.to_string(),
+                    code: "TRANSITION_HANDLE_UNVERIFIABLE".to_string(),
+                    reason: format!("Asset '{}' is missing", asset_id),
+                }
+            })?;
+            if asset.media_kind != MediaKind::Audio {
+                return Err(CommandError::UnsupportedTransitionMedia {
+                    operation_id: op_id.to_string(),
+                    code: "UNSUPPORTED_AUDIO_CROSSFADE_MEDIA".to_string(),
+                });
+            }
+            asset
+                .duration
+                .map(|duration| duration.rescaled_to(rate).value)
+                .ok_or_else(|| CommandError::TransitionHandleUnverifiable {
+                    operation_id: op_id.to_string(),
+                    code: "TRANSITION_HANDLE_UNVERIFIABLE".to_string(),
+                    reason: format!("Asset '{}' duration is unprobed", asset_id),
+                })
+        };
+        let left_end = left.source_range.start.rescaled_to(rate).value
+            + left.source_range.duration.rescaled_to(rate).value;
+        let left_postroll = asset_duration(left)? - left_end;
+        let right_preroll = right.source_range.start.rescaled_to(rate).value;
+        let left_extent = left.timeline_range.duration.rescaled_to(rate).value;
+        let right_extent = right.timeline_range.duration.rescaled_to(rate).value;
+        if left_postroll < r || right_preroll < l || left_extent < l || right_extent < r {
+            return Err(CommandError::InsufficientTransitionHandle {
+                operation_id: op_id.to_string(),
+                code: "INSUFFICIENT_TRANSITION_HANDLE".to_string(),
+                message:
+                    "Audio crossfade requires source handles and editorial extent on both clips"
+                        .to_string(),
+                required_preroll: RationalTime::new(l, rate),
+                available_preroll: RationalTime::new(right_preroll, rate),
+                required_postroll: RationalTime::new(r, rate),
+                available_postroll: RationalTime::new(left_postroll, rate),
+            });
+        }
+        Ok(())
+    }
+
     fn reconcile_dependent_transitions_after_move(
         project: &mut Project,
         item_id: &str,
@@ -2573,6 +2929,46 @@ impl CommandService {
         for (track_id, trans_id) in transitions_to_remove {
             if let Some(track) = project.find_track_mut(&track_id) {
                 track.remove_transition(&trans_id);
+            }
+        }
+    }
+
+    fn reconcile_dependent_audio_crossfades_after_edit(
+        project: &mut Project,
+        item_id: &str,
+        op_id: &str,
+    ) {
+        let target_rate = project.settings.frame_rate;
+        let mut to_remove = Vec::new();
+        for track in &project.tracks {
+            for crossfade in &track.audio_transitions {
+                if crossfade.left_item_id == item_id || crossfade.right_item_id == item_id {
+                    let adjacent = track
+                        .find_item(&crossfade.left_item_id)
+                        .zip(track.find_item(&crossfade.right_item_id))
+                        .is_some_and(|(left, right)| {
+                            left.timeline_range
+                                .is_adjacent_to_with_rate(&right.timeline_range, target_rate)
+                        });
+                    let handles_valid = adjacent
+                        && Self::validate_audio_crossfade_handles(
+                            project,
+                            &track.track_id,
+                            &crossfade.left_item_id,
+                            &crossfade.right_item_id,
+                            crossfade.duration,
+                            op_id,
+                        )
+                        .is_ok();
+                    if !handles_valid {
+                        to_remove.push((track.track_id.clone(), crossfade.transition_id.clone()));
+                    }
+                }
+            }
+        }
+        for (track_id, transition_id) in to_remove {
+            if let Some(track) = project.find_track_mut(&track_id) {
+                track.remove_audio_transition(&transition_id);
             }
         }
     }
@@ -4759,6 +5155,324 @@ mod tests {
             "itm_1".to_string(),
             "itm_2".to_string(),
         )
+    }
+
+    fn setup_phase18_audio_test_project() -> (Project, String, String, String, String) {
+        let (mut project, project_id, track_id, left_id, right_id) = setup_phase13_test_project();
+        project.tracks[0].kind = TrackKind::Audio;
+        for item in &mut project.tracks[0].items {
+            item.kind = ItemKind::Audio;
+        }
+        for asset in &mut project.assets {
+            asset.media_kind = crate::modules::domain::MediaKind::Audio;
+        }
+        (project, project_id, track_id, left_id, right_id)
+    }
+
+    #[test]
+    fn test_phase18_audio_crossfade_command_history_lifecycle() {
+        let (project, project_id, track_id, left_id, right_id) = setup_phase18_audio_test_project();
+        let mut service = CommandService::new(project.clone());
+        let mut history = crate::modules::history::HistoryManager::new(20);
+        let mut active = project;
+        let rate = FrameRate::FPS_30;
+
+        let prior_snapshot = active.clone();
+        let created = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p18_create".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p18_create".to_string(),
+                    operation: CommandOperation::AudioCrossfadeCreate {
+                        transition_id: Some("audio_xfade_1".to_string()),
+                        track_id: track_id.clone(),
+                        left_item_id: left_id.clone(),
+                        right_item_id: right_id.clone(),
+                        duration: RationalTime::new(10, rate),
+                    },
+                }],
+            })
+            .unwrap();
+        assert_eq!(created.new_revision, 1);
+        assert_eq!(
+            created.receipts[0].affected_item_id.as_deref(),
+            Some("audio_xfade_1")
+        );
+        active = service.project().clone();
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "create_audio_crossfade".to_string(),
+            transaction_id: Some("tx_p18_create".to_string()),
+            prior_snapshot,
+            resulting_snapshot: active.clone(),
+        });
+        assert_eq!(active.tracks[0].audio_transitions.len(), 1);
+        assert_eq!(active.total_duration(), RationalTime::new(60, rate));
+
+        let prior_snapshot = active.clone();
+        let updated = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p18_update".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p18_update".to_string(),
+                    operation: CommandOperation::AudioCrossfadeUpdateDuration {
+                        transition_id: "audio_xfade_1".to_string(),
+                        new_duration: RationalTime::new(12, rate),
+                    },
+                }],
+            })
+            .unwrap();
+        assert_eq!(updated.new_revision, 2);
+        assert_eq!(
+            active.tracks[0].audio_transitions[0].duration,
+            RationalTime::new(10, rate)
+        );
+        active = service.project().clone();
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "update_audio_crossfade".to_string(),
+            transaction_id: Some("tx_p18_update".to_string()),
+            prior_snapshot,
+            resulting_snapshot: active.clone(),
+        });
+        assert_eq!(
+            active.tracks[0].audio_transitions[0].duration,
+            RationalTime::new(12, rate)
+        );
+        assert_eq!(active.total_duration(), RationalTime::new(60, rate));
+
+        let prior_snapshot = active.clone();
+        let removed = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 2,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p18_remove".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p18_remove".to_string(),
+                    operation: CommandOperation::AudioCrossfadeRemove {
+                        transition_id: "audio_xfade_1".to_string(),
+                    },
+                }],
+            })
+            .unwrap();
+        assert_eq!(removed.new_revision, 3);
+        active = service.project().clone();
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "remove_audio_crossfade".to_string(),
+            transaction_id: Some("tx_p18_remove".to_string()),
+            prior_snapshot,
+            resulting_snapshot: active.clone(),
+        });
+        assert!(active.tracks[0].audio_transitions.is_empty());
+
+        history.undo(&mut active).unwrap();
+        assert_eq!(
+            active.tracks[0].audio_transitions[0].transition_id,
+            "audio_xfade_1"
+        );
+        assert_eq!(
+            active.tracks[0].audio_transitions[0].duration,
+            RationalTime::new(12, rate)
+        );
+        history.undo(&mut active).unwrap();
+        assert_eq!(
+            active.tracks[0].audio_transitions[0].duration,
+            RationalTime::new(10, rate)
+        );
+        history.undo(&mut active).unwrap();
+        assert!(active.tracks[0].audio_transitions.is_empty());
+        history.redo(&mut active).unwrap();
+        history.redo(&mut active).unwrap();
+        history.redo(&mut active).unwrap();
+        assert!(active.tracks[0].audio_transitions.is_empty());
+        assert_eq!(active.total_duration(), RationalTime::new(60, rate));
+
+        let mut delete_service = CommandService::new(service.project().clone());
+        delete_service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 3,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p18_recreate_for_delete".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p18_recreate_for_delete".to_string(),
+                    operation: CommandOperation::AudioCrossfadeCreate {
+                        transition_id: Some("audio_xfade_delete".to_string()),
+                        track_id: track_id.clone(),
+                        left_item_id: left_id,
+                        right_item_id: right_id.clone(),
+                        duration: RationalTime::new(10, rate),
+                    },
+                }],
+            })
+            .unwrap();
+        let with_crossfade = delete_service.project().clone();
+        let deleted = delete_service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: with_crossfade.project_id.clone(),
+                base_revision: 4,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p18_delete_participant".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p18_delete_participant".to_string(),
+                    operation: CommandOperation::ClipDelete { item_id: right_id },
+                }],
+            })
+            .unwrap();
+        assert_eq!(deleted.new_revision, 5);
+        assert!(delete_service.project().tracks[0]
+            .audio_transitions
+            .is_empty());
+        assert_eq!(delete_service.project().tracks[0].items.len(), 1);
+        assert_eq!(
+            with_crossfade.tracks[0].audio_transitions[0].transition_id,
+            "audio_xfade_delete"
+        );
+    }
+
+    #[test]
+    fn test_phase18_audio_crossfade_reconciles_dependent_timeline_edits() {
+        fn service_with_crossfade() -> (CommandService, String, String, String) {
+            let (mut project, project_id, track_id, left_id, right_id) =
+                setup_phase18_audio_test_project();
+            project.tracks.push(Track::new(
+                "Second Audio Track".to_string(),
+                TrackKind::Audio,
+            ));
+            let mut service = CommandService::new(project);
+            service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: project_id.clone(),
+                    base_revision: 0,
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: None,
+                    operations: vec![OperationEnvelope {
+                        operation_id: "op_p18_dependent_create".to_string(),
+                        operation: CommandOperation::AudioCrossfadeCreate {
+                            transition_id: Some("audio_xfade_dependent".to_string()),
+                            track_id: track_id.clone(),
+                            left_item_id: left_id.clone(),
+                            right_item_id: right_id.clone(),
+                            duration: RationalTime::new(10, FrameRate::FPS_30),
+                        },
+                    }],
+                })
+                .unwrap();
+            (service, project_id, track_id, left_id)
+        }
+
+        fn apply(service: &mut CommandService, project_id: &str, operation: CommandOperation) {
+            service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: project_id.to_string(),
+                    base_revision: 1,
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: None,
+                    operations: vec![OperationEnvelope {
+                        operation_id: "op_p18_dependent_edit".to_string(),
+                        operation,
+                    }],
+                })
+                .unwrap();
+        }
+
+        let (mut moved, pid, _, _, right_id) = {
+            let (service, pid, track_id, left_id) = service_with_crossfade();
+            (service, pid, track_id, left_id, "itm_2".to_string())
+        };
+        let destination_id = moved.project().tracks[1].track_id.clone();
+        apply(
+            &mut moved,
+            &pid,
+            CommandOperation::ClipMove {
+                item_id: right_id,
+                target_track_id: Some(destination_id),
+                target_start: RationalTime::new(30, FrameRate::FPS_30),
+            },
+        );
+        assert!(moved.project().tracks[0].audio_transitions.is_empty());
+
+        let (mut trimmed, pid, _, left_id) = service_with_crossfade();
+        apply(
+            &mut trimmed,
+            &pid,
+            CommandOperation::ClipTrim {
+                item_id: left_id,
+                new_timeline_range: TimeRange::new(
+                    RationalTime::new(0, FrameRate::FPS_30),
+                    RationalTime::new(4, FrameRate::FPS_30),
+                ),
+                new_source_range: TimeRange::new(
+                    RationalTime::new(10, FrameRate::FPS_30),
+                    RationalTime::new(4, FrameRate::FPS_30),
+                ),
+            },
+        );
+        assert!(trimmed.project().tracks[0].audio_transitions.is_empty());
+
+        let (mut split, pid, _, left_id) = service_with_crossfade();
+        apply(
+            &mut split,
+            &pid,
+            CommandOperation::ClipSplit {
+                item_id: left_id,
+                split_time: RationalTime::new(10, FrameRate::FPS_30),
+                new_right_item_id: Some("itm_p18_split".to_string()),
+            },
+        );
+        assert_eq!(
+            split.project().tracks[0].audio_transitions[0].left_item_id,
+            "itm_p18_split"
+        );
+
+        let (mut duplicated, pid, _, left_id) = service_with_crossfade();
+        let destination_id = duplicated.project().tracks[1].track_id.clone();
+        apply(
+            &mut duplicated,
+            &pid,
+            CommandOperation::ClipDuplicate {
+                item_id: left_id,
+                target_start: Some(RationalTime::new(60, FrameRate::FPS_30)),
+                target_track_id: Some(destination_id),
+                new_item_id: Some("itm_p18_duplicate".to_string()),
+            },
+        );
+        assert_eq!(duplicated.project().tracks[0].audio_transitions.len(), 1);
+        assert_eq!(duplicated.project().tracks[1].items.len(), 1);
+        assert!(duplicated.project().tracks[1].audio_transitions.is_empty());
     }
 
     #[test]

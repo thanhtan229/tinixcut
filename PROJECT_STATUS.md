@@ -11,25 +11,37 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–17 COMPLETE; PHASES 16–17 HAVE DEFERRED ITEMS
+**Overall Status:** PHASES 0–15 COMPLETE; PHASES 16–18 COMPLETE WITH DEFERRED ITEMS
 **Current Selected Milestone:** Phase 18 — Audio Crossfade Semantics & Preview/Export Parity
-**Current Active Implementation Phase:** Phase 18 implementation not started
+**Current Active Implementation Phase:** None; Phase 18 implementation checkpoint prepared
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
-**Implementation:** Phases 0–15 COMPLETE; Phases 16–17 COMPLETE WITH DEFERRED ITEMS
+**Implementation:** Phases 0–15 COMPLETE; Phases 16–18 COMPLETE WITH DEFERRED ITEMS
 **ADR:** ADR-006 accepted for Phase 18 implementation
 **Plan Status:** Phase 17 qualification reconciled against locked criteria in `Plans/plan_phase17.md`
-**Project Schema:** Schema v3 unchanged  
+**Project Schema:** Schema v4 active; lossless v1–v3 migration verified
 **Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit `28f94c6`; durable reconciliation recorded
 **Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Next Action:** Implement Phase 18 against `Plans/plan_phase18.md`.
+**Phase 18:** COMPLETE WITH DEFERRED ITEMS; automated acceptance passed, interactive Windows audio/UI and typed IPC qualification deferred.
+**Next Action:** Complete the deferred interactive Windows GUI and typed `app_health_check` qualification.
 **Last Updated:** 2026-10-07
 
 ---
 
 ## 1. Current Objective
 
-Phase 17 performance requalification and release foundation has been reconciled as COMPLETE WITH DEFERRED ITEMS:
+Phase 18 audio crossfade implementation is complete with deferred interactive qualification:
+- **Phase 18 Implementation Status**: `COMPLETE WITH DEFERRED ITEMS`; see `Plans/plan_phase18.md` for the criterion-by-criterion evidence.
+- **Schema**: v4 is active; migrations from v1, v2, and v3 initialize empty audio-transition collections and preserve existing project data.
+- **Automated Verification**: PASS (209 Rust tests; 37 frontend tests; typecheck, fmt, Clippy, frontend/native builds all pass).
+- **Deferred Gates**: Interactive Windows audio transport/UI qualification and direct typed `app_health_check` verification.
+- **Runtime**: The exact `pnpm tauri dev` process tree was restarted after the final code/build and the new TinixCut process/window was observed; typed IPC remains unverified.
+- **Architecture Reconciliation**: Reviewed against ADR-006; no durable deviation, so `ARCHITECTURE.md` requires no change.
+- **Checkpoint**: Phase completion commit is prepared after runtime verification.
+
+### Historical Phase 17 Checkpoint
+
+Phase 17 performance requalification and release foundation was reconciled as COMPLETE WITH DEFERRED ITEMS:
 - **Phases 0–15 Final State**: `COMPLETE`.
 - **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS` (`P16-AC-56` real interactive Windows GUI QA deferred).
 - **Phase 17 Milestone**: `Phase 17 — Performance Requalification & Release Foundation`.
@@ -53,7 +65,7 @@ Phase 17 performance requalification and release foundation has been reconciled 
   5. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
   6. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
   7. Normative contract `PR-01` through `PR-18` accepted.
-- **Next Action**: Begin Phase 18 implementation against the locked plan.
+- **Historical Phase 17 Next Action**: Begin Phase 18 implementation against the locked plan (superseded by the current Phase 18 checkpoint above).
 
 ---
 
@@ -76,7 +88,7 @@ Phase 17 performance requalification and release foundation has been reconciled 
 - Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 current, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved; accepted by ChatGPT and ratified by user post-implementation).
 - Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented, `rmcp` 3.x local stdio transport, MCP `2026-07-28` primary protocol, exact 8-tool surface, explicit `projectPath` addressing, caller-supplied ADR-001 structured identity, atomic apply persistence, process-local write serialization, `JobManager` export lifecycle, structured domain error preservation, spawned subprocess stdout purity verified on Windows; accepted by ChatGPT after implementation and remediation).
 - Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Ephemeral Ctrl multi-select & primary selection, exact 8px snapping, atomic ClipGroupMove, single-track bounded ClipRippleDelete, centralized shortcut framework, non-ripple trim, multi-delete, primary-only duplicate, generic CLI/JSONL/MCP transport inheritance, canonical RationalTime semantic helpers; automated test suite 100% green; P16-AC-56 real interactive Windows GUI QA deferred).
-- Automated Tests: 235 total automated tests green (198 `cargo test` passed [107 unit + 8 POC + 15 Phase 14 acceptance + 26 Phase 15 acceptance + 12 Phase 16 research POC + 30 Phase 16 timeline productivity acceptance], 37 `vitest` passed across 4 test suites, `cargo clippy` 0 warnings, `cargo fmt` clean, frontend typecheck/build clean, production binary build green).
+- Automated Tests (Phase 18 checkpoint): 246 passed (209 Rust tests + 37 frontend tests; 5 benchmark tests intentionally ignored); fmt, Clippy, typecheck, frontend build, and Rust build pass.
 
 ---
 
@@ -303,9 +315,9 @@ Native core: Tauri 2.12.x + Rust (Modular Monolith: domain, command, persistence
 Standalone backend: None (Local-first architecture)
 Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged resource boundary)
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
-Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
+Database: Versioned Project Domain JSON files (Schema v4 active; migrated losslessly from v1–v3) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phases 16–17 COMPLETE WITH DEFERRED ITEMS; Phase 18 planning checkpoint locked and implementation not started.
+Current development mode: Phases 0–15 COMPLETE; Phases 16–18 COMPLETE WITH DEFERRED ITEMS. Phase 18 automated acceptance is complete; interactive Windows qualification remains open.
 Phase 17 approved planning checkpoint: `c35b4e3138d653c132355b07a8ce6464fdec4169`; transport research amendment: `36e19af`; qualification commit: `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 PASS: the approved planning checkpoint contains the plan only; the later calibration harness/seed/evidence are research artifacts in a distinct amendment commit.
 Deferred: true clean Windows 10/11 VM qualification, P16-AC-56 interactive GUI QA, and hardware encoder qualification. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
 Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evidence/phase17_transport_recalibration_2026-10-07.json`, `tests/evidence/clean_machine_qualification_report.json`. Installer SHA-256: `59a3bd697713e2ab50081175155926a18f8e3b1d65fae23f6ec6a966debb841f`.
@@ -315,7 +327,7 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ## 9. Next Actions
 
-1. Implement Phase 18 against `Plans/plan_phase18.md` and ADR-006, following the repository workflow and acceptance criteria.
+1. Complete deferred interactive Windows audio/UI qualification and directly verify typed `app_health_check`.
 2. Preserve Phase 16/17 external qualification deferrals; do not imply those gates passed.
 
 ---
@@ -329,15 +341,15 @@ Current implementation checkpoint:
 - Phase 17: COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 in-scope acceptance passed; true VM, interactive GUI, and hardware encoder gates deferred).
 - Phase 17 reconciliation commits: 28f94c6 and 988b7cf; transport research amendment 36e19af.
 - Phase 18 research gate: COMPLETE and committed as `61f2122`; Phase 18 plan is self-reviewed and locked in the planning checkpoint.
-- Active implementation: Phase 18 is selected; implementation has not started.
+- Active implementation: Phase 18 is implemented; completion is qualified with deferred interactive GUI/IPC gates.
 - Objective: Schema v4 persistent equal-power crossfades between adjacent standalone Audio items, canonical preview/export gain parity, and audible standalone audio preview.
 - Durable decision: ADR-006 accepted for implementation. Handle automation offsets clamp to editorial endpoints; existing endpoint keyframe/fade evaluation is preserved in preview and export.
-- Current production project schema remains v3 until Phase 18 implementation and migration are verified.
-- Baseline evidence at Phase 17 completion: 198 Rust tests and 37 Vitest tests passed; status needs refreshed validation during Phase 18.
-- Next action: implement Phase 18 from the locked plan.
+- Current project schema is v4; v1–v3 migrations and v4 round-trip are verified.
+- Phase 18 verification: 209 Rust tests + 37 frontend tests pass, along with typecheck, fmt, Clippy, frontend build, and Rust build.
+- Next action: complete deferred interactive Windows audio/UI and typed IPC qualification.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 research COMPLETE (`61f2122`) / plan LOCKED -> Phase 18 implementation NOT STARTED.
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 COMPLETE WITH DEFERRED ITEMS (Schema v4; automated acceptance passed; interactive Windows audio/UI and typed IPC qualification open).
 ```
 
 ---

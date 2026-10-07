@@ -117,32 +117,33 @@ fn read_raw_rgba_frames(path: &Path, width: usize, height: usize) -> Vec<Vec<u8>
 }
 
 // =========================================================================
-// P14-AC-01 & P14-AC-04: Schema v3 & Future-Reader Safety
+// P14-AC-01 & P14-AC-04: Current Schema & Future-Reader Safety
 // =========================================================================
 #[test]
 fn test_p14_ac01_schema_v3_and_ac04_future_reader_safety() {
-    assert_eq!(CURRENT_SCHEMA_VERSION, 3, "Production schema must be v3");
+    assert_eq!(CURRENT_SCHEMA_VERSION, 4, "Production schema must be v4");
 
-    let project = Project::new("Schema v3 Project".to_string());
-    assert_eq!(project.schema_version, 3);
+    let project = Project::new("Schema v4 Project".to_string());
+    assert_eq!(project.schema_version, CURRENT_SCHEMA_VERSION);
 
     let serialized = serde_json::to_string(&project).expect("Serialization failed");
     let val: serde_json::Value = serde_json::from_str(&serialized).expect("JSON parse failed");
-    assert_eq!(val["schema_version"], 3);
+    assert_eq!(val["schema_version"], CURRENT_SCHEMA_VERSION);
 
-    // Future schema version (v4) must be rejected
-    let mut v4_val = val.clone();
-    v4_val["schema_version"] = serde_json::json!(4);
-    let v4_str = serde_json::to_string(&v4_val).unwrap();
+    // A future schema version must be rejected.
+    let future_schema_version = CURRENT_SCHEMA_VERSION + 1;
+    let mut future_val = val.clone();
+    future_val["schema_version"] = serde_json::json!(future_schema_version);
+    let future_str = serde_json::to_string(&future_val).unwrap();
 
     let td = test_dir("schema_safety");
-    let v4_file = td.join("future_v4.tinix");
-    fs::write(&v4_file, &v4_str).unwrap();
+    let future_file = td.join("future_schema.tinix");
+    fs::write(&future_file, &future_str).unwrap();
 
-    let load_res = load_project(&v4_file);
+    let load_res = load_project(&future_file);
     assert!(
         load_res.is_err(),
-        "Older readers must reject unsupported future schema version 4"
+        "Readers must reject unsupported future schema version {future_schema_version}"
     );
 
     // Unsupported easing variant must fail to deserialize
@@ -228,7 +229,7 @@ fn test_p14_ac02_ac03_lossless_v2_to_v3_migration() {
 
     let migrated = load_project(&proj_file).expect("Migration failed");
 
-    assert_eq!(migrated.schema_version, 3);
+    assert_eq!(migrated.schema_version, CURRENT_SCHEMA_VERSION);
     let kfs = &migrated.tracks[0].items[0].keyframes;
     assert_eq!(kfs.len(), 2);
     assert_eq!(kfs[0].outgoing_easing, KeyframeEasing::Linear);
@@ -372,7 +373,7 @@ fn test_p14_ac09_semantic_rational_time_ordering_and_collision() {
 
     let mut svc = CommandService::new(project);
     let env = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -435,7 +436,7 @@ fn test_p14_ac10_through_ac14_command_service_keyframe_operations() {
 
     // 1. ClipKeyframeEasingSet on first keyframe
     let env_ease = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -461,7 +462,7 @@ fn test_p14_ac10_through_ac14_command_service_keyframe_operations() {
 
     // 2. Last-keyframe invariant: EasingSet on terminal keyframe must reject
     let env_last = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -487,7 +488,7 @@ fn test_p14_ac10_through_ac14_command_service_keyframe_operations() {
 
     // 3. Move keyframe
     let env_move = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -572,7 +573,7 @@ fn test_p14_ac15_duplicate_deep_copy() {
 
     let mut svc = CommandService::new(project);
     let env_dup = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -650,7 +651,7 @@ fn test_p14_ac16_ac17_ac18_split_continuity_and_subdivision() {
 
     let mut svc = CommandService::new(project);
     let env_split = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -717,7 +718,7 @@ fn test_p14_ac19_ac20_ac21_trim_hidden_keyframes() {
 
     // 1. Head trim by 20 frames (new start: 20, duration: 40)
     let env_trim_head = CommandEnvelope {
-        schema_version: 3,
+        schema_version: CURRENT_SCHEMA_VERSION,
         project_id: svc.project().project_id.clone(),
         base_revision: svc.project().revision,
         client_id: None,
@@ -1175,7 +1176,7 @@ fn test_p14_ac32_ac33_persistence_and_automation_surface() {
     save_project_atomic(&project, &proj_file).expect("Save failed");
 
     let reopened = load_project(&proj_file).expect("Open failed");
-    assert_eq!(reopened.schema_version, 3);
+    assert_eq!(reopened.schema_version, CURRENT_SCHEMA_VERSION);
     let reopened_kf = &reopened.tracks[0].items[0].keyframes[0];
     assert_eq!(
         reopened_kf.outgoing_easing,
@@ -1192,7 +1193,7 @@ fn test_p14_ac32_ac33_persistence_and_automation_surface() {
     assert!(supported_ops.contains(&"ClipKeyframeEasingSet".to_string()));
 
     let inspect = AutomationAdapter::inspect_project(&project);
-    assert_eq!(inspect.schema_version, 3);
+    assert_eq!(inspect.schema_version, CURRENT_SCHEMA_VERSION);
     assert!(inspect
         .supported_keyframe_easings
         .contains(&"EaseInOut".to_string()));

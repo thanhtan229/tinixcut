@@ -28,6 +28,8 @@ export interface PreviewSampledLayer {
 export interface PreviewSampledAudio {
   item_id: string;
   effective_volume: number;
+  source_time: RationalTime;
+  asset_path?: string | null;
 }
 
 export interface PreviewTransitionGroup {

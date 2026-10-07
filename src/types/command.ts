@@ -38,6 +38,29 @@ export type CommandOperation =
       };
     }
   | {
+      type: "AudioCrossfadeCreate";
+      payload: {
+        transition_id?: string;
+        track_id: string;
+        left_item_id: string;
+        right_item_id: string;
+        duration: RationalTime;
+      };
+    }
+  | {
+      type: "AudioCrossfadeUpdateDuration";
+      payload: {
+        transition_id: string;
+        new_duration: RationalTime;
+      };
+    }
+  | {
+      type: "AudioCrossfadeRemove";
+      payload: {
+        transition_id: string;
+      };
+    }
+  | {
       type: "ClipTransitionSet";
       payload: {
         item_id: string;

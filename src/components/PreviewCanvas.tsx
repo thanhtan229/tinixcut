@@ -52,6 +52,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
   const requestCounterRef = useRef<number>(0);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioGainNodesRef = useRef<WeakMap<HTMLAudioElement, GainNode>>(new WeakMap());
 
   // 1. Synchronize Playhead & Sampled Composition via Rust Core (Milestone 3 & 4)
   useEffect(() => {
@@ -158,6 +161,77 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
   }, [sampledState, isPlaying]);
 
+  useEffect(() => {
+    const activeIds = new Set((sampledState?.active_audio ?? []).map((audio) => audio.item_id));
+    for (const [itemId, element] of Object.entries(audioRefs.current)) {
+      const audio = sampledState?.active_audio.find((sample) => sample.item_id === itemId);
+      if (!element || !audio || !activeIds.has(itemId) || !audio.asset_path) {
+        if (element && !element.paused) element.pause();
+        continue;
+      }
+      const source = safeConvertFileSrc(audio.asset_path);
+      if (element.dataset.source !== source) {
+        element.src = source;
+        element.dataset.source = source;
+      }
+      const sourceSeconds =
+        audio.source_time.value /
+        (audio.source_time.rate.numerator / audio.source_time.rate.denominator);
+      if (Math.abs(element.currentTime - sourceSeconds) > 0.12) {
+        element.currentTime = Math.max(0, sourceSeconds);
+      }
+      const gain = Math.max(0, Math.min(1, audio.effective_volume));
+      let gainNode: GainNode | undefined;
+      try {
+        let context = audioContextRef.current;
+        if (!context) {
+          const AudioContextConstructor =
+            window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (AudioContextConstructor) {
+            context = new AudioContextConstructor();
+            audioContextRef.current = context;
+          }
+        }
+        if (context) {
+          gainNode = audioGainNodesRef.current.get(element);
+          if (!gainNode) {
+            const source = context.createMediaElementSource(element);
+            gainNode = context.createGain();
+            source.connect(gainNode);
+            gainNode.connect(context.destination);
+            audioGainNodesRef.current.set(element, gainNode);
+          }
+          const now = context.currentTime;
+          gainNode.gain.cancelScheduledValues(now);
+          gainNode.gain.setTargetAtTime(gain, now, 0.015);
+          element.volume = 1;
+          if (isPlaying && context.state === "suspended") {
+            void context.resume().catch(() => {});
+          }
+        }
+      } catch {
+        // Keep preview audible on WebViews where Web Audio routing is unavailable.
+        gainNode = undefined;
+      }
+      if (!gainNode) {
+        element.volume = gain;
+      }
+      if (isPlaying && gain > 0 && element.paused) {
+        element.play().catch(() => {});
+      } else if (!isPlaying && !element.paused) {
+        element.pause();
+      }
+    }
+  }, [sampledState, isPlaying]);
+
+  useEffect(
+    () => () => {
+      Object.values(audioRefs.current).forEach((element) => element?.pause());
+      void audioContextRef.current?.close();
+    },
+    []
+  );
+
   // Format SMPTE Timecode (HH:MM:SS:FF)
   const formatTimecode = (frames: number) => {
     const fps = 30;
@@ -206,6 +280,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
   const activeLayers = sampledState?.active_layers ?? [];
   const transitionGroups = sampledState?.transition_groups ?? [];
+  const activeAudio = sampledState?.active_audio ?? [];
 
   const renderLayer = (layer: PreviewSampledLayer, mixBlendMode?: "plus-lighter") => {
     const hasError = mediaErrors[layer.item_id] || layer.is_missing_media;
@@ -349,6 +424,19 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
   return (
     <div className="canvas-area" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      {activeAudio.map((audio) => (
+        <audio
+          key={audio.item_id}
+          ref={(element) => {
+            audioRefs.current[audio.item_id] = element;
+          }}
+          preload="auto"
+          onError={() => {
+            setMediaErrors((previous) => ({ ...previous, [audio.item_id]: true }));
+          }}
+          style={{ display: "none" }}
+        />
+      ))}
       {/* Real Decoded Viewport */}
       <div
         className="canvas-viewport"

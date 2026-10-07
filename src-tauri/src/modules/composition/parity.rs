@@ -360,10 +360,10 @@ impl ParitySemanticSnapshot {
 
         let mut audio = Vec::new();
         for audio_layer in &plan.audio_layers {
-            if audio_layer.timeline_range.contains_time(timestamp) {
+            if plan.audio_layer_active_at(audio_layer, timestamp) {
                 audio.push(ParityAudioSnapshot {
                     item_id: audio_layer.item_id.clone(),
-                    effective_volume: audio_layer.effective_volume_at(timestamp),
+                    effective_volume: plan.effective_audio_gain_at(audio_layer, timestamp),
                 });
             }
         }
@@ -2227,6 +2227,68 @@ mod tests {
     use super::*;
     use crate::modules::domain::{Keyframe, KeyframeProperty};
 
+    #[test]
+    fn test_phase18_audio_crossfade_preview_export_parity_detects_drift() {
+        use crate::modules::domain::{AudioCrossfade, MediaKind};
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 18 Audio Parity".to_string());
+        project.assets.push(Asset {
+            asset_id: "tone".to_string(),
+            name: "tone.wav".to_string(),
+            path: "tone.wav".to_string(),
+            media_kind: MediaKind::Audio,
+            duration: Some(RationalTime::new(70, rate)),
+            file_size: 0,
+        });
+        let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
+        let left = TimelineItem::new(
+            Some("tone".to_string()),
+            "Outgoing".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate)),
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate)),
+        )
+        .unwrap();
+        let right = TimelineItem::new(
+            Some("tone".to_string()),
+            "Incoming".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(RationalTime::new(60, rate), RationalTime::new(60, rate)),
+            TimeRange::new(RationalTime::new(10, rate), RationalTime::new(60, rate)),
+        )
+        .unwrap();
+        track.audio_transitions.push(AudioCrossfade {
+            transition_id: "fade".to_string(),
+            track_id: track.track_id.clone(),
+            left_item_id: left.item_id.clone(),
+            right_item_id: right.item_id.clone(),
+            duration: RationalTime::new(20, rate),
+        });
+        track.items.extend([left, right]);
+        project.tracks.push(track);
+        let plan = CompositionPlan::from_project(&project).expect("audio plan compiles");
+
+        for frame in [50, 55, 60, 69, 70, 80] {
+            let time = RationalTime::new(frame, rate);
+            let preview = ParitySemanticSnapshot::from_preview(&plan, time);
+            let export = ParitySemanticSnapshot::from_export(&plan, time);
+            assert!(
+                compare_semantic_snapshots(&preview, &export, 0.01).is_ok(),
+                "preview and export should match at frame {frame}"
+            );
+        }
+
+        let time = RationalTime::new(55, rate);
+        let preview = ParitySemanticSnapshot::from_preview(&plan, time);
+        let mut altered_export = ParitySemanticSnapshot::from_export(&plan, time);
+        altered_export.audio[0].effective_volume *= 0.75;
+        assert!(
+            compare_semantic_snapshots(&preview, &altered_export, 0.01).is_err(),
+            "parity comparison must detect a deliberately altered crossfade gain"
+        );
+    }
+
     /// Gate 7A: Semantic pipeline understood and mapped
     #[test]
     fn test_gate_7a_semantic_pipeline() {
@@ -2960,7 +3022,10 @@ mod tests {
         let loaded = load_project(&temp_file).expect("Failed to load project");
         let _ = std::fs::remove_file(temp_file);
 
-        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(
+            loaded.schema_version,
+            crate::modules::domain::CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(loaded.tracks.len(), 1);
         assert_eq!(loaded.tracks[0].transitions.len(), 1);
         let tr = &loaded.tracks[0].transitions[0];
@@ -3027,7 +3092,10 @@ mod tests {
         let loaded = load_project(&temp_file).expect("Failed to migrate v1 to v2");
         let _ = std::fs::remove_file(temp_file);
 
-        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(
+            loaded.schema_version,
+            crate::modules::domain::CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(loaded.tracks[0].items.len(), 2);
         // Verify FadeIn is preserved
         assert!(loaded.tracks[0].items[0].transition.is_some());

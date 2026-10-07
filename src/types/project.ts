@@ -120,6 +120,14 @@ export interface CutTransition {
   duration: RationalTime;
 }
 
+export interface AudioCrossfade {
+  transition_id: string;
+  track_id: string;
+  left_item_id: string;
+  right_item_id: string;
+  duration: RationalTime;
+}
+
 export interface Track {
   track_id: string;
   name: string;
@@ -128,6 +136,7 @@ export interface Track {
   locked: boolean;
   items: TimelineItem[];
   transitions?: CutTransition[];
+  audio_transitions?: AudioCrossfade[];
 }
 
 export interface ProjectSettings {
@@ -178,4 +187,3 @@ export interface Project {
   client_registry?: ClientRegistry;
   command_ledger?: CommandLedgerEntry[];
 }
-

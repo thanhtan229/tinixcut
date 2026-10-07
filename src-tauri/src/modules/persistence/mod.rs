@@ -178,6 +178,10 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
         val = migrate_v2_to_v3(val)?;
     }
 
+    if version <= 3 && CURRENT_SCHEMA_VERSION >= 4 {
+        val = migrate_v3_to_v4(val)?;
+    }
+
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
 }
 
@@ -281,6 +285,29 @@ pub fn migrate_v2_to_v3(mut val: serde_json::Value) -> Result<serde_json::Value,
     // Bump schema version to 3
     obj.insert("schema_version".to_string(), serde_json::json!(3));
 
+    Ok(val)
+}
+
+/// Migrates Schema v3 projects to Schema v4 by adding an empty standalone-audio
+/// crossfade collection to every track. Existing editorial data is unchanged.
+pub fn migrate_v3_to_v4(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj.get_mut("tracks").and_then(|value| value.as_array_mut()) {
+        for track in tracks {
+            if let Some(track) = track.as_object_mut() {
+                if !track.contains_key("audio_transitions")
+                    || track
+                        .get("audio_transitions")
+                        .is_some_and(serde_json::Value::is_null)
+                {
+                    track.insert("audio_transitions".to_string(), serde_json::json!([]));
+                }
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(4));
     Ok(val)
 }
 
@@ -713,8 +740,8 @@ mod tests {
         let project: Project =
             serde_json::from_str(&migrated_str).expect("migrated json should parse to Project");
 
-        // CD-08: Bumped to schema_version 3 (via v1 -> v2 -> v3 migration)
-        assert_eq!(project.schema_version, 3);
+        // Legacy projects migrate through schema v4 without changing editorial data.
+        assert_eq!(project.schema_version, 4);
         assert_eq!(project.tracks.len(), 1);
 
         // CD-09, CD-12: transitions initialized empty
@@ -736,6 +763,89 @@ mod tests {
     }
 
     #[test]
+    fn test_phase18_schema_v1_v2_v3_migrate_with_empty_audio_crossfades() {
+        let mut project = Project::new("Phase 18 migration fixture".to_string());
+        project
+            .tracks
+            .push(Track::new("Audio".to_string(), TrackKind::Audio));
+        let canonical = serde_json::to_value(project).unwrap();
+
+        for version in 1..=3 {
+            let mut legacy = canonical.clone();
+            let root = legacy.as_object_mut().unwrap();
+            root.insert("schema_version".to_string(), serde_json::json!(version));
+            for track in root["tracks"].as_array_mut().unwrap() {
+                track.as_object_mut().unwrap().remove("audio_transitions");
+            }
+
+            let migrated = run_migrations_if_needed(&legacy.to_string())
+                .unwrap_or_else(|error| panic!("v{version} migration failed: {error}"));
+            let loaded: Project = serde_json::from_str(&migrated).unwrap();
+            assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+            assert_eq!(loaded.name, "Phase 18 migration fixture");
+            assert_eq!(loaded.tracks.len(), 1);
+            assert!(loaded.tracks[0].audio_transitions.is_empty());
+            assert!(loaded.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_phase18_audio_crossfade_save_reopen_round_trip() {
+        use crate::modules::domain::AudioCrossfade;
+
+        let temp_dir = std::env::temp_dir().join("tinix_p18_crossfade_persistence");
+        let _ = fs::create_dir_all(&temp_dir);
+        let project_path = temp_dir.join("audio_crossfade.tcproj");
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 18 persistence".to_string());
+        let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
+
+        for (index, start) in [0, 60].into_iter().enumerate() {
+            let asset_id = format!("asset_audio_{index}");
+            project.assets.push(crate::modules::domain::Asset {
+                asset_id: asset_id.clone(),
+                name: format!("{asset_id}.wav"),
+                path: format!("D:/fixtures/{asset_id}.wav"),
+                media_kind: MediaKind::Audio,
+                duration: Some(RationalTime::new(130, rate)),
+                file_size: 1,
+            });
+            let timeline =
+                TimeRange::new(RationalTime::new(start, rate), RationalTime::new(60, rate));
+            let source = TimeRange::new(
+                RationalTime::new(if index == 0 { 0 } else { 10 }, rate),
+                RationalTime::new(60, rate),
+            );
+            track.items.push(
+                TimelineItem::new(
+                    Some(asset_id),
+                    format!("Audio clip {index}"),
+                    ItemKind::Audio,
+                    timeline,
+                    source,
+                )
+                .unwrap(),
+            );
+        }
+        track.audio_transitions.push(AudioCrossfade {
+            transition_id: "audio_xfade_persist".to_string(),
+            track_id: track.track_id.clone(),
+            left_item_id: track.items[0].item_id.clone(),
+            right_item_id: track.items[1].item_id.clone(),
+            duration: RationalTime::new(20, rate),
+        });
+        let expected = track.audio_transitions[0].clone();
+        project.tracks.push(track);
+
+        save_project_atomic(&project, &project_path).expect("save should succeed");
+        let loaded = load_project(&project_path).expect("reopen should succeed");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.tracks[0].audio_transitions, vec![expected]);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_phase13_schema_v2_save_and_reopen_exact_round_trip() {
         let temp_dir = std::env::temp_dir().join("tinix_p13_save_test");
         let _ = fs::create_dir_all(&temp_dir);
@@ -743,7 +853,7 @@ mod tests {
 
         let rate = FrameRate::FPS_30;
         let mut project = Project::new("Schema v2 Project".to_string());
-        assert_eq!(project.schema_version, 3);
+        assert_eq!(project.schema_version, 4);
 
         let mut track = Track::new("Video Track 1".to_string(), TrackKind::Video);
         let t1 = TimeRange::new(
@@ -778,7 +888,7 @@ mod tests {
         save_project_atomic(&project, &project_path).expect("v2 save should succeed");
 
         let loaded = load_project(&project_path).expect("v2 load should succeed");
-        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.schema_version, 4);
         assert_eq!(loaded.tracks[0].transitions.len(), 1);
 
         let loaded_trans = &loaded.tracks[0].transitions[0];

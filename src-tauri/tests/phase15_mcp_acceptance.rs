@@ -11,7 +11,10 @@ use tinixcut_lib::modules::automation::mcp::TinixCutMcpServer;
 use tinixcut_lib::modules::command::{
     CommandEnvelope, CommandOperation, CommandReceipt, OperationEnvelope,
 };
-use tinixcut_lib::modules::domain::{Project, Track, TrackKind, CURRENT_SCHEMA_VERSION};
+use tinixcut_lib::modules::domain::time::{FrameRate, RationalTime, TimeRange};
+use tinixcut_lib::modules::domain::{
+    Asset, ItemKind, MediaKind, Project, TimelineItem, Track, TrackKind, CURRENT_SCHEMA_VERSION,
+};
 use tinixcut_lib::modules::persistence::{load_project, save_project_atomic};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 
@@ -521,6 +524,144 @@ async fn test_p15_ac14_ac15_apply_execution_and_durable_persistence() {
     assert_eq!(reloaded.tracks.len(), 2);
     assert_eq!(reloaded.tracks[1].track_id, "track_v2");
     assert_eq!(reloaded.command_ledger.len(), 1);
+}
+
+#[tokio::test]
+async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
+    let dir = test_dir("p18_audio_crossfade_mcp");
+    let project_path = dir.join("audio_crossfade.tcproj");
+    let rate = FrameRate::FPS_30;
+    let mut project = Project::new("Phase 18 MCP".to_string());
+    let mut track = Track::new("Audio Track".to_string(), TrackKind::Audio);
+
+    for (index, (timeline_start, source_start)) in [(0, 10), (30, 20)].into_iter().enumerate() {
+        let asset_id = format!("ast_p18_{index}");
+        project.assets.push(Asset {
+            asset_id: asset_id.clone(),
+            name: format!("{asset_id}.wav"),
+            path: dir
+                .join(format!("{asset_id}.wav"))
+                .to_string_lossy()
+                .to_string(),
+            media_kind: MediaKind::Audio,
+            duration: Some(RationalTime::new(100, rate)),
+            file_size: 1,
+        });
+        track.items.push(
+            TimelineItem::new(
+                Some(asset_id),
+                format!("Audio clip {index}"),
+                ItemKind::Audio,
+                TimeRange::new(
+                    RationalTime::new(timeline_start, rate),
+                    RationalTime::new(30, rate),
+                ),
+                TimeRange::new(
+                    RationalTime::new(source_start, rate),
+                    RationalTime::new(30, rate),
+                ),
+            )
+            .unwrap(),
+        );
+    }
+    let left_id = track.items[0].item_id.clone();
+    let right_id = track.items[1].item_id.clone();
+    let track_id = track.track_id.clone();
+    project.tracks.push(track);
+    save_project_atomic(&project, &project_path).unwrap();
+
+    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let create_envelope = CommandEnvelope {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project_id: project.project_id.clone(),
+        base_revision: 0,
+        client_id: Some("p18-agent".to_string()),
+        client_epoch: Some(1),
+        sequence_number: Some(1),
+        dry_run: false,
+        transaction_id: Some("tx_p18_mcp_create".to_string()),
+        operations: vec![OperationEnvelope {
+            operation_id: "op_p18_mcp_create".to_string(),
+            operation: CommandOperation::AudioCrossfadeCreate {
+                transition_id: Some("audio_xfade_mcp".to_string()),
+                track_id,
+                left_item_id: left_id,
+                right_item_id: right_id,
+                duration: RationalTime::new(10, rate),
+            },
+        }],
+    };
+    let create_args = serde_json::json!({
+        "projectPath": project_path.to_string_lossy(),
+        "envelope": create_envelope,
+    });
+    let created = client
+        .call_tool("tinixcut_apply", create_args.clone())
+        .await;
+    assert_eq!(created["result"]["isError"], false, "{created:?}");
+    let created_receipt: CommandReceipt =
+        serde_json::from_value(created["result"]["structuredContent"].clone()).unwrap();
+    assert_eq!(created_receipt.prior_revision, 0);
+    assert_eq!(created_receipt.new_revision, 1);
+
+    let replayed = client.call_tool("tinixcut_apply", create_args).await;
+    assert_eq!(replayed["result"]["isError"], false, "{replayed:?}");
+    let replay_receipt: CommandReceipt =
+        serde_json::from_value(replayed["result"]["structuredContent"].clone()).unwrap();
+    assert_eq!(replay_receipt.new_revision, 1);
+    assert_eq!(replay_receipt.receipts[0].status, "deduplicated_noop");
+
+    for (sequence_number, base_revision, operation_id, transaction_id, operation) in [
+        (
+            2,
+            1,
+            "op_p18_mcp_update",
+            "tx_p18_mcp_update",
+            CommandOperation::AudioCrossfadeUpdateDuration {
+                transition_id: "audio_xfade_mcp".to_string(),
+                new_duration: RationalTime::new(12, rate),
+            },
+        ),
+        (
+            3,
+            2,
+            "op_p18_mcp_remove",
+            "tx_p18_mcp_remove",
+            CommandOperation::AudioCrossfadeRemove {
+                transition_id: "audio_xfade_mcp".to_string(),
+            },
+        ),
+    ] {
+        let envelope = CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: project.project_id.clone(),
+            base_revision,
+            client_id: Some("p18-agent".to_string()),
+            client_epoch: Some(1),
+            sequence_number: Some(sequence_number),
+            dry_run: false,
+            transaction_id: Some(transaction_id.to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: operation_id.to_string(),
+                operation,
+            }],
+        };
+        let result = client
+            .call_tool(
+                "tinixcut_apply",
+                serde_json::json!({
+                    "projectPath": project_path.to_string_lossy(),
+                    "envelope": envelope,
+                }),
+            )
+            .await;
+        assert_eq!(result["result"]["isError"], false, "{result:?}");
+    }
+
+    let persisted = load_project(&project_path).unwrap();
+    assert_eq!(persisted.revision, 3);
+    assert!(persisted.tracks[0].audio_transitions.is_empty());
+    assert_eq!(persisted.command_ledger.len(), 3);
 }
 
 #[tokio::test]
@@ -1399,8 +1540,8 @@ async fn test_p15_ac38_project_schema_unchanged() {
     let raw_text = fs::read_to_string(&proj_path).unwrap();
     let raw_json: serde_json::Value = serde_json::from_str(&raw_text).unwrap();
 
-    // Verify schema_version remains CURRENT_SCHEMA_VERSION (3)
-    assert_eq!(raw_json["schema_version"], 3);
+    // MCP writes must preserve the current project schema without adding MCP metadata.
+    assert_eq!(raw_json["schema_version"], CURRENT_SCHEMA_VERSION);
     // Verify zero MCP-specific metadata fields in project root
     assert!(raw_json.get("mcp").is_none());
     assert!(raw_json.get("mcpSession").is_none());

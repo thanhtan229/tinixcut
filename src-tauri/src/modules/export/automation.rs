@@ -5,6 +5,7 @@
 //! 3. RAII cleanup guard guaranteeing temporary file removal on success, failure, or cancellation.
 
 use crate::modules::composition::{CompositionAudioLayer, CompositionPlan, CompositionVisualLayer};
+use crate::modules::domain::time::FrameRate;
 use crate::modules::domain::time::RationalTime;
 use crate::modules::domain::KeyframeProperty;
 use crate::modules::export::ExportError;
@@ -72,6 +73,41 @@ pub fn layer_has_animated_volume(layer: &CompositionAudioLayer) -> bool {
         .any(|k| k.property == KeyframeProperty::Volume)
 }
 
+fn audio_sample_time(
+    start: RationalTime,
+    sample_index: usize,
+    sample_rate: u32,
+    timeline_rate: FrameRate,
+) -> Result<RationalTime, ExportError> {
+    fn gcd(mut a: u32, mut b: u32) -> u32 {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    }
+
+    if sample_rate == 0 || timeline_rate.numerator == 0 {
+        return Err(ExportError::IoError(
+            "Cannot construct audio sample time with a zero rate".to_string(),
+        ));
+    }
+    let common_rate = (timeline_rate.numerator / gcd(timeline_rate.numerator, sample_rate))
+        .checked_mul(sample_rate)
+        .ok_or_else(|| ExportError::IoError("Audio sample time rate overflow".to_string()))?;
+    let start_ticks = (start.value as i128)
+        .checked_mul(start.rate.denominator as i128)
+        .and_then(|value| value.checked_mul((common_rate / start.rate.numerator) as i128))
+        .ok_or_else(|| ExportError::IoError("Audio sample start overflow".to_string()))?;
+    let sample_ticks = (sample_index as i128)
+        .checked_mul((common_rate / sample_rate) as i128)
+        .ok_or_else(|| ExportError::IoError("Audio sample offset overflow".to_string()))?;
+    let ticks = start_ticks
+        .checked_add(sample_ticks)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| ExportError::IoError("Audio sample time overflow".to_string()))?;
+    Ok(RationalTime::new(ticks, FrameRate::new(common_rate, 1)))
+}
+
 /// Video layer automation schedule metadata
 #[derive(Debug, Clone)]
 pub struct LayerVideoAutomation {
@@ -131,8 +167,14 @@ impl ExportAutomationSchedule {
         // 1. Preflight check: estimate required audio envelope bytes
         let mut total_estimated_audio_bytes: u64 = 0;
         for audio in &plan.audio_layers {
-            if !audio.muted && layer_has_animated_volume(audio) {
-                let dur = audio.source_range.duration.to_seconds();
+            let needs_envelope = layer_has_animated_volume(audio)
+                || plan.audio_crossfades.iter().any(|transition| {
+                    transition.left_item_id == audio.item_id
+                        || transition.right_item_id == audio.item_id
+                });
+            if !audio.muted && needs_envelope {
+                let (_, _, render_duration) = plan.audio_render_window(audio);
+                let dur = render_duration.to_seconds();
                 let samples = (dur * audio_sample_rate as f64).round() as u64;
                 total_estimated_audio_bytes += samples * 4; // 4 bytes per mono f32le sample
             }
@@ -433,7 +475,12 @@ impl ExportAutomationSchedule {
         // 4. Generate Audio Volume Envelopes
         let mut audio_layers = Vec::new();
         for (idx, audio) in plan.audio_layers.iter().enumerate() {
-            if audio.muted || !layer_has_animated_volume(audio) {
+            let needs_envelope = layer_has_animated_volume(audio)
+                || plan.audio_crossfades.iter().any(|transition| {
+                    transition.left_item_id == audio.item_id
+                        || transition.right_item_id == audio.item_id
+                });
+            if audio.muted || !needs_envelope {
                 continue;
             }
 
@@ -443,7 +490,8 @@ impl ExportAutomationSchedule {
                 pid,
                 &random_nonce[..6]
             ));
-            let dur_sec = audio.source_range.duration.to_seconds();
+            let (render_start, _, render_duration) = plan.audio_render_window(audio);
+            let dur_sec = render_duration.to_seconds();
             let total_samples = (dur_sec * audio_sample_rate as f64).round() as usize;
 
             let file = File::create(&env_file).map_err(|e| {
@@ -460,10 +508,9 @@ impl ExportAutomationSchedule {
                     }
                 }
 
-                let sample_sec = i as f64 / audio_sample_rate as f64;
-                let clip_offset = RationalTime::from_seconds(sample_sec, plan.frame_rate);
-                let timeline_time = audio.timeline_range.start + clip_offset;
-                let gain = audio.effective_volume_at(timeline_time);
+                let timeline_time =
+                    audio_sample_time(render_start, i, audio_sample_rate, plan.frame_rate)?;
+                let gain = plan.effective_audio_gain_at(audio, timeline_time);
 
                 writer.write_all(&gain.to_le_bytes()).map_err(|e| {
                     ExportError::IoError(format!("Failed to write audio envelope sample: {e}"))

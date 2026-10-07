@@ -53,6 +53,7 @@ describe("Preview POC Model & Benchmark Targets", () => {
         {
           item_id: "clip_sample_1",
           effective_volume: 1.0,
+          source_time: { value: 0, rate: { numerator: 30, denominator: 1 } },
         },
       ],
     };
@@ -471,4 +472,3 @@ describe("Phase 14 — Keyframe Interpolation & Inspector Easing Model", () => {
     expect(kf1IsLast).toBe(true);
   });
 });
-

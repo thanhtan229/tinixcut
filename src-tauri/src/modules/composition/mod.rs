@@ -152,8 +152,16 @@ impl CompositionAudioLayer {
             return 0.0;
         }
 
-        let clip_offset = timeline_time - self.timeline_range.start;
+        let clip_offset = (timeline_time - self.timeline_range.start)
+            .rescaled_to(self.timeline_range.duration.rate);
+        self.volume_at_offset(clip_offset)
+    }
 
+    fn volume_at_offset(&self, clip_offset: RationalTime) -> f32 {
+        if self.muted {
+            return 0.0;
+        }
+        let clip_offset = clip_offset.rescaled_to(self.timeline_range.duration.rate);
         let mut base_vol = crate::modules::domain::evaluator::evaluate_property_channel(
             &self.keyframes,
             KeyframeProperty::Volume,
@@ -163,24 +171,59 @@ impl CompositionAudioLayer {
 
         // Apply fade in
         if let Some(fade_in) = self.fade_in {
-            if fade_in.value > 0 && clip_offset.value < fade_in.value {
-                let factor = clip_offset.value as f32 / fade_in.value as f32;
+            let fade_in = fade_in.rescaled_to(clip_offset.rate).value;
+            if fade_in > 0 && clip_offset.value < fade_in {
+                let factor = clip_offset.value as f32 / fade_in as f32;
                 base_vol *= factor.clamp(0.0, 1.0);
             }
         }
 
         // Apply fade out
         if let Some(fade_out) = self.fade_out {
+            let fade_out = fade_out.rescaled_to(clip_offset.rate).value;
             let total_dur = self.timeline_range.duration.value;
-            let fade_start = total_dur - fade_out.value;
-            if fade_out.value > 0 && clip_offset.value > fade_start {
+            let fade_start = total_dur - fade_out;
+            if fade_out > 0 && clip_offset.value > fade_start {
                 let remaining = (total_dur - clip_offset.value) as f32;
-                let factor = remaining / fade_out.value as f32;
+                let factor = remaining / fade_out as f32;
                 base_vol *= factor.clamp(0.0, 1.0);
             }
         }
 
         base_vol
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompositionAudioCrossfade {
+    pub transition_id: String,
+    pub left_item_id: String,
+    pub right_item_id: String,
+    pub start: RationalTime,
+    pub duration: RationalTime,
+}
+
+impl CompositionAudioCrossfade {
+    fn contains(&self, time: RationalTime) -> bool {
+        let before_start = time.semantic_lt(&self.start);
+        let end = self.start + self.duration;
+        let at_or_after_end = time.semantic_ge(&end);
+        !before_start && !at_or_after_end
+    }
+
+    fn gain_for(&self, item_id: &str, time: RationalTime) -> Option<f32> {
+        if !self.contains(time) {
+            return None;
+        }
+        let elapsed = (time.to_seconds() - self.start.to_seconds()) as f32;
+        let progress = (elapsed / self.duration.to_seconds() as f32).clamp(0.0, 1.0);
+        if item_id == self.left_item_id {
+            Some((progress * std::f32::consts::FRAC_PI_2).cos())
+        } else if item_id == self.right_item_id {
+            Some((progress * std::f32::consts::FRAC_PI_2).sin())
+        } else {
+            None
+        }
     }
 }
 
@@ -302,16 +345,76 @@ pub struct CompositionPlan {
     pub visual_layers: Vec<CompositionVisualLayer>,
     pub audio_layers: Vec<CompositionAudioLayer>,
     #[serde(default)]
+    pub audio_crossfades: Vec<CompositionAudioCrossfade>,
+    #[serde(default)]
     pub transitions: Vec<TransitionPlan>,
     #[serde(default = "default_composition_sample_rate")]
     pub sample_rate: u32,
 }
 
 impl CompositionPlan {
+    pub fn audio_render_window(
+        &self,
+        audio: &CompositionAudioLayer,
+    ) -> (RationalTime, RationalTime, RationalTime) {
+        let rate = self.frame_rate;
+        let mut preroll = 0i64;
+        let mut postroll = 0i64;
+        for transition in &self.audio_crossfades {
+            let duration = transition.duration.rescaled_to(rate);
+            if transition.right_item_id == audio.item_id {
+                preroll = preroll.max(duration.value / 2);
+            }
+            if transition.left_item_id == audio.item_id {
+                postroll = postroll.max(duration.value - duration.value / 2);
+            }
+        }
+        let start = audio.timeline_range.start - RationalTime::new(preroll, rate);
+        let source_start = audio.source_range.start - RationalTime::new(preroll, rate);
+        let duration = audio.timeline_range.duration + RationalTime::new(preroll + postroll, rate);
+        (start, source_start, duration)
+    }
+
+    pub fn audio_layer_active_at(&self, audio: &CompositionAudioLayer, time: RationalTime) -> bool {
+        audio.timeline_range.contains_time(time)
+            || self
+                .audio_crossfades
+                .iter()
+                .any(|transition| transition.gain_for(&audio.item_id, time).is_some())
+    }
+
+    pub fn effective_audio_gain_at(
+        &self,
+        audio: &CompositionAudioLayer,
+        time: RationalTime,
+    ) -> f32 {
+        if !self.audio_layer_active_at(audio, time) || audio.muted {
+            return 0.0;
+        }
+        let crossfade_gain = self
+            .audio_crossfades
+            .iter()
+            .find_map(|transition| transition.gain_for(&audio.item_id, time))
+            .unwrap_or(1.0);
+        let base_gain = if audio.timeline_range.contains_time(time) {
+            audio.effective_volume_at(time)
+        } else {
+            let offset = time - audio.timeline_range.start;
+            let clamped = if offset.value < 0 {
+                RationalTime::zero(offset.rate)
+            } else {
+                audio.timeline_range.duration
+            };
+            audio.volume_at_offset(clamped)
+        };
+        base_gain * crossfade_gain
+    }
+
     /// Compiles a Project into a normalized CompositionPlan
     pub fn from_project(project: &Project) -> Result<Self, CompositionError> {
         let mut visual_layers = Vec::new();
         let mut audio_layers = Vec::new();
+        let mut audio_crossfades = Vec::new();
         let mut transitions = Vec::new();
 
         let asset_map: HashMap<String, PathBuf> = project
@@ -492,6 +595,25 @@ impl CompositionPlan {
                     });
                 }
             }
+            for transition in &track.audio_transitions {
+                let right = track.find_item(&transition.right_item_id).ok_or_else(|| {
+                    CompositionError::InvalidRange(format!(
+                        "Missing incoming clip '{}' for audio crossfade",
+                        transition.right_item_id
+                    ))
+                })?;
+                let rate = project.settings.frame_rate;
+                let duration = transition.duration.rescaled_to(rate);
+                let left_extent = duration.value / 2;
+                let start = right.timeline_range.start - RationalTime::new(left_extent, rate);
+                audio_crossfades.push(CompositionAudioCrossfade {
+                    transition_id: transition.transition_id.clone(),
+                    left_item_id: transition.left_item_id.clone(),
+                    right_item_id: transition.right_item_id.clone(),
+                    start,
+                    duration,
+                });
+            }
         }
 
         let duration = RationalTime::new(max_time_val, project.settings.frame_rate);
@@ -505,6 +627,7 @@ impl CompositionPlan {
             duration,
             visual_layers,
             audio_layers,
+            audio_crossfades,
             transitions,
             sample_rate: project.settings.sample_rate,
         })
@@ -650,11 +773,17 @@ impl CompositionPlan {
 
         let mut active_audio = Vec::new();
         for audio in &self.audio_layers {
-            if audio.timeline_range.contains_time(timestamp) {
-                let gain = audio.effective_volume_at(timestamp);
+            if self.audio_layer_active_at(audio, timestamp) {
+                let gain = self.effective_audio_gain_at(audio, timestamp);
                 active_audio.push(PreviewSampledAudio {
                     item_id: audio.item_id.clone(),
                     effective_volume: gain,
+                    source_time: audio.source_range.start
+                        + (timestamp - audio.timeline_range.start),
+                    asset_path: audio
+                        .asset_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into()),
                 });
             }
         }
@@ -1320,13 +1449,15 @@ impl CompositionPlan {
                 continue;
             }
             if let Some(ref path) = audio.asset_path {
+                let (render_start, render_source_start, render_duration) =
+                    self.audio_render_window(audio);
                 let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
                 let tag = format!("a_{}", audio_idx);
                 audio_idx += 1;
 
-                let src_start = audio.source_range.start.to_seconds();
-                let src_dur = audio.source_range.duration.to_seconds();
-                let timeline_start_ms = (audio.timeline_range.start.to_seconds() * 1000.0) as u64;
+                let src_start = render_source_start.to_seconds();
+                let src_dur = render_duration.to_seconds();
+                let timeline_start_ms = (render_start.to_seconds() * 1000.0) as u64;
 
                 let audio_auto =
                     schedule.and_then(|s| s.audio_layers.iter().position(|a| a.audio_index == i));
@@ -1386,9 +1517,10 @@ impl CompositionPlan {
                 .collect::<Vec<_>>()
                 .join("");
             filter_complex.push_str(&format!(
-                "{}amix=inputs={}:duration=first[outa];",
+                "{}amix=inputs={}:duration=longest,apad,atrim=duration={:.6}[outa];",
                 combined,
-                audio_tags.len()
+                audio_tags.len(),
+                duration_secs
             ));
             Some("outa")
         } else {
@@ -1534,6 +1666,8 @@ pub struct PreviewSampledLayer {
 pub struct PreviewSampledAudio {
     pub item_id: String,
     pub effective_volume: f32,
+    pub source_time: RationalTime,
+    pub asset_path: Option<String>,
 }
 
 #[cfg(test)]
@@ -1635,6 +1769,291 @@ pub mod tests {
         assert_eq!(plan.visual_layers[0].crop.top, 0.1);
         assert_eq!(plan.visual_layers[0].opacity, 0.85);
         assert_eq!(plan.duration.value, 90);
+    }
+
+    #[test]
+    fn test_phase18_audio_crossfade_uses_centered_equal_power_gains_and_handles() {
+        use crate::modules::domain::AudioCrossfade;
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Audio Crossfade".to_string());
+        let asset_id = "asset_audio".to_string();
+        project.assets.push(Asset {
+            asset_id: asset_id.clone(),
+            name: "tone.wav".to_string(),
+            path: "tone.wav".to_string(),
+            media_kind: MediaKind::Audio,
+            duration: Some(RationalTime::from_frames(70, rate)),
+            file_size: 0,
+        });
+
+        let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
+        let left = TimelineItem::new(
+            Some(asset_id.clone()),
+            "Outgoing".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(60, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(60, rate),
+            ),
+        )
+        .unwrap();
+        let left_id = left.item_id.clone();
+        let right = TimelineItem::new(
+            Some(asset_id),
+            "Incoming".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(
+                RationalTime::from_frames(60, rate),
+                RationalTime::from_frames(60, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(10, rate),
+                RationalTime::from_frames(60, rate),
+            ),
+        )
+        .unwrap();
+        let right_id = right.item_id.clone();
+        track.items.extend([left, right]);
+        track.audio_transitions.push(AudioCrossfade {
+            transition_id: "audio_xfade".to_string(),
+            track_id: track.track_id.clone(),
+            left_item_id: left_id.clone(),
+            right_item_id: right_id.clone(),
+            duration: RationalTime::from_frames(20, rate),
+        });
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("crossfade plan compiles");
+        assert_eq!(plan.audio_crossfades.len(), 1);
+        assert_eq!(
+            plan.audio_crossfades[0].start,
+            RationalTime::from_frames(50, rate)
+        );
+        assert_eq!(
+            plan.audio_render_window(&plan.audio_layers[0]).0,
+            RationalTime::from_frames(0, rate)
+        );
+        assert_eq!(
+            plan.audio_render_window(&plan.audio_layers[1]).1,
+            RationalTime::zero(rate)
+        );
+
+        let start = plan.sample_preview_at(RationalTime::from_frames(50, rate));
+        let left_start = start
+            .active_audio
+            .iter()
+            .find(|a| a.item_id == left_id)
+            .unwrap();
+        let right_start = start
+            .active_audio
+            .iter()
+            .find(|a| a.item_id == right_id)
+            .unwrap();
+        assert!((left_start.effective_volume - 1.0).abs() < 0.0001);
+        assert!(right_start.effective_volume.abs() < 0.0001);
+
+        let midpoint = plan.sample_preview_at(RationalTime::from_frames(60, rate));
+        let left_mid = midpoint
+            .active_audio
+            .iter()
+            .find(|a| a.item_id == left_id)
+            .unwrap();
+        let right_mid = midpoint
+            .active_audio
+            .iter()
+            .find(|a| a.item_id == right_id)
+            .unwrap();
+        let equal_power_gain = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((left_mid.effective_volume - equal_power_gain).abs() < 0.0001);
+        assert!((right_mid.effective_volume - equal_power_gain).abs() < 0.0001);
+        assert!(
+            (left_mid.effective_volume.powi(2) + right_mid.effective_volume.powi(2) - 1.0).abs()
+                < 0.0001
+        );
+
+        let after_cut = plan.sample_preview_at(RationalTime::from_frames(69, rate));
+        assert_eq!(after_cut.active_audio.len(), 2);
+        assert!(after_cut
+            .active_audio
+            .iter()
+            .all(|a| a.effective_volume > 0.0));
+
+        for sample_rate in [44_100, 48_000] {
+            let automation_dir = std::env::temp_dir().join(format!(
+                "tinixcut_phase18_audio_envelopes_{}_{}",
+                std::process::id(),
+                sample_rate
+            ));
+            let schedule = crate::modules::export::automation::ExportAutomationSchedule::build(
+                &plan,
+                &automation_dir,
+                sample_rate,
+                None,
+            )
+            .expect("audio crossfade envelopes build");
+            assert_eq!(schedule.audio_layers.len(), 2);
+
+            for (audio_index, timeline_midpoint_sample) in
+                [(0, 2 * sample_rate), (1, sample_rate / 3)]
+            {
+                let envelope = &schedule.audio_layers[audio_index];
+                assert_eq!(envelope.sample_rate, sample_rate);
+                let bytes = fs::read(&envelope.envelope_file).expect("read generated envelope");
+                let samples: Vec<f32> = bytes
+                    .chunks_exact(std::mem::size_of::<f32>())
+                    .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+                    .collect();
+                let expected = std::f32::consts::FRAC_1_SQRT_2;
+                assert!(
+                    (samples[timeline_midpoint_sample as usize] - expected).abs() < 0.0001,
+                    "sample rate {sample_rate}, audio index {audio_index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_phase18_audio_crossfade_composes_mixed_rates_volume_fades_keyframes_and_mute() {
+        use crate::modules::domain::{AudioCrossfade, Keyframe, KeyframeProperty};
+
+        let left_rate = FrameRate::FPS_24;
+        let right_rate = FrameRate::FPS_30;
+        let mut project = Project::new("Mixed-rate audio crossfade".to_string());
+        let asset_id = "asset_audio_mixed_rate".to_string();
+        project.assets.push(Asset {
+            asset_id: asset_id.clone(),
+            name: "tone.wav".to_string(),
+            path: "tone.wav".to_string(),
+            media_kind: MediaKind::Audio,
+            duration: Some(RationalTime::from_frames(120, left_rate)),
+            file_size: 0,
+        });
+
+        let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
+        let mut left = TimelineItem::new(
+            Some(asset_id.clone()),
+            "Outgoing".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(
+                RationalTime::from_frames(0, left_rate),
+                RationalTime::from_frames(48, left_rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, left_rate),
+                RationalTime::from_frames(48, left_rate),
+            ),
+        )
+        .unwrap();
+        left.volume = 0.8;
+        left.fade_out = Some(RationalTime::from_frames(12, left_rate));
+        left.keyframes.extend([
+            Keyframe::new(
+                KeyframeProperty::Volume,
+                RationalTime::from_frames(0, left_rate),
+                1.0,
+            ),
+            Keyframe::new(
+                KeyframeProperty::Volume,
+                RationalTime::from_frames(48, left_rate),
+                0.5,
+            ),
+        ]);
+        let left_id = left.item_id.clone();
+
+        let mut right = TimelineItem::new(
+            Some(asset_id),
+            "Incoming".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(
+                RationalTime::from_frames(60, right_rate),
+                RationalTime::from_frames(60, right_rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(12, left_rate),
+                RationalTime::from_frames(48, left_rate),
+            ),
+        )
+        .unwrap();
+        right.volume = 0.6;
+        right.fade_in = Some(RationalTime::from_frames(15, right_rate));
+        right.keyframes.push(Keyframe::new(
+            KeyframeProperty::Volume,
+            RationalTime::from_frames(0, right_rate),
+            0.75,
+        ));
+        let right_id = right.item_id.clone();
+        track.items.extend([left, right]);
+        track.audio_transitions.push(AudioCrossfade {
+            transition_id: "audio_xfade_mixed_rate".to_string(),
+            track_id: track.track_id.clone(),
+            left_item_id: left_id.clone(),
+            right_item_id: right_id.clone(),
+            duration: RationalTime::from_frames(30, right_rate),
+        });
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("mixed-rate plan compiles");
+        let left_layer = plan
+            .audio_layers
+            .iter()
+            .find(|layer| layer.item_id == left_id)
+            .unwrap();
+        let right_layer = plan
+            .audio_layers
+            .iter()
+            .find(|layer| layer.item_id == right_id)
+            .unwrap();
+        let sample_time = RationalTime::from_frames(105, FrameRate::FPS_60);
+        assert!(!left_layer.muted);
+        assert!(
+            plan.audio_layer_active_at(left_layer, sample_time),
+            "layer={left_layer:?}, crossfades={:?}",
+            plan.audio_crossfades
+        );
+
+        let expected_keyframed_left =
+            (1.0 - 0.5 * 42.0 / 48.0) * 0.5 * (std::f32::consts::FRAC_PI_8).cos();
+        assert!(
+            (plan.effective_audio_gain_at(left_layer, sample_time) - expected_keyframed_left).abs()
+                < 0.0001
+        );
+        let volume_only_left = CompositionAudioLayer {
+            keyframes: Vec::new(),
+            ..left_layer.clone()
+        };
+        let expected_base_volume = 0.8 * 0.5 * (std::f32::consts::FRAC_PI_8).cos();
+        assert!(
+            (plan.effective_audio_gain_at(&volume_only_left, sample_time) - expected_base_volume)
+                .abs()
+                < 0.0001
+        );
+
+        assert_eq!(plan.effective_audio_gain_at(right_layer, sample_time), 0.0);
+        let right_layer = CompositionAudioLayer {
+            fade_in: None,
+            ..right_layer.clone()
+        };
+        let expected_right = 0.75 * (std::f32::consts::FRAC_PI_8).sin();
+        let actual_right = plan.effective_audio_gain_at(&right_layer, sample_time);
+        assert!(
+            (actual_right - expected_right).abs() < 0.0001,
+            "expected right gain {expected_right}, got {actual_right}; crossfades={:?}",
+            plan.audio_crossfades
+        );
+
+        let muted_right_layer = CompositionAudioLayer {
+            muted: true,
+            ..right_layer
+        };
+        assert_eq!(
+            plan.effective_audio_gain_at(&muted_right_layer, sample_time),
+            0.0
+        );
     }
 
     #[test]

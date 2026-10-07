@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
-import { Asset, CutTransition, isRangeAdjacent, KeyframeEasing, KeyframeProperty, Project, TimelineItem, TransitionKind } from "./types/project";
+import { Asset, AudioCrossfade, CutTransition, isRangeAdjacent, KeyframeEasing, KeyframeProperty, Project, TimelineItem, TransitionKind } from "./types/project";
 import { CommandEnvelope } from "./types/command";
 import { editorApi } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -869,6 +869,61 @@ export function App() {
     setSelectedTransitionId(null);
   };
 
+  const handleCreateAudioCrossfade = (
+    trackId: string,
+    leftItemId: string,
+    rightItemId: string,
+    durationFrames: number = 30
+  ) => {
+    if (!project) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_audio_crossfade_create_${Date.now()}`,
+        operation: {
+          type: "AudioCrossfadeCreate",
+          payload: {
+            track_id: trackId,
+            left_item_id: leftItemId,
+            right_item_id: rightItemId,
+            duration: { value: durationFrames, rate: project.settings.frame_rate },
+          },
+        },
+      }],
+      "Create Audio Crossfade"
+    );
+  };
+
+  const handleUpdateAudioCrossfadeDuration = (transitionId: string, durationFrames: number) => {
+    if (!project) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_audio_crossfade_duration_${Date.now()}`,
+        operation: {
+          type: "AudioCrossfadeUpdateDuration",
+          payload: {
+            transition_id: transitionId,
+            new_duration: { value: durationFrames, rate: project.settings.frame_rate },
+          },
+        },
+      }],
+      "Update Audio Crossfade"
+    );
+  };
+
+  const handleRemoveAudioCrossfade = (transitionId: string) => {
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_audio_crossfade_remove_${Date.now()}`,
+        operation: {
+          type: "AudioCrossfadeRemove",
+          payload: { transition_id: transitionId },
+        },
+      }],
+      "Remove Audio Crossfade"
+    );
+    setSelectedTransitionId(null);
+  };
+
   // Find currently selected item
   let selectedItem: TimelineItem | null = null;
   if (project && selectedItemId) {
@@ -883,11 +938,19 @@ export function App() {
 
   // Find currently selected cut transition
   let selectedTransition: CutTransition | null = null;
+  let selectedAudioCrossfade: AudioCrossfade | null = null;
   if (project && selectedTransitionId) {
     for (const track of project.tracks) {
       const tr = track.transitions?.find((t) => t.transition_id === selectedTransitionId);
       if (tr) {
         selectedTransition = tr;
+        break;
+      }
+      const audioTransition = track.audio_transitions?.find(
+        (t) => t.transition_id === selectedTransitionId
+      );
+      if (audioTransition) {
+        selectedAudioCrossfade = audioTransition;
         break;
       }
     }
@@ -1008,6 +1071,7 @@ export function App() {
             onDuplicateClip={handleDuplicateClip}
             onMoveKeyframe={handleMoveKeyframe}
             onCreateCutTransition={handleCreateCutTransition}
+            onCreateAudioCrossfade={handleCreateAudioCrossfade}
             zoom={zoom}
             onZoomIn={() => setZoom((z) => Math.min(10, z + 0.5))}
             onZoomOut={() => setZoom((z) => Math.max(1, z - 0.5))}
@@ -1018,6 +1082,7 @@ export function App() {
         <Inspector
           selectedItem={selectedItem}
           selectedTransition={selectedTransition}
+          selectedAudioCrossfade={selectedAudioCrossfade}
           selectedCount={selection.selectedItemIds.size}
           adjacentInfo={adjacentInfo}
           assets={project?.assets ?? []}
@@ -1035,6 +1100,8 @@ export function App() {
           onCreateCutTransition={handleCreateCutTransition}
           onUpdateCutTransitionDuration={handleUpdateCutTransitionDuration}
           onRemoveCutTransition={handleRemoveCutTransition}
+          onUpdateAudioCrossfadeDuration={handleUpdateAudioCrossfadeDuration}
+          onRemoveAudioCrossfade={handleRemoveAudioCrossfade}
         />
       </div>
 

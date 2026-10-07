@@ -4,7 +4,7 @@
 **Phase:** 18
 **Title:** Audio Crossfade Semantics & Preview/Export Parity
 **Plan status:** SELF-REVIEWED AND LOCKED FOR IMPLEMENTATION
-**Implementation status:** NOT STARTED
+**Implementation status:** COMPLETE WITH DEFERRED ITEMS
 **Research gate:** COMPLETE — see Phase 18 in `RESEARCH.md`
 **Architecture decision:** ADR-006
 **Schema:** v4 (lossless migration from v1–v3)
@@ -74,6 +74,31 @@ The feature must preserve exact project duration and existing per-clip volume, f
 - Run focused suites during implementation, then `pnpm run test:all`, `pnpm run typecheck`, Rust formatting, clippy, and build according to `DEVELOPMENT_WORKFLOW.md`.
 - Check project status and diff before the planning checkpoint and before the implementation completion checkpoint.
 - Restart and health-check the exact development app only after all implementation edits and required checks are complete.
+
+## 6.1. Completion Evidence and Reconciliation
+
+**Phase classification:** `COMPLETE WITH DEFERRED ITEMS`
+
+| Criterion | Result | Evidence / deferred qualification |
+|---|---|---|
+| P18-AC-01 | PASS | Domain validation and stable failure cases in Rust tests; `cargo test` |
+| P18-AC-02 | PASS | v1/v2/v3 empty-transition migrations and v4 save/reopen round-trip |
+| P18-AC-03 | PASS | Create/update/remove, revision fencing, duration invariant, undo/redo lifecycle tests |
+| P18-AC-04 | PASS | Move, trim, split, delete, and duplicate reconciliation regression |
+| P18-AC-05 | PASS | Equal-power endpoints/midpoint, mixed rational rates, volume, fades, keyframes, mute, and clamped handles |
+| P18-AC-06 | PASS | Preview samples use the canonical evaluator; supersession behavior retained and tested |
+| P18-AC-07 | DEFERRED | Transport-synchronized WebView audio implementation is present; interactive audible play/pause/seek/stop/project-end and resource cleanup require Windows GUI qualification |
+| P18-AC-08 | PASS | Sample-grid envelopes verified at 44.1 kHz and 48 kHz, including composition with clip gain |
+| P18-AC-09 | PASS | App-owned FFmpeg 9.0.2 tone export verifies both tones and exact output duration |
+| P18-AC-10 | PASS | MCP create/update/remove acceptance verifies the shared command path and idempotency/revision behavior |
+| P18-AC-11 | DEFERRED | Timeline/Inspector affordances, labels, and invalid-cut handling are implemented; interactive accessibility and editing flow need Windows GUI qualification |
+| P18-AC-12 | PASS | Preview/export parity fixture passes and deliberately altered gain is detected |
+| P18-AC-13 | PASS | Full regression suite covers video transitions, keyframes, fades, persistence/recovery, MCP, and duration invariants |
+| P18-AC-14 | DEFERRED | Typecheck, fmt, Clippy, tests, and builds pass; development runtime is restarted and its new process/window is verified. Typed `app_health_check` IPC could not be invoked/observed in this session. |
+
+Re-reviewed against ADR-006: implementation follows its schema, command, composition, export, and preview boundaries; no durable architecture change or deviation was found, so `ARCHITECTURE.md` remains unchanged. `RESEARCH.md`, `PLAN.md`, and `PROJECT_STATUS.md` record the implementation evidence and deferred interactive gates. The mixed-frame-rate regression uncovered during review was fixed by normalizing clip-local time before fade evaluation.
+
+Automated verification after the final code change: `pnpm run test:all` (37 frontend tests; 209 Rust tests passed, with 5 intentionally ignored benchmark tests), `pnpm run typecheck`, `pnpm run build`, `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`, `cargo build --manifest-path src-tauri/Cargo.toml`, and `git diff --check` all passed.
 
 ## 7. Stop Conditions
 

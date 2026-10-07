@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Asset, CutTransition, KeyframeEasing, KeyframeProperty, TimelineItem } from "../types/project";
+import { Asset, AudioCrossfade, CutTransition, KeyframeEasing, KeyframeProperty, TimelineItem } from "../types/project";
 
 interface InspectorProps {
   selectedItem: TimelineItem | null;
   selectedTransition?: CutTransition | null;
+  selectedAudioCrossfade?: AudioCrossfade | null;
   selectedCount?: number;
   adjacentInfo?: {
     prevClip?: TimelineItem;
@@ -30,11 +31,14 @@ interface InspectorProps {
   onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
   onUpdateCutTransitionDuration?: (transitionId: string, newDurationFrames: number) => void;
   onRemoveCutTransition?: (transitionId: string) => void;
+  onUpdateAudioCrossfadeDuration?: (transitionId: string, newDurationFrames: number) => void;
+  onRemoveAudioCrossfade?: (transitionId: string) => void;
 }
 
 export const Inspector: React.FC<InspectorProps> = ({
   selectedItem,
   selectedTransition,
+  selectedAudioCrossfade,
   selectedCount,
   adjacentInfo,
   assets,
@@ -52,7 +56,61 @@ export const Inspector: React.FC<InspectorProps> = ({
   onCreateCutTransition,
   onUpdateCutTransitionDuration,
   onRemoveCutTransition,
+  onUpdateAudioCrossfadeDuration,
+  onRemoveAudioCrossfade,
 }) => {
+  if (selectedAudioCrossfade) {
+    return (
+      <aside className="right-panel">
+        <div className="panel-header">Inspector: Audio Crossfade</div>
+        <div className="panel-content" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <section>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "4px" }}>
+              AUDIO CROSSFADE
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-main)", display: "flex", flexDirection: "column", gap: "4px" }}>
+              <div><strong>Curve:</strong> Equal-power</div>
+              <div><strong>Alignment:</strong> Centered cut</div>
+              <div><strong>Outgoing:</strong> {selectedAudioCrossfade.left_item_id}</div>
+              <div><strong>Incoming:</strong> {selectedAudioCrossfade.right_item_id}</div>
+            </div>
+          </section>
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
+            DURATION (FRAMES)
+            <input
+              type="number"
+              min="1"
+              value={selectedAudioCrossfade.duration.value}
+              onChange={(event) => {
+                const duration = Number.parseInt(event.target.value, 10);
+                if (Number.isFinite(duration) && duration > 0) {
+                  onUpdateAudioCrossfadeDuration?.(selectedAudioCrossfade.transition_id, duration);
+                }
+              }}
+              style={{ width: "90px", padding: "4px", fontSize: "12px" }}
+            />
+          </label>
+          <button
+            onClick={() => onRemoveAudioCrossfade?.(selectedAudioCrossfade.transition_id)}
+            style={{
+              width: "100%",
+              padding: "6px 12px",
+              backgroundColor: "#dc2626",
+              color: "#fff",
+              border: "none",
+              borderRadius: "4px",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Remove Audio Crossfade
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   if (selectedTransition) {
     return (
       <aside className="right-panel">
