@@ -2969,3 +2969,37 @@ The authoritative amended contract is:
 
 This section supersedes only the original PR-11A/PR-11B reference-host numbers for Phase-17 qualification. Original qualification ceilings, PR-11C, Fixture B definition, and all transport semantics remain unchanged. `Plans/plan_phase17.md` records the matching P17-AC-31/P17-AC-34 amendment without renumbering acceptance criteria. No durable architecture decision changed; ADR-006 remains unnecessary.
 
+---
+
+# Phase 18 Research Gate — Audio Crossfade Semantics & Preview/Export Parity
+
+**Research date:** 2026-10-07
+**Status:** COMPLETE — READY FOR IMPLEMENTATION PLANNING
+**Scope:** Standalone adjacent audio items on Audio tracks; no implementation changes were made as part of this research.
+
+## Local implementation evidence
+
+The existing code already provides most of the required semantic building blocks:
+
+- `src-tauri/src/modules/composition/mod.rs` defines `CompositionAudioLayer` and `effective_volume_at`. The current gain order is mute, canonical volume-keyframe evaluation at clip-local offset, then fade-in/fade-out multiplication. The method currently returns silence when the playhead is outside the editorial range, so it cannot by itself evaluate a transition handle.
+- The same module's `TransitionPlan` derives centered left/right durations using integer ticks and clamps clip-local offsets to the editorial endpoints for handle evaluation. Its tests explicitly verify endpoint hold for outgoing postroll and incoming preroll. This is a proven model for audio's derived transition branch.
+- Normalized audio layers retain source and timeline ranges, and the existing preview sampler reports per-item effective audio gain. Export compiles timeline-positioned audio branches and uses `ExportAutomationSchedule` for sampled volume automation. These are suitable integration points for one canonical audio-gain evaluator and disposable sample-grid envelopes.
+- Existing audio playback in `src/components/PreviewCanvas.tsx` is not yet present for standalone Audio-track items. This is a real product gap, not something solved by the existing preview gain sampler; the bounded phase must add transport-synchronized WebView audio playback and resource cleanup.
+- The domain model is Schema v3 and stores video transitions on `Track.transitions`. A durable audio transition therefore requires a versioned field and explicit migration; silently adding one to v3 is not compatible with the documented schema contract.
+
+## External backend evidence
+
+FFmpeg documents `acrossfade` as a filter that combines two or more audio streams, with an overlap option that defaults to enabled and configurable fade curves. It also supports a no-overlap mode. This is useful as a rendering primitive, but does not express TinixCut's canonical model of two independently positioned clip branches on an adjacent, duration-invariant timeline. The project should therefore persist transition intent and evaluate gains itself, then pass per-clip envelopes through its existing positioned-branch mixer. FFmpeg's `qsin` curve is documented as a quarter sine wave; the product's specified complementary `cos(πp/2)`/`sin(πp/2)` pair remains the exact project semantic and should not be delegated to an assumed filter-curve equivalence.
+
+Primary source: [FFmpeg Filters Documentation — acrossfade and afade](https://www.ffmpeg.org/ffmpeg-filters.html).
+
+## Boundary and handle decision
+
+Use the established video transition rule for clip-local state in audio source handles: clamp the handle-time clip offset to `[0, item_duration]`, then evaluate volume keyframes and fades at that clamped endpoint with the existing audio gain order. Incoming preroll uses offset zero; outgoing postroll uses the item duration. Consequently, volume automation holds its endpoint value, while configured fade-in/fade-out reaches its existing endpoint gain (zero at the respective endpoint). This resolves the previous open question and keeps preview and export on one rule. The audio branch still reads actual verified source media handles; endpoint hold applies to automation coordinates, not to source samples.
+
+For duration `D` rescaled to the cut's exact rational rate, set `L=floor(D/2)` and `R=D-L`, and use `[cut-L, cut+R)`. The outgoing item supplies `R` postroll and the incoming item `L` preroll. Only the derived composition/render branches extend beyond the adjacent persisted item ranges; no timeline overlap or project-duration change is introduced.
+
+## Research conclusion
+
+Proceed with a bounded Phase 18: Schema v4 `Track.audio_transitions`, lossless v1–v3 migration to an empty collection, existing Command Service/history and automation paths, canonical equal-power gain sampling, standalone Audio-track preview playback, and sample-grid export envelopes. No new dependency, audio engine, microservice, or persisted FFmpeg syntax is justified by the evidence. Keep embedded Video-item audio, alternate curves, and native audio-engine selection deferred. ADR-006 records the durable semantics; `Plans/plan_phase18.md` contains the 14 acceptance criteria and stop conditions.
+
