@@ -453,6 +453,7 @@ Minimum logical fields:
 - enabled/muted/locked state as supported
 - items
 - `transitions`: track-level cut-transition collection (`Vec<CutTransition>` in Schema v2)
+- `audio_transitions`: track-level standalone-audio crossfade collection (`Vec<AudioCrossfade>` in Schema v4)
 
 ### 8.5 Timeline item / clip
 
@@ -528,6 +529,7 @@ Rules:
 - migration failure must not overwrite the original project
 - **Schema v2 (ADR-003)**: Introduces track-level `CutTransition` collection (`Track.transitions: Vec<CutTransition>`). Production-supported clip-owned Fade semantics currently on `TimelineItem` (`fade_in`, `fade_out`, and item-level `FadeIn`/`FadeOut` variants) are retained and must NOT be cleared, dropped, or re-homed. Existing v1 item-level Fade behavior survives v1→v2 migration losslessly. Migration initializes `Track.transitions: Vec::new()`. No `CrossDissolve` is invented from v1. Malformed v1 containing unsupported `CrossDissolve` placeholder is rejected explicitly per migration/error policy; never silently activated. `TimelineItem.transition` is not deprecated in any manner that implies field removal in Phase 13 while existing supported Fade variants still depend on it.
 - **Schema v3 (ADR-004)**: Introduces keyframe `outgoing_easing: KeyframeEasing` on `Keyframe` (`Linear`, `EaseIn`, `EaseOut`, `EaseInOut`, `CubicBezier`). Schema v3 is implemented and current in production. Promoting to `schema_version = 3` protects projects from silent loss of easing data when opened in older Schema v2 binaries. Forward migration from v2 to v3 is lossless: all v2 fields, `CutTransition` on tracks, item-level Fades, and keyframe values/offsets are preserved identically; every migrated keyframe is initialized with `outgoing_easing = Linear`. Old readers reject v3 with an explicit unsupported schema version error.
+- **Schema v4 (ADR-006; selected for Phase 18)**: Adds `Track.audio_transitions: Vec<AudioCrossfade>` for adjacent standalone Audio items on Audio tracks. v1→v4 migration is lossless, initializes empty audio-transition collections, and never invents transitions. Older readers reject v4 through the existing unsupported-future-schema path. See ADR-006 and `Plans/plan_phase18.md` for the locked semantics and acceptance gate.
 
 ### 8.10 Cut-Owned Transition Model (ADR-003)
 
@@ -567,6 +569,15 @@ Keyframes adhere to strict domain ownership, mathematical precision, and clip li
    - Tail trim shortens duration; keyframes beyond new duration persist as hidden state. Extending tail restores them.
    - Head trim by $H$ shifts all keyframe offsets by $-H$. Negative keyframe offsets are valid persisted domain state (hidden preroll keyframes). Extending head shifts offsets back by $+H$, preserving visible animation alignment with source media.
    - Trim and keyframe offset updates execute atomically in a single command transaction. Silent deletion of keyframes during trim is prohibited.
+
+### 8.12 Audio Crossfade Semantics (ADR-006; Phase 18)
+
+1. **Ownership and topology:** `AudioCrossfade` belongs to an Audio track and names the adjacent outgoing/incoming standalone `ItemKind::Audio` pair. Persisted item ranges stay abutted; transition duration does not alter track or project duration.
+2. **Exact interval and media handles:** For duration `D` rescaled to the cut rate, use `L=floor(D/2)`, `R=D-L`, with half-open interval `[cut-L, cut+R)`. The outgoing source must provide `R` postroll and the incoming source `L` preroll. Availability must be proven against probed asset bounds. Derived composition reads those handles outside the persisted editorial ranges, using source time aligned to the cut.
+3. **Canonical gain:** For normalized progress `p` through the interval, outgoing and incoming crossfade multipliers are `cos(πp/2)` and `sin(πp/2)`. Multiply these by existing clip volume, mute, fade, and canonical volume-keyframe gain. In handle portions outside an item's editorial range, clamp clip-local offset to `[0, item_duration]`, then evaluate keyframes and fades with the existing evaluator at that endpoint. Incoming preroll holds offset zero (and has zero gain there when fade-in exists); outgoing postroll holds `item_duration` (and has zero gain there when fade-out exists). Preview and export share this rule.
+4. **Backend independence:** The normalized composition and sampled preview expose the effective gain for each participant. Export evaluates the same semantics on the supported 44.1/48 kHz sample grid, generates disposable per-clip gain envelopes, and combines timeline-positioned branches with the existing mixer. FFmpeg `acrossfade` and filtergraph syntax are not persisted semantics.
+5. **Mutation and migration:** Create/update/remove and dependent edits use the existing Command Service, transaction/history, and automation routes. Schema v1–v3 migrations add an empty transition collection; no transition is inferred. Unsupported/missing/unprobed source handles fail clearly.
+6. **Preview playback boundary:** Standalone Audio-track clips use the existing WebView media path and transport synchronization. Embedded audio on Video items and native audio-engine selection remain outside Phase 18.
 
 ---
 
@@ -1009,7 +1020,7 @@ $\to$ existing overlay chain.
 - Adjacent-cut CrossDissolve segments $[T_0, T_1)$ are extracted with their required preroll/postroll handle trims.
 - Inside $[T_0, T_1)$, ordinary unblended A and B contributions on the track must be strictly suppressed.
 - The resulting unpremultiplied RGBA stream represents the single contribution for that track interval in the existing overlay chain.
-- Video-only for Phase 13; audio cut transitions remain exact butt-cuts (audio crossfade is deferred).
+- Video-only at Phase 13 completion; audio crossfades were selected for Phase 18 under ADR-006. The video transition compositor remains unchanged.
 - Transition easing curves and spectral waveform enhancements remain deferred; keyframe Bézier interpolation is resolved by ADR-004.
 
 ### 16.6 Full Export Keyframe Automation via Literal Commands and Audio Envelopes (ADR-004)
@@ -1511,7 +1522,7 @@ These are intentionally unresolved and must not be guessed deep inside implement
 1. Exact canonical time representation.
 2. Exact preview backend after POC 1.
 3. Exact text layout/rendering strategy needed for preview/export parity.
-4. Exact initial transition/keyframe subset (Resolved for Phase 13 CrossDissolve via ADR-003: Video CrossDissolve on adjacent cuts via track-level CutTransition, Schema v2, RationalTime, provable handles, and premultiplied RGBA blend. Resolved for Phase 14 Keyframe Easing via ADR-004: Schema v3 clip-local keyframes, canonical Rust 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle, and ExportAutomationSchedule. Audio crossfade, transition easing, and generalized transition frameworks remain open/deferred).
+4. Exact initial transition/keyframe subset (video CrossDissolve resolved in Phase 13 via ADR-003; keyframe easing resolved in Phase 14 via ADR-004; audio crossfade selected for Phase 18 via ADR-006 and planned Schema v4. Transition easing and generalized transition frameworks remain deferred).
 5. Asset fingerprint strength and when full hashing is required.
 6. Exact FFmpeg build configuration and hardware acceleration matrix.
 7. Whether linked libav/native compositor becomes necessary after preview/render measurements.

@@ -12,17 +12,17 @@
 
 **Project:** Automation-First Desktop Video Editor  
 **Overall Status:** PHASES 0–17 COMPLETE; PHASES 16–17 HAVE DEFERRED ITEMS
-**Current Selected Milestone:** Post-Phase-17 roadmap gap analysis
-**Current Active Implementation Phase:** None — next phase not yet selected
+**Current Selected Milestone:** Phase 18 — Audio Crossfade Semantics & Preview/Export Parity
+**Current Active Implementation Phase:** Phase 18 implementation not started
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
 **Implementation:** Phases 0–15 COMPLETE; Phases 16–17 COMPLETE WITH DEFERRED ITEMS
-**ADR:** No new ADR required (ADR-006 NOT required)  
+**ADR:** ADR-006 accepted for Phase 18 implementation
 **Plan Status:** Phase 17 qualification reconciled against locked criteria in `Plans/plan_phase17.md`
 **Project Schema:** Schema v3 unchanged  
 **Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit `28f94c6`; durable reconciliation recorded
 **Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Next Action:** Inspect the roadmap, deferred items, and product state to select the next justified phase.
+**Next Action:** Implement Phase 18 against `Plans/plan_phase18.md`.
 **Last Updated:** 2026-10-07
 
 ---
@@ -38,7 +38,7 @@ Phase 17 performance requalification and release foundation has been reconciled 
 - **Transport contract amendment**: `36e19af` (research calibration artifacts; distinct from the approved planning checkpoint).
 - **Qualification checkpoint**: `28f94c6`.
 - **Phase 17 Implementation Status**: `COMPLETE WITH DEFERRED ITEMS`.
-- **ADR Decision**: No new ADR required (ADR-006 NOT required; Phase 17 is qualification-first; zero production architecture, schema, or protocol changes).
+- **ADR Decision**: Phase 17 required no new ADR; ADR-006 is now accepted for the separately selected Phase 18 feature.
 - **Plan Status**: `RESEARCH.md`, `PLAN.md`, and `Plans/plan_phase17.md` record the self-reviewed workload calibration amendment; P17-AC identifiers are unchanged.
 - **Project Schema**: Schema v3 invariant (no Schema v4).
 - **Automated Verification**: PASS (198 Rust tests + 37 frontend tests, clean clippy, fmt, build, typecheck).
@@ -53,7 +53,7 @@ Phase 17 performance requalification and release foundation has been reconciled 
   5. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
   6. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
   7. Normative contract `PR-01` through `PR-18` accepted.
-- **Next Action**: Execute Phase-17 acceptance criteria and release qualification.
+- **Next Action**: Begin Phase 18 implementation against the locked plan.
 
 ---
 
@@ -214,7 +214,7 @@ Phase 17 implementation, qualification, self-review, and durable reconciliation 
 - **Step/Hold interpolation**: DEFERRED.
 - **Shortest-path rotation**: DEFERRED (raw scalar degree interpolation current).
 - **Transition easing curves**: DEFERRED (ADR-003 transitions remain linear progress).
-- **Audio crossfade**: DEFERRED to future dedicated audio phase (audio cuts remain exact butt-cuts).
+- **Audio crossfade**: Was deferred at earlier phase completions; selected for Phase 18 under ADR-006 and `Plans/plan_phase18.md`.
 - **Spectral / multi-channel waveform visualization**: DEFERRED.
 - **MCP adapter**: IMPLEMENTED in Phase 15 (ADR-005 accepted and verified, local stdio server complete).
 - **Phase 15 Deferred Platform Scope**: Streamable HTTP; OAuth 2.0 / auth server; remote hosting; Resources; Prompts; Tasks extension; MCP Apps; Sampling; Roots; subscriptions; MRTR; remote render; cloud project storage; collaboration; model/provider integrations; plugin framework; project-handle registry; project caching across MCP calls; distributed/cross-process locking.
@@ -305,7 +305,7 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phases 16–17 COMPLETE WITH DEFERRED ITEMS.
+Current development mode: Phases 0–15 COMPLETE, Phases 16–17 COMPLETE WITH DEFERRED ITEMS; Phase 18 planning checkpoint locked and implementation not started.
 Phase 17 approved planning checkpoint: `c35b4e3138d653c132355b07a8ce6464fdec4169`; transport research amendment: `36e19af`; qualification commit: `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 PASS: the approved planning checkpoint contains the plan only; the later calibration harness/seed/evidence are research artifacts in a distinct amendment commit.
 Deferred: true clean Windows 10/11 VM qualification, P16-AC-56 interactive GUI QA, and hardware encoder qualification. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
 Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evidence/phase17_transport_recalibration_2026-10-07.json`, `tests/evidence/clean_machine_qualification_report.json`. Installer SHA-256: `59a3bd697713e2ab50081175155926a18f8e3b1d65fae23f6ec6a966debb841f`.
@@ -315,9 +315,8 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ## 9. Next Actions
 
-1. Reconcile Phase 17 completion in a dedicated documentation commit.
-2. Inspect the roadmap, deferred items, and current product state; select and plan the next justified phase.
-3. Complete external VM, interactive GUI, and hardware encoder qualification before making claims that depend on those gates.
+1. Implement Phase 18 against `Plans/plan_phase18.md` and ADR-006, following the repository workflow and acceptance criteria.
+2. Preserve Phase 16/17 external qualification deferrals; do not imply those gates passed.
 
 ---
 
@@ -325,19 +324,20 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ```text
 Current implementation checkpoint:
-- Phases 0 through 15 fully completed.
-- Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
-- Phase 17 Research Gate: COMPLETE — transport performance contract recalibrated.
-- Phase 17 Implementation: COMPLETE WITH DEFERRED ITEMS; all in-scope acceptance criteria pass.
-- Current active implementation phase: None; next phase selection is pending roadmap gap analysis.
-- Selected Milestone: Post-Phase-17 roadmap gap analysis.
-- Project Schema: Schema v3 unchanged.
-- ADR Decision: ADR-006 NOT REQUIRED.
-- Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: Complete post-Phase-17 roadmap gap analysis and plan the next justified phase.
+- Phases 0 through 15: COMPLETE.
+- Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 interactive GUI QA deferred).
+- Phase 17: COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 in-scope acceptance passed; true VM, interactive GUI, and hardware encoder gates deferred).
+- Phase 17 reconciliation commits: 28f94c6 and 988b7cf; transport research amendment 36e19af.
+- Phase 18 research gate: COMPLETE and committed as `61f2122`; Phase 18 plan is self-reviewed and locked in the planning checkpoint.
+- Active implementation: Phase 18 is selected; implementation has not started.
+- Objective: Schema v4 persistent equal-power crossfades between adjacent standalone Audio items, canonical preview/export gain parity, and audible standalone audio preview.
+- Durable decision: ADR-006 accepted for implementation. Handle automation offsets clamp to editorial endpoints; existing endpoint keyframe/fade evaluation is preserved in preview and export.
+- Current production project schema remains v3 until Phase 18 implementation and migration are verified.
+- Baseline evidence at Phase 17 completion: 198 Rust tests and 37 Vitest tests passed; status needs refreshed validation during Phase 18.
+- Next action: implement Phase 18 from the locked plan.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase 17 approved plan checkpoint `c35b4e3` -> initial implementation baseline `92a2258` -> transport research amendment `36e19af` -> final qualification checkpoint `28f94c6` -> Phase 17 COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 pass; true VM, GUI, and hardware gates deferred).
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 research COMPLETE (`61f2122`) / plan LOCKED -> Phase 18 implementation NOT STARTED.
 ```
 
 ---
@@ -357,6 +357,8 @@ ADR_002_WINDOWS_FFMPEG_DISTRIBUTION_AND_HARDWARE_FALLBACK.md
 ADR_003_ADJACENT_CUT_CROSSDISSOLVE_AND_TRANSITION_COMPOSITING_SEMANTICS.md
 ADR_004_CANONICAL_KEYFRAME_EASING_CLIP_LOCAL_LIFECYCLE_AND_SAMPLED_EXPORT_AUTOMATION_SEMANTICS.md
 ADR_005_MCP_LOCAL_STDIO_TOOLS_ADAPTER_EXPLICIT_PROJECT_ADDRESSING_AND_DURABLE_IDENTITY.md
+ADR_006_AUDIO_CROSSFADE_SEMANTICS_AND_SAMPLE_GRID_GAIN.md
+Plans/plan_phase18.md
 ```
 
 ---

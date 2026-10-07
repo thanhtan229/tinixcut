@@ -156,6 +156,8 @@ Phase 15 MCP Automation Adapter (Complete)
 Phase 16 Timeline Editing Productivity (Complete with Deferred Items)
    ↓
 Phase 17 Performance Requalification & Release Foundation (Complete with Deferred Items)
+   ↓
+Phase 18 Audio Crossfade Semantics & Preview/Export Parity (Planned)
 ```
 
 POC gates are architectural validation, not optional polish.
@@ -929,7 +931,7 @@ Each production-supported feature has:
 - adjacent-cut / overlap-based `CrossDissolve` (historical Phase 9 deferral; resumed and completed in Phase 13 via ADR-003, Schema v2 cut-owned topology, and premultiplied RGBA dual-backend compositing)
 - non-linear Bezier/custom easing keyframes (historical Phase 9 deferral; resumed and assigned to Phase 14 via ADR-004)
 - multi-channel / spectral waveform visualization (deferred)
-- audio crossfade (deferred; Phase 13 remains video-only)
+- audio crossfade (deferred at Phase 9 completion; selected for Phase 18 under `Plans/plan_phase18.md` and ADR-006)
 
 ### Phase 9 Retrospective Note (Do Not Reopen)
 *Later-discovered correctness defect: full export did not consume dynamic linear keyframes. Remediation assigned to Phase 14 as P14-PREREQ-01.*
@@ -1210,7 +1212,7 @@ Accepted by ChatGPT following comprehensive automated verification and reconcili
 - **Static Analysis & Build**: `cargo clippy -- -D warnings` (0 warnings), `cargo fmt --check` (clean), `tsc --noEmit` / `vite build` (clean), `cargo build` (green).
 
 ### Retained Deferred Items
-- Audio crossfade (`acrossfade` / equal-power audio transitions).
+- Audio crossfade (`acrossfade` / equal-power audio transitions) was deferred at Phase 13 completion; selected for Phase 18 under `Plans/plan_phase18.md` and ADR-006.
 - Future alignment modes (start-on-cut, end-on-cut).
 - Additional transition types (wipes, slides, push, iris, etc.).
 - Bezier / custom easing curves for transitions (keyframe easing assigned to Phase 14 via ADR-004).
@@ -1268,7 +1270,7 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 - Step/Hold interpolation mode.
 - Shortest-path rotation angle wrapping.
 - Transition easing curves (ADR-003 transitions remain linear progress).
-- Audio crossfade (`acrossfade`, deferred to future audio phase).
+- Audio crossfade (`acrossfade`) remained deferred at Phase 14 completion; selected for Phase 18 under `Plans/plan_phase18.md` and ADR-006.
 - Spectral / multi-channel waveform visualization.
 - MCP adapter (implemented in Phase 15).
 - GPU compositor redesign.
@@ -1397,7 +1399,7 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 - Persistent timeline markers
 - Track targeting matrix
 - Keyframe UX expansion
-- Audio crossfade (`acrossfade`)
+- Audio crossfade (`acrossfade`) remained deferred at Phase 16 completion; selected for Phase 18 under `Plans/plan_phase18.md` and ADR-006.
 - Waveform visualization expansion
 - New transition kinds or transition easing
 - Text/caption expansion
@@ -1688,7 +1690,7 @@ These should be resolved only when their planned gate is reached or product scop
 1. integer ticks vs rational value/rate;
 2. WebView/proxy vs native preview;
 3. exact text layout/rendering solution;
-4. exact transition/keyframe v1 subset;
+4. exact transition/keyframe v1 subset (audio crossfade semantics selected for Phase 18 under ADR-006);
 5. asset fingerprint/hash policy;
 6. exact FFmpeg build flags/codecs;
 7. hardware acceleration support matrix;
@@ -1744,3 +1746,16 @@ Domain semantics
 ```
 
 This sequence protects the two aspects that will be hardest to retrofit later: **durable editable project semantics** and **safe automation through the same command path as human editing**.
+
+---
+
+# Phase 18 — Audio Crossfade Semantics & Preview/Export Parity
+
+**Milestone:** `Phase 18 — Audio Crossfade Semantics & Preview/Export Parity`
+**Governing inputs:** `Plans/plan_phase18.md`, ADR-006, `RESEARCH.md` Phase 18, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
+**Status:** Plan self-reviewed and locked; implementation not started.
+**Schema:** Planned v4 with lossless v1→v4 migration.
+
+Phase 18 adds persistent equal-power crossfades between adjacent standalone audio clips on Audio tracks. Audio timeline ranges remain adjacent; verified source handles provide audio across the centered cut interval, and project duration remains invariant. One canonical gain evaluator drives preview samples and sample-grid export envelopes. Standalone Audio-track media becomes audible in preview. All create/update/remove operations use the existing Command Service and automation surfaces.
+
+The authoritative scope, semantics, 14 acceptance criteria, validation path, and stop conditions are in `Plans/plan_phase18.md`. ADR-006 governs durable semantics. Historical deferrals in earlier phase records describe their state at those phase completions; Phase 18 is the newly selected implementation phase.
