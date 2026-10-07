@@ -4,7 +4,7 @@
 **Phase:** 17  
 **Title:** Performance Requalification & Release Foundation  
 **Plan status:** AMENDED — SELF-REVIEWED AND LOCKED FOR IMPLEMENTATION
-**Implementation status:** NOT STARTED  
+**Implementation status:** IN PROGRESS
 **Research gate:** COMPLETE — PERFORMANCE CONTRACT AMENDED
 **Research reconciliation baseline:** `8b9f752` (`docs: correct phase 17 research reconciliation`)  
 **Schema:** v3 — invariant for this phase  

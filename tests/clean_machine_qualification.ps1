@@ -9,7 +9,7 @@ $workspaceRoot = "D:\___TOOLS\__TINIX\TinixCut"
 $installerSource = Join-Path $workspaceRoot "src-tauri\target\release\bundle\nsis\TinixCut_0.1.0_x64-setup.exe"
 $fixturesDir = Join-Path $env:TEMP "tinix_test_p12_fixtures"
 
-$testRoot = Join-Path $env:TEMP "TinixCleanMachine_Run"
+$testRoot = Join-Path $env:TEMP ("TinixCleanMachine_Run_" + [guid]::NewGuid().ToString("N"))
 $appDir = Join-Path $testRoot "App"
 $userDataDir = Join-Path $testRoot "UserData"
 $mediaDir = Join-Path $testRoot "Media"
@@ -19,10 +19,8 @@ Write-Host "TinixCut Isolated Workstation Qualification Harness (CM-01..CM-07)"
 Write-Host "=========================================================="
 Write-Host "Test root: $testRoot"
 
-# 1. Prepare clean test directory
-if (Test-Path $testRoot) {
-    Remove-Item -Path $testRoot -Recurse -Force -ErrorAction SilentlyContinue
-}
+# 1. Prepare a fresh, uniquely named test directory so a prior run's data
+# cannot be removed by this qualification run.
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 New-Item -ItemType Directory -Force -Path $userDataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $mediaDir | Out-Null
@@ -278,7 +276,8 @@ $canonicalContent = @{
 } | ConvertTo-Json -Depth 5
 [System.IO.File]::WriteAllText($canonicalProj, $canonicalContent, [System.Text.Encoding]::UTF8)
 
-# Simulate atomic update protocol: write to temp file then replace
+# Simulate an interrupted atomic update before replacement. The installed
+# application’s actual persistence path is covered by the Rust storage tests.
 $tempProj = "$canonicalProj.tmp"
 [System.IO.File]::WriteAllText($tempProj, "corrupted-interrupted-data", [System.Text.Encoding]::UTF8)
 
@@ -296,7 +295,7 @@ $results += [PSCustomObject]@{
     name = "Atomic Persistence & Recovery"
     passed = $cm05_passed
     duration_ms = $t0.ElapsedMilliseconds
-    details = "Canonical project preserved: $atomicSafe, Schema v3 intact at revision 10"
+    details = "Harness interruption simulation preserved canonical project: $atomicSafe, Schema v3 intact at revision 10; implementation atomic-save/recovery behavior is covered separately by Rust storage tests"
 }
 Write-Host "CM-05 Result: $(if ($cm05_passed) {'PASS'} else {'FAIL'})"
 
@@ -360,7 +359,7 @@ $report = [PSCustomObject]@{
     failed_tests = $failedTests
     qualification_verdict = if ($allPassed) { "PASS (Isolated Workstation Qualification)" } else { "FAIL" }
     clean_machine_verdict = "DEFERRED / NON-BLOCKING (Host-isolated execution PASSED; True fresh clean Windows 10/11 VM qualification DEFERRED for personal-use v1)"
-    qualification_notes = "PATH was sanitized and repository/toolchain dependencies were excluded from the execution path. All 7 CM criteria validated against current Schema-v3 semantics."
+    qualification_notes = "PATH was sanitized and repository/toolchain dependencies were excluded from the execution path. CM-05 is a harness-level interrupted-write simulation; implementation atomic-save/recovery behavior is separately covered by Rust storage tests."
     deferred_items = @(
         "True clean Windows 10/11 VM qualification: DEFERRED / non-blocking for personal-use v1.",
         "Hardware acceleration NVENC/QSV/AMF qualification: DEFERRED / best-effort.",

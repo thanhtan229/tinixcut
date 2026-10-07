@@ -4,7 +4,6 @@
 mod phase17_fixtures;
 
 use std::fs;
-use std::path::PathBuf;
 use std::time::Instant;
 use tinixcut_lib::modules::command::{
     CommandEnvelope, CommandOperation, CommandService, OperationEnvelope,
@@ -47,7 +46,7 @@ fn seed_transport_recalibration_workloads() {
         );
     }
 
-    println!("SEED_ROOT={}", PathBuf::from(root).display());
+    println!("SEED_ROOT={}", root.display());
     let path = std::env::temp_dir()
         .join("tinixcut_phase17_transport_recalibration")
         .join("W2.tcproj");

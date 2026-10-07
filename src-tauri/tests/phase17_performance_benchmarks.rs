@@ -249,6 +249,10 @@ fn test_p17_fixture_b_scale_persistence_and_sampling() {
         save_stats.max_ms < 200.0,
         "save_project_atomic exceeded qualification ceiling of 200ms"
     );
+    assert!(
+        save_stats.median_ms < 10.0,
+        "save_project_atomic exceeded reference median budget of 10ms"
+    );
 
     // 2. load_project
     for _ in 0..5 {
@@ -270,6 +274,10 @@ fn test_p17_fixture_b_scale_persistence_and_sampling() {
         load_stats.max_ms < 200.0,
         "load_project exceeded qualification ceiling of 200ms"
     );
+    assert!(
+        load_stats.median_ms < 10.0,
+        "load_project exceeded reference median budget of 10ms"
+    );
 
     // 3. CompositionPlan::from_project
     for _ in 0..5 {
@@ -290,6 +298,10 @@ fn test_p17_fixture_b_scale_persistence_and_sampling() {
     assert!(
         compile_stats.max_ms < 20.0,
         "CompositionPlan::from_project exceeded qualification ceiling of 20ms"
+    );
+    assert!(
+        compile_stats.median_ms < 1.0,
+        "CompositionPlan::from_project exceeded reference median budget of 1ms"
     );
 
     // 4. sample_preview_at (preview semantic sampling latency)
@@ -324,6 +336,10 @@ fn test_p17_fixture_b_scale_persistence_and_sampling() {
     assert!(
         sample_stats.max_ms < 10.0,
         "sample_preview_at exceeded qualification ceiling of 10ms"
+    );
+    assert!(
+        sample_stats.median_ms < 0.5,
+        "sample_preview_at exceeded reference median budget of 0.5ms"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -389,6 +405,10 @@ fn test_p17_phase16_command_scale_on_fixture_b() {
         gm_dry_stats.max_ms < 10.0,
         "ClipGroupMove dry-run ceiling violation"
     );
+    assert!(
+        gm_dry_stats.median_ms < 0.2,
+        "ClipGroupMove dry-run exceeded reference median budget of 0.2ms"
+    );
 
     // ClipGroupMove execute
     let mut gm_exec_env = gm_env.clone();
@@ -413,6 +433,10 @@ fn test_p17_phase16_command_scale_on_fixture_b() {
     assert!(
         gm_exec_stats.max_ms < 10.0,
         "ClipGroupMove execute ceiling violation"
+    );
+    assert!(
+        gm_exec_stats.median_ms < 0.2,
+        "ClipGroupMove execute exceeded reference median budget of 0.2ms"
     );
 
     // Command 2: ClipRippleDelete dry-run (middle clip on track 0 + downstream shift)
@@ -450,6 +474,10 @@ fn test_p17_phase16_command_scale_on_fixture_b() {
     assert!(
         rd_stats.max_ms < 10.0,
         "ClipRippleDelete dry-run ceiling violation"
+    );
+    assert!(
+        rd_stats.median_ms < 0.2,
+        "ClipRippleDelete dry-run exceeded reference median budget of 0.2ms"
     );
 
     // Command 3: Batched multi-delete dry-run (5 items atomic deletion on Tracks 10..14)
@@ -513,6 +541,10 @@ fn test_p17_phase16_command_scale_on_fixture_b() {
     assert!(
         md_stats.max_ms < 10.0,
         "Batched multi-delete dry-run ceiling violation"
+    );
+    assert!(
+        md_stats.median_ms < 0.2,
+        "Batched multi-delete dry-run exceeded reference median budget of 0.2ms"
     );
 }
 
@@ -602,7 +634,7 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     let inspect_wall_elapsed = inspect_wall_start.elapsed();
     let inspect_stats = compute_stats(inspect_samples);
     println!(
-        "JSONL project.inspect: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, budget < 0.1ms)",
+        "JSONL project.inspect: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, median budget < 0.15ms)",
         inspect_stats.min_ms, inspect_stats.median_ms, inspect_stats.p95_ms, inspect_stats.max_ms,
         inspect_wall_elapsed.as_secs_f64() * 1000.0,
         inspect_wall_elapsed.as_secs_f64() * 1000.0 / 50.0
@@ -610,6 +642,10 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     assert!(
         inspect_stats.max_ms < 10.0,
         "JSONL project.inspect ceiling violation"
+    );
+    assert!(
+        inspect_stats.median_ms < 0.15,
+        "JSONL project.inspect median budget violation"
     );
 
     // 3. Steady-state dry-run (5 warmups, 50 measured)
@@ -672,7 +708,7 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     let dry_wall_elapsed = dry_wall_start.elapsed();
     let dry_stats = compute_stats(dry_samples);
     println!(
-        "JSONL command.dryRun: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, budget < 0.1ms)",
+        "JSONL command.dryRun: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, median budget < 0.15ms)",
         dry_stats.min_ms, dry_stats.median_ms, dry_stats.p95_ms, dry_stats.max_ms,
         dry_wall_elapsed.as_secs_f64() * 1000.0,
         dry_wall_elapsed.as_secs_f64() * 1000.0 / 50.0
@@ -680,6 +716,10 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     assert!(
         dry_stats.max_ms < 10.0,
         "JSONL command.dryRun ceiling violation"
+    );
+    assert!(
+        dry_stats.median_ms < 0.15,
+        "JSONL command.dryRun median budget violation"
     );
 
     // 4. Steady-state in-memory apply (saveAfter: false) (5 warmups, 50 measured)
@@ -764,7 +804,7 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     let apply_wall_elapsed = apply_wall_start.elapsed();
     let apply_stats = compute_stats(apply_samples);
     println!(
-        "JSONL command.apply (in-memory saveAfter:false): min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, budget < 0.1ms)",
+        "JSONL command.apply (in-memory saveAfter:false): min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 50-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 10ms, median budget < 0.15ms)",
         apply_stats.min_ms, apply_stats.median_ms, apply_stats.p95_ms, apply_stats.max_ms,
         apply_wall_elapsed.as_secs_f64() * 1000.0,
         apply_wall_elapsed.as_secs_f64() * 1000.0 / 50.0
@@ -772,6 +812,10 @@ fn test_p17_jsonl_os_stdio_session_scale() {
     assert!(
         apply_stats.max_ms < 10.0,
         "JSONL in-memory apply ceiling violation"
+    );
+    assert!(
+        apply_stats.median_ms < 0.15,
+        "JSONL in-memory apply median budget violation"
     );
 
     // Shutdown
@@ -896,7 +940,7 @@ fn test_p17_mcp_os_stdio_scale_and_persistence() {
     let inspect_wall_elapsed = inspect_wall_start.elapsed();
     let inspect_stats = compute_stats(inspect_samples);
     println!(
-        "MCP tinixcut_inspect: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 30-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 20ms, budget < 1.0ms)",
+        "MCP tinixcut_inspect: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 30-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 20ms, median budget < 5ms)",
         inspect_stats.min_ms, inspect_stats.median_ms, inspect_stats.p95_ms, inspect_stats.max_ms,
         inspect_wall_elapsed.as_secs_f64() * 1000.0,
         inspect_wall_elapsed.as_secs_f64() * 1000.0 / 30.0
@@ -904,6 +948,10 @@ fn test_p17_mcp_os_stdio_scale_and_persistence() {
     assert!(
         inspect_stats.max_ms < 20.0,
         "MCP tinixcut_inspect ceiling violation"
+    );
+    assert!(
+        inspect_stats.median_ms < 5.0,
+        "MCP tinixcut_inspect median budget violation"
     );
 
     // 3. tinixcut_dry_run (5 warmups, 30 measured)
@@ -981,7 +1029,7 @@ fn test_p17_mcp_os_stdio_scale_and_persistence() {
     let dry_wall_elapsed = dry_wall_start.elapsed();
     let dry_stats = compute_stats(dry_samples);
     println!(
-        "MCP tinixcut_dry_run: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 30-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 20ms, budget < 1.0ms)",
+        "MCP tinixcut_dry_run: min={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms | 30-req aggregate wall={:.3}ms (avg={:.3}ms/call) (ceiling < 20ms, median budget < 5ms)",
         dry_stats.min_ms, dry_stats.median_ms, dry_stats.p95_ms, dry_stats.max_ms,
         dry_wall_elapsed.as_secs_f64() * 1000.0,
         dry_wall_elapsed.as_secs_f64() * 1000.0 / 30.0
@@ -989,6 +1037,10 @@ fn test_p17_mcp_os_stdio_scale_and_persistence() {
     assert!(
         dry_stats.max_ms < 20.0,
         "MCP tinixcut_dry_run ceiling violation"
+    );
+    assert!(
+        dry_stats.median_ms < 5.0,
+        "MCP tinixcut_dry_run median budget violation"
     );
 
     // 4. tinixcut_apply persistent (durable reload + mutate + atomic save) (5 warmups, 30 measured)
@@ -1108,6 +1160,10 @@ fn test_p17_mcp_os_stdio_scale_and_persistence() {
     assert!(
         apply_stats.max_ms < 100.0,
         "MCP tinixcut_apply ceiling violation"
+    );
+    assert!(
+        apply_stats.median_ms < 20.0,
+        "MCP tinixcut_apply median budget violation"
     );
 
     // Clean shutdown: drop stdin so child gets EOF on OS pipe
@@ -1282,6 +1338,16 @@ fn test_p17_fixture_a_cpu_libx264_export_qualification() {
     assert!(
         median_rtf_1080 >= 0.50,
         "1080p30 median RTF ({:.2}x) violated qualification ceiling (>= 0.50x)",
+        median_rtf_1080
+    );
+    assert!(
+        median_rtf_720 >= 2.20,
+        "720p30 median RTF ({:.2}x) violated reference median budget (>= 2.20x)",
+        median_rtf_720
+    );
+    assert!(
+        median_rtf_1080 >= 1.00,
+        "1080p30 median RTF ({:.2}x) violated reference median budget (>= 1.00x)",
         median_rtf_1080
     );
 

@@ -1412,7 +1412,7 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 **Milestone:** `Phase 17 — Performance Requalification & Release Foundation`  
 **Governing Inputs:** `RESEARCH.md` (Phase 17 Research Gate), `ARCHITECTURE.md`, ADR-001 through ADR-005  
 **Research Status:** COMPLETE — transport performance contract recalibrated 2026-10-07
-**Implementation Status:** NOT STARTED
+**Implementation Status:** IN PROGRESS
 **Current Active Implementation Phase:** Phase 17
 **Schema State:** Schema v3 invariant (no Schema v4)  
 **ADR Decision:** ADR-006 NOT REQUIRED (qualification-first milestone; zero production architecture/schema changes)  

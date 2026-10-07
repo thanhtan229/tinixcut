@@ -16,26 +16,26 @@
 **Current Active Implementation Phase:** Phase 17
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
-**Implementation:** Phases 0–16 COMPLETE; Phase 17 implementation begins after planning amendment checkpoint
+**Implementation:** Phases 0–16 COMPLETE; Phase 17 IN PROGRESS
 **ADR:** No new ADR required (ADR-006 NOT required)  
 **Plan Status:** Phase 17 transport calibration amendment self-reviewed and locked in `Plans/plan_phase17.md`
 **Project Schema:** Schema v3 unchanged  
-**Phase 17:** PERFORMANCE CONTRACT AMENDED — READY FOR IMPLEMENTATION CHECKPOINT
+**Phase 17:** IMPLEMENTATION IN PROGRESS — transport contract amendment checkpoint `36e19af`
 **Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Next Action:** Commit the research/plan amendment, then continue Phase-17 implementation and acceptance.
+**Next Action:** Execute Phase-17 acceptance criteria and release qualification.
 **Last Updated:** 2026-10-07
 
 ---
 
 ## 1. Current Objective
 
-Phase 17 transport performance contract has been recalibrated; implementation remains NOT STARTED until the dedicated amendment checkpoint commit:
+Phase 17 transport performance contract has been recalibrated and the dedicated planning amendment checkpoint is committed; implementation and qualification are now in progress:
 - **Phases 0–15 Final State**: `COMPLETE`.
 - **Phase 16 Status**: `COMPLETE WITH DEFERRED ITEMS` (`P16-AC-56` real interactive Windows GUI QA deferred).
 - **Phase 17 Milestone**: `Phase 17 — Performance Requalification & Release Foundation`.
 - **Phase 17 Research Status**: `COMPLETE — transport calibration amendment recorded`.
 - **Current Active Implementation Phase**: Phase 17.
-- **Phase 17 Implementation Status**: `NOT STARTED`.
+- **Phase 17 Implementation Status**: `IN PROGRESS`.
 - **ADR Decision**: No new ADR required (ADR-006 NOT required; Phase 17 is qualification-first; zero production architecture, schema, or protocol changes).
 - **Plan Status**: `RESEARCH.md`, `PLAN.md`, and `Plans/plan_phase17.md` record the self-reviewed workload calibration amendment; P17-AC identifiers are unchanged.
 - **Project Schema**: Schema v3 invariant (no Schema v4).
@@ -51,7 +51,7 @@ Phase 17 transport performance contract has been recalibrated; implementation re
   5. Hybrid timing budget policy (Qualification Ceilings vs Reference-Host Budgets vs Informational Baselines) and CI isolation guarantee (`#[ignore]` for performance benchmarks).
   6. Host-Isolated Workstation qualification contract `CM-01..CM-07` (bundled self-sufficiency, software fallback, unicode paths, read-only media, atomic persistence, user-scope install, uninstall data preservation).
   7. Normative contract `PR-01` through `PR-18` accepted.
-- **Next Action**: Create the dedicated research/plan amendment checkpoint commit, then implement and verify Phase 17.
+- **Next Action**: Execute Phase-17 acceptance criteria and release qualification.
 
 ---
 
@@ -109,7 +109,7 @@ Phase 17 transport performance contract has been recalibrated; implementation re
 
 ## 4. In Progress
 
-Phase 17 implementation has not begun while the dedicated planning amendment checkpoint is prepared. The current active phase is Phase 17; next action is to commit that checkpoint, then begin implementation.
+Phase 17 implementation and qualification are in progress following checkpoint `36e19af`.
 
 ---
 
@@ -303,7 +303,7 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v3 currently in production; promoted losslessly from Schema v2) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 performance contract amended. Current active phase: Phase 17; implementation has not started pending the dedicated plan amendment commit.
+Current development mode: Phases 0–15 COMPLETE, Phase 16 COMPLETE WITH DEFERRED ITEMS, Phase 17 implementation and qualification in progress following checkpoint `36e19af`.
 Relevant process/runtime notes: 235 total automated tests passing cleanly (198 Rust, 37 Vitest), clean process cleanup, zero background leaks
 ```
 
@@ -311,8 +311,8 @@ Relevant process/runtime notes: 235 total automated tests passing cleanly (198 R
 
 ## 9. Next Actions
 
-1. Commit the research and plan amendment as the Phase-17 planning checkpoint.
-2. Continue Phase-17 implementation and acceptance using the amended W2 reference-host budgets.
+1. Execute release, package, transport, functional, and CM-01..CM-07 qualification against the amended W2 budgets.
+2. Reconcile the actual Phase-17 results, package hashes, deferred gates, and any deviations.
 
 ---
 
@@ -323,16 +323,16 @@ Current implementation checkpoint:
 - Phases 0 through 15 fully completed.
 - Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred).
 - Phase 17 Research Gate: COMPLETE — transport performance contract recalibrated.
-- Phase 17 Implementation: NOT STARTED; authorized after planning checkpoint commit.
-- Current active implementation phase: Phase 17 (implementation starts after planning amendment checkpoint).
+- Phase 17 Implementation: IN PROGRESS after planning checkpoint `36e19af`.
+- Current active implementation phase: Phase 17.
 - Selected Milestone: Phase 17 — Performance Requalification & Release Foundation.
 - Project Schema: Schema v3 unchanged.
 - ADR Decision: ADR-006 NOT REQUIRED.
 - Automated tests: 198 Rust tests passed + 37 Vitest tests passed (all green).
-- Next Action: Commit the plan amendment checkpoint, then continue Phase-17 implementation.
+- Next Action: Execute Phase-17 acceptance criteria and release qualification.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> Planning amendment checkpoint -> Phase-17 implementation and acceptance.
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS (P16-AC-56 deferred) -> Phase-17 transport contract amended -> Planning amendment checkpoint `36e19af` -> Phase-17 implementation and acceptance in progress.
 ```
 
 ---
