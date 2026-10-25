@@ -797,6 +797,7 @@ pub fn build_fixture_project(
     project.settings = ProjectSettings {
         width: 640,
         height: 360,
+        canvas_background_color: "#000000".to_string(),
         frame_rate: FrameRate::FPS_30,
         sample_rate: 48000,
         channels: 2,
@@ -811,6 +812,7 @@ pub fn build_fixture_project(
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::new(150, FrameRate::FPS_30)),
         file_size: 10000,
+        dimensions: None,
     });
 
     let blue_path = ensure_parity_fixture_media("parity_blue");
@@ -822,6 +824,7 @@ pub fn build_fixture_project(
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::new(150, FrameRate::FPS_30)),
         file_size: 10000,
+        dimensions: None,
     });
 
     let red_path = ensure_parity_fixture_media("parity_red");
@@ -833,6 +836,7 @@ pub fn build_fixture_project(
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::new(150, FrameRate::FPS_30)),
         file_size: 10000,
+        dimensions: None,
     });
 
     let fps = FrameRate::FPS_30;
@@ -1521,6 +1525,7 @@ pub fn build_fixture_project(
                 media_kind: MediaKind::Video,
                 duration: Some(RationalTime::new(70, fps)),
                 file_size: 10000,
+                dimensions: None,
             });
 
             // Asset B with total duration 70 frames (preroll = 10)
@@ -1532,6 +1537,7 @@ pub fn build_fixture_project(
                 media_kind: MediaKind::Video,
                 duration: Some(RationalTime::new(70, fps)),
                 file_size: 10000,
+                dimensions: None,
             });
 
             let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
@@ -1668,7 +1674,12 @@ pub fn render_preview_frame_rgba_with_blend_mode(
     }
 
     filter_complex.push_str(&format!(
-        "color=c=black:s={}x{}:r={}:d=1[base];",
+        "color=c={}:s={}x{}:r={}:d=1[base];",
+        if plan.canvas_background_color == "#000000" {
+            "black".to_string()
+        } else {
+            format!("0x{}", &plan.canvas_background_color[1..])
+        },
         plan.width,
         plan.height,
         plan.frame_rate.as_f64()
@@ -2240,6 +2251,7 @@ mod tests {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::new(70, rate)),
             file_size: 0,
+            dimensions: None,
         });
         let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
         let left = TimelineItem::new(
@@ -2730,6 +2742,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(70, fps)),
             file_size: 1000,
+            dimensions: None,
         };
         let ast2 = Asset {
             asset_id: "ast2".to_string(),
@@ -2738,6 +2751,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(70, fps)),
             file_size: 1000,
+            dimensions: None,
         };
         project.assets.push(ast1);
         project.assets.push(ast2);
@@ -2870,6 +2884,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(100, fps)),
             file_size: 5000,
+            dimensions: None,
         };
         let ast2 = Asset {
             asset_id: "ast_off2".to_string(),
@@ -2878,6 +2893,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(100, fps)),
             file_size: 5000,
+            dimensions: None,
         };
         project.assets.push(ast1);
         project.assets.push(ast2);

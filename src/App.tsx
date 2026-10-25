@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
-import { Asset, AudioCrossfade, CutTransition, isRangeAdjacent, KeyframeEasing, KeyframeProperty, Project, TimelineItem, TransitionKind } from "./types/project";
-import { CommandEnvelope } from "./types/command";
+import { EXPORT_PRESET_OPTIONS, ExportPreset } from "./types/export";
+import { Asset, AudioCrossfade, ClipSpeed, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, TextStyle, TimelineItem, TransitionKind, VisualEffectPreset } from "./types/project";
+import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { editorApi } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
+import { AutoCaptionDialog } from "./components/AutoCaptionDialog";
 import { MediaPanel } from "./components/MediaPanel";
 import { PreviewCanvas } from "./components/PreviewCanvas";
 import { Timeline } from "./components/Timeline";
@@ -20,6 +22,38 @@ import {
 import { useTimelineShortcuts } from "./hooks/useTimelineShortcuts";
 import "./App.css";
 
+function timelineFramesToSourceFrames(
+  timelineFrames: number,
+  timelineRate: FrameRate,
+  sourceRate: FrameRate,
+  speed: ClipSpeed | undefined
+): number | null {
+  const [speedNumerator, speedDenominator] =
+    speed === "Half" ? [1, 2] : speed === "Double" ? [2, 1] : [1, 1];
+  const numerator =
+    timelineFrames *
+    timelineRate.denominator *
+    speedNumerator *
+    sourceRate.numerator;
+  const denominator =
+    timelineRate.numerator *
+    speedDenominator *
+    sourceRate.denominator;
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator === 0) {
+    return null;
+  }
+  return numerator % denominator === 0 ? numerator / denominator : null;
+}
+
+function findTimelineItem(project: Project | null, itemId: string | null): TimelineItem | null {
+  if (!project || !itemId) return null;
+  for (const track of project.tracks) {
+    const item = track.items.find((candidate) => candidate.item_id === itemId);
+    if (item) return item;
+  }
+  return null;
+}
+
 export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
@@ -32,6 +66,15 @@ export function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(3);
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
+  const [exportPreset, setExportPreset] = useState<ExportPreset>("balanced");
+  const [isAutoCaptionOpen, setIsAutoCaptionOpen] = useState(false);
+  const [autoCaptionReport, setAutoCaptionReport] = useState<Awaited<ReturnType<typeof editorApi.startAutoCaptions>> | null>(null);
+  const audioUnlockRef = useRef<() => void>(() => {});
+  const selectedItem = findTimelineItem(project, selectedItemId);
+  const requestPlaybackToggle = () => {
+    if (!isPlaying) audioUnlockRef.current();
+    setIsPlaying((playing) => !playing);
+  };
 
   const refreshProject = async () => {
     try {
@@ -47,6 +90,32 @@ export function App() {
     editorApi.getHealth().then(setHealth).catch(console.warn);
     refreshProject();
   }, []);
+
+  useEffect(() => {
+    if (!autoCaptionReport || !["queued", "running"].includes(autoCaptionReport.state)) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const report = await editorApi.getAutoCaptionStatus(autoCaptionReport.jobId);
+        if (cancelled) return;
+        setAutoCaptionReport(report);
+        if (report.state === "completed") {
+          setStatusMsg(report.message);
+          await refreshProject();
+        } else if (report.state === "failed" || report.state === "cancelled") {
+          setStatusMsg(report.message);
+        }
+      } catch (err) {
+        if (!cancelled) setStatusMsg(`Auto captions status failed: ${err}`);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [autoCaptionReport?.jobId, autoCaptionReport?.state]);
 
   const executeCommandEnvelope = async (operations: CommandEnvelope["operations"], desc: string) => {
     if (!project) return;
@@ -83,6 +152,40 @@ export function App() {
     } catch (err) {
       setStatusMsg(`Failed to create project: ${err}`);
     }
+  };
+
+  const handleCanvasPresetChange = (width: number, height: number, label: string) => {
+    if (!project || (project.settings.width === width && project.settings.height === height)) return;
+
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_canvas_${width}x${height}_${Date.now()}`,
+          operation: {
+            type: "ProjectSettingsSet",
+            payload: { width, height },
+          },
+        },
+      ],
+      `Canvas preset: ${label}`,
+    );
+  };
+
+  const handleCanvasBackgroundChange = (color: string) => {
+    if (!project || project.settings.canvas_background_color === color) return;
+
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_canvas_background_${Date.now()}`,
+          operation: {
+            type: "CanvasBackgroundSet",
+            payload: { color },
+          },
+        },
+      ],
+      "Canvas background",
+    );
   };
 
   const handleOpenProject = async () => {
@@ -142,8 +245,9 @@ export function App() {
         setStatusMsg("Export cancelled");
         return;
       }
-      setStatusMsg("Rendering snapshot via FFmpeg (isolated snapshot)...");
-      const report = await editorApi.exportProject(chosen);
+      const preset = EXPORT_PRESET_OPTIONS.find((option) => option.value === exportPreset);
+      setStatusMsg(`Rendering ${preset?.label ?? "Balanced"} snapshot via FFmpeg (isolated snapshot)...`);
+      const report = await editorApi.exportProject(chosen, exportPreset);
       setStatusMsg(
         `Export complete! ${report.output_path} (${report.duration_secs.toFixed(1)}s in ${report.render_time_ms}ms)`
       );
@@ -173,6 +277,42 @@ export function App() {
       await refreshProject();
     } catch (err) {
       setStatusMsg(`Import failed: ${err}`);
+    }
+  };
+
+  const handleImportCaptions = async () => {
+    try {
+      const selected = await open({
+        title: "Import Captions",
+        filters: [{ name: "Caption Files", extensions: ["srt", "vtt"] }],
+        multiple: false,
+      });
+      if (!selected) return;
+      const chosenPath = Array.isArray(selected) ? selected[0] : selected;
+      const report = await editorApi.importCaptions(chosenPath);
+      setStatusMsg(`Imported ${report.cueCount} caption(s) into a new track`);
+      await refreshProject();
+    } catch (err) {
+      setStatusMsg(`Caption import failed: ${err}`);
+    }
+  };
+
+  const handleExportCaptions = async () => {
+    try {
+      if (!project) return;
+      const chosen = await save({
+        title: "Export Captions",
+        defaultPath: `${project.name || "captions"}.srt`,
+        filters: [{ name: "SubRip Captions", extensions: ["srt"] }, { name: "WebVTT Captions", extensions: ["vtt"] }],
+      });
+      if (!chosen) {
+        setStatusMsg("Caption export cancelled");
+        return;
+      }
+      const report = await editorApi.exportCaptions(chosen);
+      setStatusMsg(`Exported ${report.cueCount} caption(s) to ${report.outputPath}`);
+    } catch (err) {
+      setStatusMsg(`Caption export failed: ${err}`);
     }
   };
 
@@ -260,10 +400,66 @@ export function App() {
     );
   };
 
+  const handleAddText = () => {
+    if (!project) return;
+
+    const rate = project.settings.frame_rate;
+    const now = Date.now();
+    const track = project.tracks.find((candidate) => candidate.kind === "Video");
+    const trackId = track?.track_id ?? `trk_text_${now}`;
+    const itemId = `txt_${now}`;
+    const operations: OperationEnvelope[] = [];
+
+    if (!track) {
+      operations.push({
+        operation_id: `op_add_text_trk_${now}`,
+        operation: {
+          type: "TrackCreate",
+          payload: {
+            track_id: trackId,
+            name: "Text Track",
+            kind: "Video",
+          },
+        },
+      });
+    }
+
+    operations.push(
+      {
+        operation_id: `op_add_text_clip_${now}`,
+        operation: {
+          type: "ClipCreate",
+          payload: {
+            track_id: trackId,
+            item_id: itemId,
+            name: "Text",
+            kind: "Text",
+            timeline_start: { value: playheadFrame, rate },
+            duration: { value: 150, rate },
+          },
+        },
+      },
+      {
+        operation_id: `op_add_text_template_${now}`,
+        operation: {
+          type: "TextTemplateApply",
+          payload: {
+            item_id: itemId,
+            template_id: "clean-lower-third",
+            template_version: 1,
+          },
+        },
+      }
+    );
+
+    executeCommandEnvelope(operations, "Add Text");
+  };
+
   const handleAddAssetToTimeline = (asset: Asset) => {
     if (!project) return;
     const rate = project.settings.frame_rate;
     const isAudio = asset.media_kind === "Audio";
+    const durationFrames = asset.duration ? Math.max(1, rationalTimeToFrames(asset.duration, rate)) : 150;
 
     // If no tracks exist, create a track first along with the clip
     if (project.tracks.length === 0) {
@@ -291,7 +487,7 @@ export function App() {
                 kind: isAudio ? "Audio" : (asset.media_kind === "Image" ? "Image" : "Video"),
                 asset_id: asset.asset_id,
                 timeline_start: { value: 0, rate },
-                duration: { value: 150, rate }, // 5 seconds default
+                duration: { value: durationFrames, rate },
                 source_start: { value: 0, rate },
               },
             },
@@ -302,10 +498,10 @@ export function App() {
       return;
     }
 
-    // Find suitable track: matching kind or first track
-    const targetTrack =
-      project.tracks.find((t) => (isAudio ? t.kind === "Audio" : t.kind === "Video")) ||
-      project.tracks[0];
+    // Keep audio and video clips on compatible tracks. The command service remains
+    // authoritative; both operations are committed atomically when a track is needed.
+    const matchingTrack = project.tracks.find((t) => (isAudio ? t.kind === "Audio" : t.kind === "Video"));
+    const targetTrack = matchingTrack ?? project.tracks[0];
 
     // Calculate start time to avoid overlap on this track
     let startF = 0;
@@ -314,26 +510,38 @@ export function App() {
       if (endF > startF) startF = endF;
     }
 
-    executeCommandEnvelope(
-      [
-        {
-          operation_id: `op_add_clip_${Date.now()}`,
-          operation: {
-            type: "ClipCreate",
-            payload: {
-              track_id: targetTrack.track_id,
-              name: asset.name,
-              kind: isAudio ? "Audio" : (asset.media_kind === "Image" ? "Image" : "Video"),
-              asset_id: asset.asset_id,
-              timeline_start: { value: startF, rate },
-              duration: { value: 150, rate }, // 5 seconds default
-              source_start: { value: 0, rate },
-            },
+    const now = Date.now();
+    const newTrackId = matchingTrack ? targetTrack.track_id : `trk_${now}`;
+    const operations: OperationEnvelope[] = [];
+    if (!matchingTrack) {
+      operations.push({
+        operation_id: `op_add_trk_${now}`,
+        operation: {
+          type: "TrackCreate" as const,
+          payload: {
+            track_id: newTrackId,
+            name: isAudio ? `Audio Track ${project.tracks.length + 1}` : `Video Track ${project.tracks.length + 1}`,
+            kind: isAudio ? "Audio" as const : "Video" as const,
           },
         },
-      ],
-      `Thêm "${asset.name}" vào Timeline`
-    );
+      });
+    }
+    operations.push({
+      operation_id: `op_add_clip_${now + 1}`,
+      operation: {
+        type: "ClipCreate" as const,
+        payload: {
+          track_id: newTrackId,
+          name: asset.name,
+          kind: isAudio ? "Audio" : (asset.media_kind === "Image" ? "Image" : "Video"),
+          asset_id: asset.asset_id,
+          timeline_start: { value: startF, rate },
+          duration: { value: durationFrames, rate },
+          source_start: { value: 0, rate },
+        },
+      },
+    });
+    executeCommandEnvelope(operations, `Thêm "${asset.name}" vào Timeline`);
   };
 
   const handleMoveClip = (itemId: string, newStartFrame: number) => {
@@ -379,22 +587,30 @@ export function App() {
   const handleTrimClip = (
     itemId: string,
     newStartFrame: number,
-    newDurationFrames: number,
-    newSourceStartFrame?: number
+    newDurationFrames: number
   ) => {
     if (!project) return;
     const rate = project.settings.frame_rate;
-    let sourceStart = 0;
-    for (const track of project.tracks) {
-      const it = track.items.find((i) => i.item_id === itemId);
-      if (it) {
-        sourceStart = it.source_range.start.value;
-        break;
-      }
+    const item = project.tracks.flatMap((track) => track.items).find((candidate) => candidate.item_id === itemId);
+    if (!item) return;
+    const sourceRate = item.source_range.duration.rate;
+    const sourceDuration = timelineFramesToSourceFrames(
+      newDurationFrames,
+      rate,
+      sourceRate,
+      item.speed
+    );
+    const sourceStartDelta = timelineFramesToSourceFrames(
+      newStartFrame - item.timeline_range.start.value,
+      rate,
+      item.source_range.start.rate,
+      item.speed
+    );
+    if (sourceDuration === null || sourceStartDelta === null) {
+      setStatusMsg("This trim cannot be represented exactly at the selected clip speed.");
+      return;
     }
-    if (newSourceStartFrame !== undefined) {
-      sourceStart = newSourceStartFrame;
-    }
+    const sourceStart = item.source_range.start.value + sourceStartDelta;
     executeCommandEnvelope(
       [
         {
@@ -408,8 +624,8 @@ export function App() {
                 duration: { value: newDurationFrames, rate },
               },
               new_source_range: {
-                start: { value: sourceStart, rate },
-                duration: { value: newDurationFrames, rate },
+                start: { value: sourceStart, rate: item.source_range.start.rate },
+                duration: { value: sourceDuration, rate: sourceRate },
               },
             },
           },
@@ -424,7 +640,7 @@ export function App() {
     for (const track of project.tracks) {
       const it = track.items.find((i) => i.item_id === itemId);
       if (it) {
-        handleTrimClip(itemId, it.timeline_range.start.value, newDuration, it.source_range.start.value);
+        handleTrimClip(itemId, it.timeline_range.start.value, newDuration);
         break;
       }
     }
@@ -595,6 +811,22 @@ export function App() {
     );
   };
 
+  const handleUpdatePlacementMode = (placementMode: PlacementMode) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_placement_${selectedItemId}_${Date.now()}`,
+          operation: {
+            type: "ClipPlacementModeSet",
+            payload: { item_id: selectedItemId, placement_mode: placementMode },
+          },
+        },
+      ],
+      "Frame placement"
+    );
+  };
+
   const handleUpdateOpacity = (opacity: number) => {
     if (!selectedItemId) return;
     executeCommandEnvelope(
@@ -630,6 +862,150 @@ export function App() {
         },
       ],
       "Set Text Caption"
+    );
+  };
+
+  const handleApplyTextTemplate = (templateId: string, templateVersion = 1) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_tpl_${Date.now()}`,
+          operation: {
+            type: "TextTemplateApply",
+            payload: {
+              item_id: selectedItemId,
+              template_id: templateId,
+              template_version: templateVersion,
+            },
+          },
+        },
+      ],
+      `Apply text template "${templateId}"`
+    );
+  };
+
+  const handleOpenAutoCaptions = () => {
+    if (!selectedItem || (selectedItem.kind !== "Video" && selectedItem.kind !== "Audio")) {
+      setStatusMsg("Select one video or audio clip before generating captions.");
+      return;
+    }
+    if (autoCaptionReport && !["queued", "running"].includes(autoCaptionReport.state)) {
+      setAutoCaptionReport(null);
+    }
+    setIsAutoCaptionOpen(true);
+  };
+
+  const handleStartAutoCaptions = async (settings: {
+    whisperCliPath: string;
+    modelPath: string;
+    language: string;
+  }) => {
+    if (!selectedItem) {
+      setStatusMsg("Select one video or audio clip before generating captions.");
+      return;
+    }
+    try {
+      const report = await editorApi.startAutoCaptions({
+        itemId: selectedItem.item_id,
+        whisperCliPath: settings.whisperCliPath,
+        modelPath: settings.modelPath,
+        language: settings.language,
+      });
+      setAutoCaptionReport(report);
+      setStatusMsg(report.message);
+    } catch (err) {
+      setStatusMsg(`Auto captions failed to start: ${err}`);
+    }
+  };
+
+  const handleCancelAutoCaptions = async () => {
+    if (!autoCaptionReport) return;
+    try {
+      await editorApi.cancelAutoCaptions(autoCaptionReport.jobId);
+      const report = await editorApi.getAutoCaptionStatus(autoCaptionReport.jobId);
+      setAutoCaptionReport(report);
+      setStatusMsg(report.message);
+    } catch (err) {
+      setStatusMsg(`Could not cancel auto captions: ${err}`);
+    }
+  };
+
+  const handleApplyTextTemplateToTrack = (
+    trackId: string,
+    templateId: string,
+    templateVersion = 1
+  ) => {
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_track_tpl_${trackId}_${Date.now()}`,
+          operation: {
+            type: "TextTrackTemplateApply",
+            payload: {
+              track_id: trackId,
+              template_id: templateId,
+              template_version: templateVersion,
+            },
+          },
+        },
+      ],
+      `Apply text template "${templateId}" to text track`
+    );
+  };
+
+  const handleResetTextTemplate = () => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_tpl_reset_${Date.now()}`,
+          operation: {
+            type: "ClipTextTemplateReset",
+            payload: {
+              item_id: selectedItemId,
+            },
+          },
+        },
+      ],
+      "Reset text template"
+    );
+  };
+
+  const handleUpdateTextStyle = (style: TextStyle) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_txt_style_${Date.now()}`,
+          operation: {
+            type: "ClipTextStyleSet",
+            payload: {
+              item_id: selectedItemId,
+              style,
+            },
+          },
+        },
+      ],
+      "Update text style"
+    );
+  };
+
+  const handleUpdateTextStyleForTrack = (trackId: string, style: TextStyle) => {
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_track_txt_style_${trackId}_${Date.now()}`,
+          operation: {
+            type: "TextTrackStyleSet",
+            payload: {
+              track_id: trackId,
+              style,
+            },
+          },
+        },
+      ],
+      "Apply text style to text track"
     );
   };
 
@@ -679,6 +1055,44 @@ export function App() {
         },
       ],
       kind ? `Set Transition (${kind})` : "Remove Transition"
+    );
+  };
+
+  const handleUpdateVisualEffect = (visualEffect: VisualEffectPreset) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_visual_effect_${Date.now()}`,
+          operation: {
+            type: "ClipVisualEffectSet",
+            payload: {
+              item_id: selectedItemId,
+              visual_effect: visualEffect,
+            },
+          },
+        },
+      ],
+      `Set Visual Effect (${visualEffect})`
+    );
+  };
+
+  const handleUpdateSpeed = (speed: ClipSpeed) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_speed_${Date.now()}`,
+          operation: {
+            type: "ClipSpeedSet",
+            payload: {
+              item_id: selectedItemId,
+              speed,
+            },
+          },
+        },
+      ],
+      `Set Speed (${speed})`
     );
   };
 
@@ -799,10 +1213,29 @@ export function App() {
     );
   };
 
+  const handleToggleTrackMute = (trackId: string, muted: boolean) => {
+    executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_track_mute_${trackId}_${Date.now()}`,
+          operation: {
+            type: "TrackMuteSet",
+            payload: {
+              track_id: trackId,
+              muted,
+            },
+          },
+        },
+      ],
+      muted ? "Mute Track" : "Unmute Track"
+    );
+  };
+
   const handleCreateCutTransition = (
     trackId: string,
     leftItemId: string,
     rightItemId: string,
+    kind: "CrossDissolve" | "DipToBlack",
     durationFrames: number = 30
   ) => {
     if (!project) return;
@@ -817,13 +1250,13 @@ export function App() {
               track_id: trackId,
               left_item_id: leftItemId,
               right_item_id: rightItemId,
-              kind: "CrossDissolve",
+              kind,
               duration: { value: durationFrames, rate },
             },
           },
         },
       ],
-      "Create CrossDissolve"
+      `Create ${kind === "CrossDissolve" ? "Cross Dissolve" : "Dip to Black"}`
     );
   };
 
@@ -846,7 +1279,7 @@ export function App() {
           },
         },
       ],
-      "Update CrossDissolve Duration"
+      "Update Cut Transition Duration"
     );
   };
 
@@ -864,7 +1297,7 @@ export function App() {
           },
         },
       ],
-      "Remove CrossDissolve"
+      "Remove Cut Transition"
     );
     setSelectedTransitionId(null);
   };
@@ -924,18 +1357,6 @@ export function App() {
     setSelectedTransitionId(null);
   };
 
-  // Find currently selected item
-  let selectedItem: TimelineItem | null = null;
-  if (project && selectedItemId) {
-    for (const track of project.tracks) {
-      const it = track.items.find((i) => i.item_id === selectedItemId);
-      if (it) {
-        selectedItem = it;
-        break;
-      }
-    }
-  }
-
   // Find currently selected cut transition
   let selectedTransition: CutTransition | null = null;
   let selectedAudioCrossfade: AudioCrossfade | null = null;
@@ -993,18 +1414,31 @@ export function App() {
     }
   }
 
+  const selectedTextTrack =
+    project && selectedItem?.kind === "Text" && adjacentInfo.trackId
+      ? (() => {
+          const track = project.tracks.find((candidate) => candidate.track_id === adjacentInfo.trackId);
+          if (!track) return null;
+          return {
+            trackId: track.track_id,
+            name: track.name,
+            textItemCount: track.items.filter((item) => item.kind === "Text").length,
+          };
+        })()
+      : null;
+
   useTimelineShortcuts({
     project,
     selectedItemIds: selection.selectedItemIds,
     primarySelectedItemId: selection.primarySelectedItemId,
     playheadFrame,
-    onPlayPauseToggle: () => setIsPlaying((p) => !p),
+    onPlayPauseToggle: requestPlaybackToggle,
     onSplitClip: handleSplitClip,
     onDuplicatePrimary: handleDuplicateClip,
     onDeleteSelected: handleDeleteSelected,
     onRippleDeletePrimary: handleRippleDeletePrimary,
-    onTrimHeadToPlayhead: (itemId, newStart, newDuration, newSourceStart) => {
-      handleTrimClip(itemId, newStart, newDuration, newSourceStart);
+    onTrimHeadToPlayhead: (itemId, newStart, newDuration) => {
+      handleTrimClip(itemId, newStart, newDuration);
     },
     onTrimTailToPlayhead: handleTrimTailToPlayhead,
     onZoomIn: () => setZoom((z) => Math.min(10, z + 0.5)),
@@ -1025,6 +1459,14 @@ export function App() {
         onRedo={handleRedo}
         onAddTrack={handleAddTrack}
         onAddClip={handleAddClip}
+        onAddText={handleAddText}
+        onCanvasPresetChange={handleCanvasPresetChange}
+        onCanvasBackgroundChange={handleCanvasBackgroundChange}
+        exportPreset={exportPreset}
+        onExportPresetChange={setExportPreset}
+        onImportCaptions={handleImportCaptions}
+        onExportCaptions={handleExportCaptions}
+        onAutoCaptions={handleOpenAutoCaptions}
       />
 
       <div className="main-workspace">
@@ -1041,7 +1483,10 @@ export function App() {
             selectedItem={selectedItem}
             onPlayheadChange={setPlayheadFrame}
             isPlaying={isPlaying}
-            onTogglePlay={() => setIsPlaying((p) => !p)}
+            onTogglePlay={requestPlaybackToggle}
+            onRegisterAudioUnlock={(unlock) => {
+              audioUnlockRef.current = unlock;
+            }}
           />
 
           <Timeline
@@ -1072,6 +1517,7 @@ export function App() {
             onMoveKeyframe={handleMoveKeyframe}
             onCreateCutTransition={handleCreateCutTransition}
             onCreateAudioCrossfade={handleCreateAudioCrossfade}
+            onToggleTrackMute={handleToggleTrackMute}
             zoom={zoom}
             onZoomIn={() => setZoom((z) => Math.min(10, z + 0.5))}
             onZoomOut={() => setZoom((z) => Math.max(1, z - 0.5))}
@@ -1088,11 +1534,20 @@ export function App() {
           assets={project?.assets ?? []}
           playheadFrame={playheadFrame}
           onUpdateTransform={handleUpdateTransform}
+          onUpdatePlacementMode={handleUpdatePlacementMode}
           onUpdateOpacity={handleUpdateOpacity}
           onUpdateVolume={handleUpdateVolume}
           onUpdateText={handleUpdateText}
+          onApplyTextTemplate={handleApplyTextTemplate}
+          onApplyTextTemplateToTrack={handleApplyTextTemplateToTrack}
+          onResetTextTemplate={handleResetTextTemplate}
+          onUpdateTextStyle={handleUpdateTextStyle}
+          onApplyTextStyleToTrack={handleUpdateTextStyleForTrack}
+          textTrack={selectedTextTrack}
           onUpdateAudioFade={handleUpdateAudioFade}
           onUpdateTransition={handleUpdateTransition}
+          onUpdateVisualEffect={handleUpdateVisualEffect}
+          onUpdateSpeed={handleUpdateSpeed}
           onAddKeyframe={handleAddKeyframe}
           onRemoveKeyframe={handleRemoveKeyframe}
           onSetKeyframeEasing={handleSetKeyframeEasing}
@@ -1112,6 +1567,15 @@ export function App() {
           {project?.revision ?? 0}
         </span>
       </footer>
+
+      <AutoCaptionDialog
+        isOpen={isAutoCaptionOpen}
+        selectedClipName={selectedItem?.name ?? null}
+        report={autoCaptionReport}
+        onClose={() => setIsAutoCaptionOpen(false)}
+        onStart={handleStartAutoCaptions}
+        onCancel={handleCancelAutoCaptions}
+      />
     </div>
   );
 }

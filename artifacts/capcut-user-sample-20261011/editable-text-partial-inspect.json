@@ -1,0 +1,95 @@
+{
+  "projectId": "proj_55622e277623492d8c9304c4c58e6ecc",
+  "name": "CapCut sample - editable text only, effects unsupported",
+  "revision": 1,
+  "durationFrames": 150,
+  "durationSeconds": 5.0,
+  "frameRate": {
+    "numerator": 30,
+    "denominator": 1
+  },
+  "resolution": [
+    1920,
+    1080
+  ],
+  "tracksCount": 1,
+  "clipsCount": 1,
+  "assetsCount": 0,
+  "transitionsCount": 0,
+  "tracks": [
+    {
+      "trackId": "trk_editable",
+      "name": "CapCut sample - editable text only, effects unsupported",
+      "kind": "Video",
+      "muted": false,
+      "itemsCount": 1,
+      "transitionsCount": 0
+    }
+  ],
+  "assets": [],
+  "supportedOperations": [
+    "TrackCreate",
+    "TrackDelete",
+    "TrackReorder",
+    "TrackMuteSet",
+    "ClipCreate",
+    "ClipMove",
+    "ClipTrim",
+    "ClipSplit",
+    "ClipDelete",
+    "ClipDuplicate",
+    "ClipTransformSet",
+    "ClipCropSet",
+    "ClipPlacementModeSet",
+    "ClipOpacitySet",
+    "ClipVolumeSet",
+    "ClipTextSet",
+    "ClipTextStyleSet",
+    "TextTemplateApply",
+    "ClipTextTemplateReset",
+    "ClipAudioFadeSet",
+    "ClipTransitionSet",
+    "ClipKeyframeAdd",
+    "ClipKeyframeRemove",
+    "ClipKeyframeMove",
+    "ClipKeyframeEasingSet",
+    "AssetImport",
+    "ProjectSettingsSet",
+    "CanvasBackgroundSet",
+    "CutTransitionCreate",
+    "CutTransitionUpdateDuration",
+    "CutTransitionRemove",
+    "AudioCrossfadeCreate",
+    "AudioCrossfadeUpdateDuration",
+    "AudioCrossfadeRemove",
+    "ClipGroupMove",
+    "ClipRippleDelete"
+  ],
+  "supportedTransitions": [
+    "FadeIn",
+    "FadeOut",
+    "FadeBlack",
+    "CrossDissolve"
+  ],
+  "schemaVersion": 9,
+  "supportedKeyframeProperties": [
+    "Opacity",
+    "PositionX",
+    "PositionY",
+    "ScaleX",
+    "ScaleY",
+    "Rotation",
+    "Volume"
+  ],
+  "supportedKeyframeEasings": [
+    "Linear",
+    "EaseIn",
+    "EaseOut",
+    "EaseInOut",
+    "CubicBezier"
+  ],
+  "customCubicBounds": [
+    0.0,
+    1.0
+  ]
+}

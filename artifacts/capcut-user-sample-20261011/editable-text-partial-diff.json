@@ -1,0 +1,25 @@
+{
+  "projectId": "proj_55622e277623492d8c9304c4c58e6ecc",
+  "baseRevision": 0,
+  "operationsEvaluated": 3,
+  "changes": [
+    {
+      "trackCreated": {
+        "track_id": "trk_editable",
+        "name": "CapCut sample - editable text only, effects unsupported"
+      }
+    },
+    {
+      "clipCreated": {
+        "item_id": "clip_editable",
+        "track_id": "trk_editable"
+      }
+    },
+    {
+      "clipModified": {
+        "item_id": "clip_editable"
+      }
+    }
+  ],
+  "warnings": []
+}

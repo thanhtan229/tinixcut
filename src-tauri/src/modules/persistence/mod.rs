@@ -3,7 +3,7 @@
 //! Cache is rebuildable and not required for project correctness.
 //! Corrupt or interrupted saves never destroy prior valid project.
 
-use crate::modules::domain::{Project, CURRENT_SCHEMA_VERSION};
+use crate::modules::domain::{Project, TextStyle, CURRENT_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -182,6 +182,25 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
         val = migrate_v3_to_v4(val)?;
     }
 
+    if version <= 4 && CURRENT_SCHEMA_VERSION >= 5 {
+        val = migrate_v4_to_v5(val)?;
+    }
+    if version <= 5 && CURRENT_SCHEMA_VERSION >= 6 {
+        val = migrate_v5_to_v6(val)?;
+    }
+    if version <= 6 && CURRENT_SCHEMA_VERSION >= 7 {
+        val = migrate_v6_to_v7(val)?;
+    }
+    if version <= 7 && CURRENT_SCHEMA_VERSION >= 8 {
+        val = migrate_v7_to_v8(val)?;
+    }
+    if version <= 8 && CURRENT_SCHEMA_VERSION >= 9 {
+        val = migrate_v8_to_v9(val)?;
+    }
+    if version <= 9 && CURRENT_SCHEMA_VERSION >= 10 {
+        val = migrate_v9_to_v10(val)?;
+    }
+
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
 }
 
@@ -311,6 +330,175 @@ pub fn migrate_v3_to_v4(mut val: serde_json::Value) -> Result<serde_json::Value,
     Ok(val)
 }
 
+/// Migrates Schema v4 projects to Schema v5 by initializing the declarative
+/// text style fields for existing text items. Non-text items and all existing
+/// editorial data are preserved.
+pub fn migrate_v4_to_v5(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    let default_style = serde_json::to_value(TextStyle::default())?;
+
+    if let Some(tracks) = obj.get_mut("tracks").and_then(|value| value.as_array_mut()) {
+        for track in tracks {
+            if let Some(items) = track
+                .as_object_mut()
+                .and_then(|track| track.get_mut("items"))
+                .and_then(|value| value.as_array_mut())
+            {
+                for item in items {
+                    if let Some(item) = item.as_object_mut() {
+                        if item.get("kind").and_then(|value| value.as_str()) == Some("Text") {
+                            if !item.contains_key("text_style")
+                                || item
+                                    .get("text_style")
+                                    .is_some_and(serde_json::Value::is_null)
+                            {
+                                item.insert("text_style".to_string(), default_style.clone());
+                            }
+                            if !item.contains_key("text_template") {
+                                item.insert("text_template".to_string(), serde_json::Value::Null);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    obj.insert("schema_version".to_string(), serde_json::json!(5));
+    Ok(val)
+}
+
+/// Migrates Schema v5 projects to Schema v6. Source dimensions and placement
+/// policy are explicit so preview and export can share fit/fill semantics.
+pub fn migrate_v5_to_v6(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    if let Some(assets) = obj.get_mut("assets").and_then(|value| value.as_array_mut()) {
+        for asset in assets {
+            if let Some(asset) = asset.as_object_mut() {
+                asset
+                    .entry("dimensions".to_string())
+                    .or_insert(serde_json::Value::Null);
+            }
+        }
+    }
+
+    if let Some(tracks) = obj.get_mut("tracks").and_then(|value| value.as_array_mut()) {
+        for track in tracks {
+            if let Some(items) = track
+                .as_object_mut()
+                .and_then(|track| track.get_mut("items"))
+                .and_then(|value| value.as_array_mut())
+            {
+                for item in items {
+                    if let Some(item) = item.as_object_mut() {
+                        item.entry("placement_mode".to_string())
+                            .or_insert(serde_json::json!("Fit"));
+                    }
+                }
+            }
+        }
+    }
+
+    obj.insert("schema_version".to_string(), serde_json::json!(6));
+    Ok(val)
+}
+
+/// Migrates Schema v6 projects to Schema v7. Canvas background is persisted as
+/// a validated application-owned #RRGGBB value for preview/export parity.
+pub fn migrate_v6_to_v7(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    let settings = obj
+        .get_mut("settings")
+        .and_then(|value| value.as_object_mut())
+        .ok_or_else(|| {
+            PersistenceError::MigrationFailed("Project settings must be an object".to_string())
+        })?;
+    settings
+        .entry("canvas_background_color".to_string())
+        .or_insert(serde_json::json!("#000000"));
+
+    obj.insert("schema_version".to_string(), serde_json::json!(7));
+    Ok(val)
+}
+
+/// Migrates Schema v7 projects to Schema v8 by assigning the neutral visual
+/// effect preset to every existing timeline item. The new preset is a
+/// presentation property only, so this migration preserves prior appearance.
+pub fn migrate_v7_to_v8(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    if let Some(tracks) = obj.get_mut("tracks").and_then(|value| value.as_array_mut()) {
+        for track in tracks {
+            if let Some(items) = track
+                .as_object_mut()
+                .and_then(|track| track.get_mut("items"))
+                .and_then(|value| value.as_array_mut())
+            {
+                for item in items {
+                    if let Some(item) = item.as_object_mut() {
+                        item.entry("visual_effect".to_string())
+                            .or_insert(serde_json::json!("None"));
+                    }
+                }
+            }
+        }
+    }
+
+    obj.insert("schema_version".to_string(), serde_json::json!(8));
+    Ok(val)
+}
+
+/// Migrates Schema v8 projects to Schema v9 by assigning normal playback speed
+/// to all existing clips. This keeps legacy timeline/source mappings unchanged.
+pub fn migrate_v8_to_v9(mut val: serde_json::Value) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+
+    if let Some(tracks) = obj.get_mut("tracks").and_then(|value| value.as_array_mut()) {
+        for track in tracks {
+            if let Some(items) = track
+                .get_mut("items")
+                .and_then(|value| value.as_array_mut())
+            {
+                for item in items {
+                    if let Some(item_obj) = item.as_object_mut() {
+                        item_obj
+                            .entry("speed".to_string())
+                            .or_insert_with(|| serde_json::json!("Normal"));
+                    }
+                }
+            }
+        }
+    }
+
+    obj.insert("schema_version".to_string(), serde_json::json!(9));
+    Ok(val)
+}
+
+/// Migrates Schema v9 projects to Schema v10. The rich text styling and
+/// animation domain model is additive and backwards-compatible; existing
+/// items retain legacy styling losslessly and without synthetic defaults.
+pub fn migrate_v9_to_v10(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    obj.insert("schema_version".to_string(), serde_json::json!(10));
+    Ok(val)
+}
+
 /// Example migration for tests: Migrates hypothetical legacy format to v1
 pub fn migrate_legacy_fixture(raw_json: &str) -> Result<String, PersistenceError> {
     let mut val: serde_json::Value = serde_json::from_str(raw_json)?;
@@ -330,7 +518,9 @@ mod tests {
     use super::*;
     use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
     use crate::modules::domain::{
-        CutTransition, ItemKind, MediaKind, TimelineItem, Track, TrackKind, TransitionKind,
+        Asset, AssetDimensions, ClipSpeed, CutTransition, ItemKind, Keyframe, KeyframeProperty,
+        MediaKind, PlacementMode, TextStyle, TimelineItem, Track, TrackKind, TransitionKind,
+        VisualEffectPreset,
     };
     use crate::modules::history::{HistoryEntry, HistoryManager};
     use crate::modules::media::{AssetOnlineStatus, MediaCatalog};
@@ -404,7 +594,9 @@ mod tests {
             "original_footage.mp4".to_string(),
             initial_media_path.to_string_lossy().to_string(),
             MediaKind::Video,
+            None,
             15,
+            None,
         );
 
         let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
@@ -593,6 +785,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(300, rate)),
             file_size: 1024,
+            dimensions: None,
         });
 
         // Pre-save composition plan evaluation
@@ -740,8 +933,8 @@ mod tests {
         let project: Project =
             serde_json::from_str(&migrated_str).expect("migrated json should parse to Project");
 
-        // Legacy projects migrate through schema v4 without changing editorial data.
-        assert_eq!(project.schema_version, 4);
+        // Legacy projects migrate through schema v5 without changing editorial data.
+        assert_eq!(project.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(project.tracks.len(), 1);
 
         // CD-09, CD-12: transitions initialized empty
@@ -790,6 +983,47 @@ mod tests {
     }
 
     #[test]
+    fn test_phase19_v4_text_items_receive_default_style_during_migration() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 19 text migration".to_string());
+        let mut track = Track::new("Text".to_string(), TrackKind::Video);
+        let range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(30, rate),
+        );
+        let mut text_item = TimelineItem::new(
+            None,
+            "Legacy title".to_string(),
+            ItemKind::Text,
+            range,
+            range,
+        )
+        .unwrap();
+        text_item.text_content = Some("Legacy title".to_string());
+        track.items.push(text_item);
+        project.tracks.push(track);
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        let root = legacy.as_object_mut().unwrap();
+        root.insert("schema_version".to_string(), serde_json::json!(4));
+        let item = &mut root["tracks"][0]["items"][0];
+        item.as_object_mut().unwrap().remove("text_style");
+        item.as_object_mut().unwrap().remove("text_template");
+
+        let migrated = run_migrations_if_needed(&legacy.to_string()).unwrap();
+        let loaded: Project = serde_json::from_str(&migrated).unwrap();
+        let item = &loaded.tracks[0].items[0];
+
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            item.text_style.as_ref().unwrap().font_family,
+            TextStyle::default().font_family
+        );
+        assert_eq!(item.text_template, None);
+        assert!(loaded.validate().is_ok());
+    }
+
+    #[test]
     fn test_phase18_audio_crossfade_save_reopen_round_trip() {
         use crate::modules::domain::AudioCrossfade;
 
@@ -809,6 +1043,7 @@ mod tests {
                 media_kind: MediaKind::Audio,
                 duration: Some(RationalTime::new(130, rate)),
                 file_size: 1,
+                dimensions: None,
             });
             let timeline =
                 TimeRange::new(RationalTime::new(start, rate), RationalTime::new(60, rate));
@@ -853,7 +1088,7 @@ mod tests {
 
         let rate = FrameRate::FPS_30;
         let mut project = Project::new("Schema v2 Project".to_string());
-        assert_eq!(project.schema_version, 4);
+        assert_eq!(project.schema_version, CURRENT_SCHEMA_VERSION);
 
         let mut track = Track::new("Video Track 1".to_string(), TrackKind::Video);
         let t1 = TimeRange::new(
@@ -888,7 +1123,7 @@ mod tests {
         save_project_atomic(&project, &project_path).expect("v2 save should succeed");
 
         let loaded = load_project(&project_path).expect("v2 load should succeed");
-        assert_eq!(loaded.schema_version, 4);
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(loaded.tracks[0].transitions.len(), 1);
 
         let loaded_trans = &loaded.tracks[0].transitions[0];
@@ -970,5 +1205,192 @@ mod tests {
         assert_eq!(on_disk, malformed_v1);
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn v5_migration_preserves_dimensions_and_defaults_existing_clips_to_fit() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 21 legacy project".to_string());
+        project.assets.push(Asset {
+            asset_id: "ast_vertical".to_string(),
+            name: "vertical.mp4".to_string(),
+            path: "D:/media/vertical.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: None,
+            file_size: 1,
+            dimensions: Some(AssetDimensions {
+                width: 1080,
+                height: 1920,
+            }),
+        });
+
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(
+            TimelineItem::new(
+                Some("ast_vertical".to_string()),
+                "Vertical clip".to_string(),
+                ItemKind::Video,
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+            )
+            .expect("valid legacy clip"),
+        );
+        project.tracks.push(track);
+
+        let mut v5 = serde_json::to_value(project).expect("serialize project");
+        v5["schema_version"] = serde_json::json!(5);
+        v5["assets"][0]
+            .as_object_mut()
+            .expect("asset object")
+            .remove("dimensions");
+        v5["tracks"][0]["items"][0]
+            .as_object_mut()
+            .expect("item object")
+            .remove("placement_mode");
+
+        let migrated_v6 = migrate_v5_to_v6(v5).expect("v5 to v6 migration");
+        let migrated_v7 = migrate_v6_to_v7(migrated_v6).expect("v6 to v7 migration");
+        let migrated_v8 = migrate_v7_to_v8(migrated_v7).expect("v7 to v8 migration");
+        let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
+        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let loaded: Project =
+            serde_json::from_value(migrated).expect("deserialize current project");
+
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.assets[0].dimensions, None);
+        assert_eq!(loaded.tracks[0].items[0].placement_mode, PlacementMode::Fit);
+        assert_eq!(loaded.tracks[0].items[0].speed, ClipSpeed::Normal);
+        loaded.validate().expect("migrated project remains valid");
+    }
+
+    #[test]
+    fn v6_migration_defaults_canvas_background_to_black() {
+        let mut v6 = serde_json::to_value(Project::new("Phase 21 v6 project".to_string()))
+            .expect("serialize project");
+        v6["schema_version"] = serde_json::json!(6);
+        v6["settings"]
+            .as_object_mut()
+            .expect("settings object")
+            .remove("canvas_background_color");
+
+        let migrated_v7 = migrate_v6_to_v7(v6).expect("v6 migration");
+        let migrated_v8 = migrate_v7_to_v8(migrated_v7).expect("v7 to v8 migration");
+        let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
+        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
+
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.settings.canvas_background_color, "#000000");
+        loaded.validate().expect("migrated project remains valid");
+    }
+
+    #[test]
+    fn v7_migration_defaults_visual_effect_to_none() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 22 v7 project".to_string());
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(
+            TimelineItem::new(
+                None,
+                "Legacy clip".to_string(),
+                ItemKind::Video,
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+            )
+            .expect("valid legacy clip"),
+        );
+        project.tracks.push(track);
+
+        let mut v7 = serde_json::to_value(project).expect("serialize project");
+        v7["schema_version"] = serde_json::json!(7);
+        v7["tracks"][0]["items"][0]
+            .as_object_mut()
+            .expect("item object")
+            .remove("visual_effect");
+
+        let migrated_v8 = migrate_v7_to_v8(v7).expect("v7 to v8 migration");
+        let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
+        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
+
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            loaded.tracks[0].items[0].visual_effect,
+            VisualEffectPreset::None
+        );
+        loaded.validate().expect("migrated project remains valid");
+    }
+
+    #[test]
+    fn test_v9_to_v10_migration_preserves_data_and_defaults_rich_text_to_none() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 29 v9 fixture".to_string());
+        let mut track = Track::new("Text Track".to_string(), TrackKind::Video);
+        let mut text_item = TimelineItem::new(
+            None,
+            "Caption clip".to_string(),
+            ItemKind::Text,
+            TimeRange::new(
+                RationalTime::zero(rate),
+                RationalTime::from_frames(60, rate),
+            ),
+            TimeRange::new(
+                RationalTime::zero(rate),
+                RationalTime::from_frames(60, rate),
+            ),
+        )
+        .expect("valid text clip");
+
+        text_item.text_content = Some("Legacy text content".to_string());
+        text_item.keyframes.push(Keyframe::new(
+            KeyframeProperty::Opacity,
+            RationalTime::zero(rate),
+            1.0,
+        ));
+        track.items.push(text_item);
+        project.tracks.push(track);
+
+        let mut v9_val = serde_json::to_value(&project).expect("serialize v9 project");
+        v9_val["schema_version"] = serde_json::json!(9);
+
+        let raw_v9 = serde_json::to_string(&v9_val).expect("to string");
+        let migrated_str = run_migrations_if_needed(&raw_v9).expect("run migration");
+        let loaded: Project = serde_json::from_str(&migrated_str).expect("deserialize");
+
+        assert_eq!(loaded.schema_version, 10);
+        let item = &loaded.tracks[0].items[0];
+        assert_eq!(item.text_content.as_deref(), Some("Legacy text content"));
+        assert!(item.text_rich.is_none());
+        assert!(item.text_animation.is_none());
+        assert_eq!(item.keyframes.len(), 1);
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_schema_11_rejected() {
+        let raw_json = r#"{"schema_version": 11, "name": "Future Project"}"#;
+        let err = run_migrations_if_needed(raw_json).unwrap_err();
+        match err {
+            PersistenceError::UnsupportedSchemaVersion {
+                found,
+                max_supported,
+            } => {
+                assert_eq!(found, 11);
+                assert_eq!(max_supported, 10);
+            }
+            other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
+        }
     }
 }

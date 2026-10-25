@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { isRangeAdjacent, Keyframe, KeyframeProperty, Project, TimelineItem } from "../types/project";
+import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, TimelineItem } from "../types/project";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
 import { buildSnapTargets, calculateSnap, SnapCandidate } from "../utils/timelineSnapping";
@@ -19,13 +19,20 @@ interface TimelineProps {
   onPlayheadChange: (frame: number) => void;
   onMoveClip: (itemId: string, newStartFrame: number) => void;
   onGroupMoveClip?: (itemIds: string[], deltaFrames: number) => void;
-  onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number, newSourceStartFrame?: number) => void;
+  onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number) => void;
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDeleteClip: (itemId: string) => void;
   onDuplicateClip: (itemId: string) => void;
   onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
-  onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
+  onCreateCutTransition?: (
+    trackId: string,
+    leftItemId: string,
+    rightItemId: string,
+    kind: "CrossDissolve" | "DipToBlack",
+    durationFrames: number
+  ) => void;
   onCreateAudioCrossfade?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
+  onToggleTrackMute?: (trackId: string, muted: boolean) => void;
   zoom?: number;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
@@ -57,6 +64,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onMoveKeyframe,
   onCreateCutTransition,
   onCreateAudioCrossfade,
+  onToggleTrackMute,
   zoom: externalZoom,
   onZoomIn,
   onZoomOut,
@@ -76,6 +84,8 @@ export const Timeline: React.FC<TimelineProps> = ({
 
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
   const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
+  const [waveformPollTick, setWaveformPollTick] = useState(0);
+  const waveformRequestsInFlight = useRef(new Set<string>());
 
   // Transient gesture state (Workstream 3.4: local ephemeral state during drag)
   const [transientDrag, setTransientDrag] = useState<{
@@ -84,7 +94,6 @@ export const Timeline: React.FC<TimelineProps> = ({
     initialPointerX: number;
     initialStartFrame: number;
     initialDurationFrames: number;
-    initialSourceStartFrame: number;
     currentDeltaFrames: number;
     isMulti: boolean;
   } | null>(null);
@@ -112,21 +121,48 @@ export const Timeline: React.FC<TimelineProps> = ({
         }
       }
     }
-    for (const assetId of assetIds) {
-      if (!waveforms[assetId]) {
-        editorApi
-          .getWaveform(assetId)
-          .then((res) => {
-            if (res.status === "Ready") {
-              setWaveforms((prev) => ({ ...prev, [assetId]: res.payload }));
+    let disposed = false;
+    let shouldPollAgain = false;
+
+    const loadWaveforms = async () => {
+      await Promise.all(
+        [...assetIds].map(async (assetId) => {
+          if (waveforms[assetId] || waveformRequestsInFlight.current.has(assetId)) {
+            return;
+          }
+
+          waveformRequestsInFlight.current.add(assetId);
+          try {
+            const result = await editorApi.getWaveform(assetId);
+            if (disposed) return;
+
+            if (result.status === "Ready") {
+              setWaveforms((previous) => ({ ...previous, [assetId]: result.payload }));
+            } else if (result.status === "Pending") {
+              // Waveform extraction is intentionally a background job. Poll until its
+              // disposable cache is ready instead of waiting for an unrelated render.
+              shouldPollAgain = true;
             }
-          })
-          .catch(() => {
-            // Graceful non-blocking degradation if asset has no audio or is missing
-          });
+          } catch {
+            // Graceful non-blocking degradation if asset has no audio or is missing.
+          } finally {
+            waveformRequestsInFlight.current.delete(assetId);
+          }
+        })
+      );
+
+      if (!disposed && shouldPollAgain) {
+        window.setTimeout(() => {
+          if (!disposed) setWaveformPollTick((tick) => tick + 1);
+        }, 400);
       }
-    }
-  }, [project, waveforms]);
+    };
+
+    void loadWaveforms();
+    return () => {
+      disposed = true;
+    };
+  }, [project, waveforms, waveformPollTick]);
 
   // Find currently selected primary item
   let selectedItem: TimelineItem | null = null;
@@ -262,7 +298,6 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialPointerX: e.clientX,
       initialStartFrame: item.timeline_range.start.value,
       initialDurationFrames: item.timeline_range.duration.value,
-      initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
       isMulti,
     });
@@ -287,7 +322,6 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialPointerX: e.clientX,
       initialStartFrame: item.timeline_range.start.value,
       initialDurationFrames: item.timeline_range.duration.value,
-      initialSourceStartFrame: item.source_range.start.value,
       currentDeltaFrames: 0,
       isMulti: false,
     });
@@ -386,7 +420,7 @@ export const Timeline: React.FC<TimelineProps> = ({
         // Ignore if not captured
       }
 
-      const { mode, itemId, initialStartFrame, initialDurationFrames, initialSourceStartFrame, currentDeltaFrames, isMulti } = transientDrag;
+      const { mode, itemId, initialStartFrame, initialDurationFrames, currentDeltaFrames, isMulti } = transientDrag;
       setTransientDrag(null);
 
       // Commit single authoritative domain command
@@ -405,11 +439,10 @@ export const Timeline: React.FC<TimelineProps> = ({
         const proposedStart = Math.max(0, initialStartFrame + currentDeltaFrames);
         const deltaApplied = proposedStart - initialStartFrame;
         const finalDur = Math.max(1, initialDurationFrames - deltaApplied);
-        const finalSourceStart = Math.max(0, initialSourceStartFrame + deltaApplied);
-        onTrimClip(itemId, proposedStart, finalDur, finalSourceStart);
+        onTrimClip(itemId, proposedStart, finalDur);
       } else if (mode === "trim-right") {
         const finalDur = Math.max(1, initialDurationFrames + currentDeltaFrames);
-        onTrimClip(itemId, initialStartFrame, finalDur, initialSourceStartFrame);
+        onTrimClip(itemId, initialStartFrame, finalDur);
       }
     } else if (transientKfDrag) {
       try {
@@ -771,7 +804,42 @@ export const Timeline: React.FC<TimelineProps> = ({
                   boxShadow: "2px 0 4px rgba(0, 0, 0, 0.3)",
                 }}
               >
-                {track.name}
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={track.name}
+                >
+                  {track.name}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`${track.muted ? "Unmute" : "Mute"} ${track.name}`}
+                  aria-pressed={track.muted}
+                  title={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleTrackMute?.(track.track_id, !track.muted);
+                  }}
+                  style={{
+                    marginLeft: "auto",
+                    padding: "3px 6px",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "3px",
+                    backgroundColor: track.muted ? "#7f1d1d" : "#27272a",
+                    color: track.muted ? "#fecaca" : "var(--text-muted)",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {track.muted ? "Unmute" : "Mute"}
+                </button>
               </div>
 
               {/* Items in Track */}
@@ -844,9 +912,11 @@ export const Timeline: React.FC<TimelineProps> = ({
                       renderWaveformSvg(
                         waveforms[item.asset_id],
                         transientDrag?.itemId === item.item_id && transientDrag.mode === "trim-left"
-                          ? item.source_range.start.value + (startF - transientDrag.initialStartFrame)
+                          ? item.source_range.start.value +
+                              (startF - transientDrag.initialStartFrame) *
+                                (item.speed === "Half" ? 0.5 : item.speed === "Double" ? 2 : 1)
                           : item.source_range.start.value,
-                        durF,
+                        durF * (item.speed === "Half" ? 0.5 : item.speed === "Double" ? 2 : 1),
                         project?.settings.frame_rate
                           ? project.settings.frame_rate.numerator / (project.settings.frame_rate.denominator || 1)
                           : 30,
@@ -1113,6 +1183,12 @@ export const Timeline: React.FC<TimelineProps> = ({
                       transition.right_item_id === nextItem.item_id
                   );
                   if (hasCrossfade) return null;
+                  const durationFrames = getDefaultAudioCrossfadeDurationFrames(
+                    item,
+                    nextItem,
+                    project.assets,
+                    project.settings.frame_rate
+                  );
                   const cutF = item.timeline_range.start.value + item.timeline_range.duration.value;
                   return (
                     <button
@@ -1120,8 +1196,11 @@ export const Timeline: React.FC<TimelineProps> = ({
                       aria-label={`Create audio crossfade between ${item.name} and ${nextItem.name}`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onCreateAudioCrossfade?.(track.track_id, item.item_id, nextItem.item_id, 30);
+                        if (durationFrames > 0) {
+                          onCreateAudioCrossfade?.(track.track_id, item.item_id, nextItem.item_id, durationFrames);
+                        }
                       }}
+                      disabled={durationFrames <= 0}
                       style={{
                         position: "absolute",
                         top: "13px",
@@ -1134,14 +1213,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                         border: "1px solid #86efac",
                         fontSize: "11px",
                         fontWeight: "bold",
-                        cursor: "pointer",
+                        cursor: durationFrames > 0 ? "pointer" : "not-allowed",
+                        opacity: durationFrames > 0 ? 1 : 0.45,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         zIndex: 15,
                         padding: 0,
                       }}
-                      title={`Create Audio Crossfade between "${item.name}" and "${nextItem.name}". Source handles and clip lengths are validated when applied.`}
+                      title={durationFrames > 0
+                        ? `Create ${durationFrames}-frame audio crossfade between "${item.name}" and "${nextItem.name}".`
+                        : "Cannot create an audio crossfade: media duration or usable source handles are unavailable."}
                     >
                       ◖
                     </button>
@@ -1165,7 +1247,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                       key={`cut_btn_${item.item_id}_${nextItem.item_id}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onCreateCutTransition?.(track.track_id, item.item_id, nextItem.item_id, 30);
+                        onCreateCutTransition?.(
+                          track.track_id,
+                          item.item_id,
+                          nextItem.item_id,
+                          "CrossDissolve",
+                          30
+                        );
                       }}
                       style={{
                         position: "absolute",

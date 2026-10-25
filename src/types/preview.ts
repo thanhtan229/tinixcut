@@ -1,4 +1,12 @@
-import { RationalTime, Crop } from "./project";
+import {
+  RationalTime,
+  Crop,
+  TextStyle,
+  TextTemplateReference,
+  VisualEffectPreset,
+  TextRichStyle,
+  TextAnimation,
+} from "./project";
 
 export interface PreviewSampledLayer {
   item_id: string;
@@ -9,14 +17,21 @@ export interface PreviewSampledLayer {
   asset_path?: string | null;
   is_missing_media: boolean;
   source_time: RationalTime;
+  playback_rate: number;
   position: [number, number];
   scale: [number, number];
+  content_size: [number, number];
   rotation: number;
   crop: Crop;
   opacity: number;
+  visual_effect: VisualEffectPreset;
   text?: string | null;
   font_family?: string | null;
   font_size?: number | null;
+  text_style?: TextStyle | null;
+  text_template?: TextTemplateReference | null;
+  text_rich?: TextRichStyle | null;
+  text_animation?: TextAnimation | null;
   computed_bounds: {
     x: number;
     y: number;
@@ -29,6 +44,7 @@ export interface PreviewSampledAudio {
   item_id: string;
   effective_volume: number;
   source_time: RationalTime;
+  playback_rate: number;
   asset_path?: string | null;
 }
 
@@ -36,7 +52,7 @@ export interface PreviewTransitionGroup {
   transition_id: string;
   track_id: string;
   z_index: number;
-  kind: "FadeIn" | "FadeOut" | "CrossDissolve" | "FadeBlack";
+  kind: "FadeIn" | "FadeOut" | "CrossDissolve" | "FadeBlack" | "DipToBlack";
   progress: number;
   left_layer: PreviewSampledLayer;
   right_layer: PreviewSampledLayer;
@@ -108,4 +124,9 @@ export interface WaveformData {
 export type WaveformStatus =
   | { status: "Ready"; payload: WaveformData }
   | { status: "Pending"; payload: { progress: number } }
+  | { status: "Unavailable"; payload: { reason: string } };
+
+export type PreviewVideoSourceStatus =
+  | { status: "Ready"; payload: { path: string; is_proxy: boolean } }
+  | { status: "Pending" }
   | { status: "Unavailable"; payload: { reason: string } };

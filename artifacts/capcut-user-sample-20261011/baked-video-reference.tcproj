@@ -1,0 +1,166 @@
+{
+  "schema_version": 9,
+  "project_id": "proj_563e31a2b6d94aab878a8dc90905bb20",
+  "name": "CapCut sample - baked animation, text not editable",
+  "revision": 1,
+  "settings": {
+    "width": 1920,
+    "height": 1080,
+    "canvas_background_color": "#000000",
+    "frame_rate": {
+      "numerator": 30,
+      "denominator": 1
+    },
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "assets": [
+    {
+      "asset_id": "asset_capcut_reference",
+      "name": "1011.mp4 - baked CapCut title",
+      "path": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+      "media_kind": "Video",
+      "duration": {
+        "value": 5000000,
+        "rate": {
+          "numerator": 1000000,
+          "denominator": 1
+        }
+      },
+      "file_size": 301379,
+      "dimensions": {
+        "width": 1920,
+        "height": 1080
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": "trk_baked",
+      "name": "Baked CapCut animation",
+      "kind": "Video",
+      "muted": false,
+      "locked": false,
+      "items": [
+        {
+          "item_id": "clip_baked",
+          "asset_id": "asset_capcut_reference",
+          "name": "Baked animation - text not editable",
+          "kind": "Video",
+          "timeline_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 5000000,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            }
+          },
+          "source_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 5000000,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            }
+          },
+          "transform": {
+            "position_x": 0.0,
+            "position_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0
+          },
+          "crop": {
+            "top": 0.0,
+            "bottom": 0.0,
+            "left": 0.0,
+            "right": 0.0
+          },
+          "placement_mode": "Fit",
+          "visual_effect": "None",
+          "speed": "Normal",
+          "opacity": 1.0,
+          "volume": 1.0,
+          "text_content": null,
+          "text_style": null,
+          "text_template": null,
+          "fade_in": null,
+          "fade_out": null,
+          "transition": null,
+          "keyframes": []
+        }
+      ],
+      "transitions": [],
+      "audio_transitions": []
+    }
+  ],
+  "created_at": "2026-10-11T04:34:44.6529453Z",
+  "updated_at": "2026-10-11T04:34:44.722633100+00:00",
+  "client_registry": {
+    "min_accepted_epoch": 0,
+    "current_epoch": 1,
+    "max_active_clients": 64,
+    "clients": {
+      "cli": {
+        "client_epoch": 1,
+        "highest_sequence": 1,
+        "last_active_revision": 1,
+        "registered_at_revision": 1
+      }
+    }
+  },
+  "command_ledger": [
+    {
+      "operation_id": "op_baked_track",
+      "transaction_id": "tx_baked_video_reference",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_6c84aa04afe4afc7951fb98a51fa4117eb03faba81a1a7717357a97138f8c38f",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": null,
+      "affected_track_id": "trk_baked"
+    },
+    {
+      "operation_id": "op_baked_asset",
+      "transaction_id": "tx_baked_video_reference",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_0d7704449db8f5373b63e986de8b1540866eb09b239d31e28063468685576d19",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "asset_capcut_reference",
+      "affected_track_id": null
+    },
+    {
+      "operation_id": "op_baked_clip",
+      "transaction_id": "tx_baked_video_reference",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_8c334a3628604d9dbdc8122074d8f2a6a1d6aa5eeeb7cf29fddbf67590b106f2",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "clip_baked",
+      "affected_track_id": "trk_baked"
+    }
+  ]
+}

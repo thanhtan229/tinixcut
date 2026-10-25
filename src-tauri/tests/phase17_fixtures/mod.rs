@@ -123,6 +123,7 @@ pub fn build_fixture_a(
     project.settings = ProjectSettings {
         width,
         height,
+        canvas_background_color: "#000000".to_string(),
         frame_rate: rate,
         sample_rate: 48000,
         channels: 2,
@@ -143,6 +144,7 @@ pub fn build_fixture_a(
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::from_frames(180, rate)), // 6.0s
         file_size: 1024 * 1024,
+        dimensions: None,
     });
 
     let audio_asset_id = "asset-fixa-audio-01".to_string();
@@ -153,6 +155,7 @@ pub fn build_fixture_a(
         media_kind: MediaKind::Audio,
         duration: Some(RationalTime::from_frames(180, rate)), // 6.0s
         file_size: 512 * 1024,
+        dimensions: None,
     });
 
     // Track 0: Main Video with 2 sequential clips and 1 cut-owned CrossDissolve
@@ -371,6 +374,7 @@ pub fn build_fixture_b(temp_dir: Option<&Path>) -> Project {
     project.settings = ProjectSettings {
         width: 1920,
         height: 1080,
+        canvas_background_color: "#000000".to_string(),
         frame_rate: rate,
         sample_rate: 48000,
         channels: 2,
@@ -399,6 +403,7 @@ pub fn build_fixture_b(temp_dir: Option<&Path>) -> Project {
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::from_frames(300, rate)), // 10.0s
         file_size: 10 * 1024 * 1024,
+        dimensions: None,
     });
 
     let audio_asset_id = "asset-fixb-audio-01".to_string();
@@ -409,6 +414,7 @@ pub fn build_fixture_b(temp_dir: Option<&Path>) -> Project {
         media_kind: MediaKind::Audio,
         duration: Some(RationalTime::from_frames(300, rate)), // 10.0s
         file_size: 5 * 1024 * 1024,
+        dimensions: None,
     });
 
     let mut total_visual_nonlinear_kfs = 0;

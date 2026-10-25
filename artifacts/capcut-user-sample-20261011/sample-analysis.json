@@ -1,0 +1,309 @@
+{
+  "source": {
+    "template_name": "Variety show sense JP - いざ本番！",
+    "template_resource_id": "7522343677012774197",
+    "draft_sha256": "FE7CFEA3E68C698B89B3BF910EAFEAF6B3BDBE03394C291EDDD55A38010883B3",
+    "fps": 30.0,
+    "draft": "C:\\Users\\Admin\\Downloads\\__CAPCUT\\CapCut Drafts\\TINIX_CAPCUT_IMPORT_TEST\\draft_content.json",
+    "video_sha256": "95489CC32CBB56F6F9E7424FE9C9611FEB927D5C0E4EBD08841FA68A726A4DE1",
+    "video": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+    "duration_us": 5000000,
+    "canvas": {
+      "ratio": "original",
+      "width": 1920,
+      "height": 1080,
+      "background": null
+    },
+    "text": "Tinix — Thử nghiệm tiếng Việt"
+  },
+  "video_import": {
+    "background": "opaque black (no alpha channel in source yuv420p video)",
+    "preserved": "Baked pixels and animation from MP4",
+    "text_editable": false,
+    "source_reference": "Absolute path to original MP4, not copied"
+  },
+  "application_source_changed": false,
+  "native_evidence": {
+    "scripts_executed": false,
+    "in_animation_duration_us": 1033333,
+    "runtime": "Amaz SDFText / per-character transforms",
+    "animation_sha256": "C9C796C46A4258B129DFA28484E2A1382FE1710BA787023E8B1B4DC51822F518",
+    "style_file": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\User Data\\Cache\\effect\\7522343356509261109\\19be74d8a940c573f07e4846fab516b5\\effectStyle.json",
+    "animation_script": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\User Data\\Cache\\effect\\7498202895196736769\\c8eba3355159059f8465d0cadbf0c1d2\\lua\\AnimScript.lua",
+    "style": {
+      "fill": {
+        "alpha": 1.0,
+        "content": {
+          "gradient": {
+            "alpha": [
+              1.0,
+              1.0
+            ],
+            "angle": 118.0,
+            "color": [
+              [
+                1.0,
+                1.0,
+                1.0
+              ],
+              [
+                1.0,
+                0.8901960849761963,
+                0.37254902720451355
+              ]
+            ],
+            "mode": "all",
+            "percent": [
+              0.9491150442477876,
+              0.05088495575221239
+            ],
+            "style": "linear"
+          },
+          "render_type": "gradient",
+          "solid": {
+            "alpha": 1.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "texture": {
+            "alpha": 1.0,
+            "angle": 90.0,
+            "blend": "no",
+            "flip": [
+              false,
+              false
+            ],
+            "path": "",
+            "range": 4,
+            "scale": 1.0,
+            "stretchMode": "fit",
+            "wrapMode": "repeat"
+          }
+        }
+      },
+      "inner_shadows": [],
+      "shadows": [
+        {
+          "alpha": 0.9,
+          "angle": -45.0,
+          "content": {
+            "gradient": {
+              "alpha": [
+                1.0,
+                1.0
+              ],
+              "angle": 90.0,
+              "color": [
+                [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                [
+                  0.686274528503418,
+                  0.686274528503418,
+                  0.686274528503418
+                ]
+              ],
+              "mode": "character",
+              "percent": [
+                0.0,
+                1.0
+              ],
+              "style": "linear"
+            },
+            "render_type": "solid",
+            "solid": {
+              "alpha": 1.0,
+              "color": [
+                0.6784313917160034,
+                0.3176470696926117,
+                0.0
+              ]
+            },
+            "texture": {
+              "alpha": 1.0,
+              "angle": 90.0,
+              "blend": "no",
+              "flip": [
+                false,
+                false
+              ],
+              "path": "",
+              "range": 4,
+              "scale": 1.0,
+              "stretchMode": "fit",
+              "wrapMode": "repeat"
+            }
+          },
+          "diffuse": 0.0,
+          "distance": 5.0,
+          "enable": true,
+          "strokes": []
+        },
+        {
+          "alpha": 0.9,
+          "angle": -45.0,
+          "content": {
+            "gradient": {
+              "alpha": [
+                1.0,
+                1.0
+              ],
+              "angle": 90.0,
+              "color": [
+                [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                [
+                  0.686274528503418,
+                  0.686274528503418,
+                  0.686274528503418
+                ]
+              ],
+              "mode": "character",
+              "percent": [
+                0.0,
+                1.0
+              ],
+              "style": "linear"
+            },
+            "render_type": "solid",
+            "solid": {
+              "alpha": 1.0,
+              "color": [
+                1.0,
+                0.6549019813537598,
+                0.3450980484485626
+              ]
+            },
+            "texture": {
+              "alpha": 1.0,
+              "angle": 90.0,
+              "blend": "no",
+              "flip": [
+                false,
+                false
+              ],
+              "path": "",
+              "range": 4,
+              "scale": 1.0,
+              "stretchMode": "fit",
+              "wrapMode": "repeat"
+            }
+          },
+          "diffuse": 0.03413242009132418,
+          "distance": 2.068493150684919,
+          "enable": true,
+          "strokes": []
+        }
+      ],
+      "strokes": [
+        {
+          "alpha": 1.0,
+          "content": {
+            "gradient": {
+              "alpha": [
+                1.0,
+                1.0
+              ],
+              "angle": 90.0,
+              "color": [
+                [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                [
+                  0.686274528503418,
+                  0.686274528503418,
+                  0.686274528503418
+                ]
+              ],
+              "mode": "character",
+              "percent": [
+                0.0,
+                1.0
+              ],
+              "style": "linear"
+            },
+            "render_type": "solid",
+            "solid": {
+              "alpha": 1.0,
+              "color": [
+                0.6784313917160034,
+                0.3176470696926117,
+                0.0
+              ]
+            },
+            "texture": {
+              "alpha": 1.0,
+              "angle": 90.0,
+              "blend": "no",
+              "flip": [
+                false,
+                false
+              ],
+              "path": "",
+              "range": 4,
+              "scale": 1.0,
+              "stretchMode": "fit",
+              "wrapMode": "repeat"
+            }
+          },
+          "enable": true,
+          "width": 0.03808219178082186
+        }
+      ],
+      "textable": false,
+      "version": 3.0,
+      "version_sdk": "16.6.0"
+    }
+  },
+  "editable_import": {
+    "reusable_template_registered": false,
+    "preserved": [
+      "text content",
+      "segment start and duration",
+      "canvas dimensions",
+      "frame rate"
+    ],
+    "not_preserved": [
+      "M PLUS 1p ExtraBold font",
+      "template size and layout",
+      "white-yellow gradient",
+      "brown stroke",
+      "two shadows",
+      "per-character native Lua animation"
+    ],
+    "normalizations": [
+      "Tinix default text style"
+    ]
+  },
+  "status": "PARTIAL_EDITABLE_EXTRACTION_AND_BAKED_VIDEO_IMPORT",
+  "verification": {
+    "export_dimensions": [
+      1920,
+      1080
+    ],
+    "transactional_apply": "passed for both projects",
+    "reopen": "passed",
+    "visual_contact_sheet": "inspected: staggered character entrance preserved in baked video",
+    "dry_run": "passed for both projects",
+    "export": "passed for both projects",
+    "export_fps": "30/1",
+    "video_ssim": 0.99916,
+    "ssim_scope": "Full-frame comparison of 150 frames against CapCut source, dominated by black background; not evidence of editable template conversion",
+    "application_build": "not applicable, no application source changes",
+    "unicode_text_round_trip": "passed",
+    "server_restart": "not applicable, data/research-only experiment",
+    "export_duration_seconds": 5,
+    "export_frames": 150,
+    "source_hash_recheck": "unchanged since manifest snapshot"
+  }
+}

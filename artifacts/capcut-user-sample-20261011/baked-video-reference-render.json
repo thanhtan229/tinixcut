@@ -1,0 +1,10 @@
+{
+  "output_path": "D:\\___TOOLS\\__TINIX\\TinixCut\\artifacts\\capcut-user-sample-20261011\\baked-video-reference-tinix-export.mp4",
+  "duration_secs": 5.0,
+  "file_size_bytes": 91182,
+  "render_time_ms": 1134,
+  "encoder_used": "libx264",
+  "attempted_encoders": [
+    "libx264"
+  ]
+}

@@ -280,6 +280,7 @@ impl Phase12QualificationHarness {
         project.settings = ProjectSettings {
             width: 1280,
             height: 720,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
@@ -293,6 +294,7 @@ impl Phase12QualificationHarness {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(60, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let a_id = "ast_rep_audio".to_string();
@@ -303,6 +305,7 @@ impl Phase12QualificationHarness {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::new(60, FrameRate::FPS_30)),
             file_size: 512,
+            dimensions: None,
         });
 
         // Track 1: Video track with two sequential clips + track-owned CutTransition CrossDissolve + nonlinear keyframe

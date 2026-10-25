@@ -579,6 +579,16 @@ Keyframes adhere to strict domain ownership, mathematical precision, and clip li
 5. **Mutation and migration:** Create/update/remove and dependent edits use the existing Command Service, transaction/history, and automation routes. Schema v1–v3 migrations add an empty transition collection; no transition is inferred. Unsupported/missing/unprobed source handles fail clearly.
 6. **Preview playback boundary:** Standalone Audio-track clips use the existing WebView media path and transport synchronization. Embedded audio on Video items and native audio-engine selection remain outside Phase 18.
 
+### 8.13 Shared Text Renderer & Deterministic Overlay Semantics (ADR-007; Phase 28)
+
+1. **Shared Single-Source Text Engine:** Preview and headless export share an identical native Rust text-shaping, styling, and rasterization pipeline (`text_renderer_poc` / `modules::media::text_renderer`). Preview does NOT use browser DOM or HTML5 `<canvas>` text measurement as canonical truth.
+2. **Unicode Grapheme Segmentation:** Text elements are segmented according to Unicode UAX #29 extended grapheme clusters (`unicode-segmentation`). Vietnamese tone marks and horn diacritics (`ử`, `ệ`, `ế`) are guaranteed indivisible units during cascade animations.
+3. **Layered Painter's Order:** Primitives are rendered strictly from back to front: multi-drop-shadows $\to$ multi-outline-strokes $\to$ gradient/solid glyph fills $\to$ inner strokes/glows.
+4. **Alpha Channel & Compositing Integrity:** Internal raster buffers use straight RGBA with Porter-Duff $(A \text{ over } B)$ compositing. Drop shadows and outer glow blend without dark halo fringing over arbitrary video or light backgrounds.
+5. **Consumer Seams:**
+   - *Preview:* Delivers lossless RGBA or dirty ROI bounding box to Tauri frontend overlay canvas synchronized with playback time.
+   - *Export:* Streams RGBA buffer directly into FFmpeg `filter_complex` via rawvideo or bounded PNG pipes.
+
 ---
 
 ## 9. Command Service Contract
@@ -1049,6 +1059,15 @@ ADR-004 and `ExportAutomationSchedule` are implemented and verified in Phase 14:
 
 ---
 
+### 16.7 Deterministic Text Overlay Export Pipeline (ADR-007)
+
+- Headless export evaluates animated text templates at output frame intervals $t_n = n / \text{fps}$ using the shared native rasterizer (`modules::media::text_renderer_poc`).
+- Text overlays are rendered into pre-allocated, bounded RGBA buffers and fed into the FFmpeg filtergraph overlay stream via `rawvideo` or bounded PNG pipes.
+- Evaluates per-character cascaded motion, multi-stroke, multi-shadow, and linear gradient fills with bit-for-bit parity to the preview canvas.
+- Fully self-contained in pure Rust with `unicode-segmentation`; zero external C++ or LLVM toolchain dependencies.
+
+---
+
 ## 17. Preview / Export Parity Contract
 
 For every feature considered production-supported, define canonical semantics and parity tolerance.
@@ -1438,6 +1457,14 @@ Future optional components such as cloud sync, remote render, provider APIs, tel
 
 ---
 
+### Gate 28 — Shared text renderer selection & deterministic parity (ADR-007)
+
+**When:** Phase 28 milestone before Rich Text Domain (Phase 29).
+**Decision:** Pure Rust lightweight native engine selected over `skia-safe`.
+**Pass condition:** P28-AC-01 through P28-AC-08 pass, bit-for-bit parity proven between preview and export overlays, W1–W4 benchmark budgets satisfied on Windows reference host.
+
+---
+
 ## 26. Architecture Invariants
 
 These rules are considered non-negotiable unless `ARCHITECTURE.md` is explicitly revised with rationale.
@@ -1521,7 +1548,7 @@ These are intentionally unresolved and must not be guessed deep inside implement
 
 1. Exact canonical time representation.
 2. Exact preview backend after POC 1.
-3. Exact text layout/rendering strategy needed for preview/export parity.
+3. Exact text layout/rendering strategy needed for preview/export parity (RESOLVED via ADR-007: Pure Rust native shaping and rasterizer pipeline with `unicode-segmentation`).
 4. Exact initial transition/keyframe subset (video CrossDissolve resolved in Phase 13 via ADR-003; keyframe easing resolved in Phase 14 via ADR-004; audio crossfade selected for Phase 18 via ADR-006 and planned Schema v4. Transition easing and generalized transition frameworks remain deferred).
 5. Asset fingerprint strength and when full hashing is required.
 6. Exact FFmpeg build configuration and hardware acceleration matrix.

@@ -1,0 +1,44 @@
+{
+  "status": "PARTIAL_TEXT_EXTRACTION_ONLY",
+  "not_imported": [
+    "Original typography and layout",
+    "Two decorative sticker layers",
+    "CapCut Lua animations",
+    "CapCut text effect",
+    "Reusable template catalog entry"
+  ],
+  "template_id": "7487081445878435133",
+  "source_unmodified": true,
+  "normalizations": [
+    "Extracted segment starts at zero in the isolated test project",
+    "Tinix default text style is used explicitly for this data-path probe"
+  ],
+  "template_name": "Title EN -Daily Routine Vlog",
+  "imported": [
+    "Text content",
+    "Source segment duration",
+    "Project canvas dimensions"
+  ],
+  "project": "D:\\___TOOLS\\__TINIX\\TinixCut\\artifacts\\capcut-import-poc-20261011\\capcut-text-extraction.tcproj",
+  "source_path": "C:\\Users\\Admin\\Downloads\\__CAPCUT\\CapCut Drafts\\TAP 1 - CA KHO TO\\draft_content.json",
+  "source_sha256": "285CEF9505D4E5C097789E45E1B27CF89F853E4EFE757A75DD5A6C42B319E810",
+  "verification": {
+    "original_draft_hash_unchanged": "PASS",
+    "animated_template_import": "UNSUPPORTED",
+    "text_only_export": "PASS",
+    "native_gui_visual_check": "NOT_PERFORMED",
+    "command_service_apply": "PASS",
+    "dry_run": "PASS",
+    "text_round_trip": "PASS",
+    "reopen_inspect": "PASS",
+    "exported_frame_visual_check": "PASS: visible Vietnamese text on black canvas; original template appearance is not preserved"
+  },
+  "exported_video": {
+    "fps": 30,
+    "path": "D:\\___TOOLS\\__TINIX\\TinixCut\\artifacts\\capcut-import-poc-20261011\\text-only-proof.mp4",
+    "width": 1080,
+    "frames": 61,
+    "duration": "2.033333 seconds",
+    "height": 1920
+  }
+}

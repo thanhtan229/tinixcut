@@ -3009,3 +3009,73 @@ Phase 18 is implemented as `COMPLETE WITH DEFERRED ITEMS`. The v4 model/migratio
 
 The runtime implementation now includes standalone Audio-track WebView playback and timeline/inspector crossfade controls. Interactive Windows qualification for audible transport, UI accessibility/editing flow, and direct typed `app_health_check` remains deferred because no native application surface was available for this session. Automated checks and the local development runtime restart passed; see `Plans/plan_phase18.md` and `PROJECT_STATUS.md` for exact evidence. The implementation conforms to ADR-006, with no change to the research conclusions or architecture.
 
+---
+
+# Creator Expansion Reconnaissance — Text Templates and Captions
+
+**Research date:** 2026-10-08
+**Status:** DRAFT — discovery direction only; no product phase or implementation is authorized.
+
+The recommended next product direction is a focused creator workflow rather than broad CapCut parity: reusable animated text templates, followed by manual captions/SRT-VTT import, social-video aspect presets, then a small curated visual effect pack. The current project already has the durable timeline, command/history, preview/export parity, and basic text/keyframe foundations that this work should extend. It should not become a second scene graph, an executable template runtime, or a marketplace before the first bounded pack is proven.
+
+Initial external reconnaissance:
+
+- [Clypra](https://github.com/AIEraDev/Clypra) is a Rust/Tauri/React editor reference. Its native preview/compositor, bounded-work, and playback observability patterns are useful research inputs, but TinixCut must retain its own command and project semantics.
+- [OpenCut](https://github.com/OpenCut-app/OpenCut) is useful for studying creator-facing interaction flow. An [OpenCut caption-model discussion](https://github.com/OpenCut-app/OpenCut/issues/898) reports a production experience with caption group and word-highlight roles; it is an input to evaluate, not a standard to adopt without a TinixCut model and tests.
+- [OpenTimelineIO](https://github.com/AcademySoftwareFoundation/OpenTimelineIO) remains an editorial/interchange reference, not a replacement for TinixCut's canonical project model.
+- [lottie-web](https://github.com/airbnb/lottie-web) may be evaluated as a preview-motion input. It cannot become a template semantic or shipping dependency until a controlled preview/export parity POC succeeds.
+- [Olive](https://github.com/olive-editor/olive) may inform user-experience observation for title/effect editing interactions.
+
+The research questions, product-fit checks, gates, stop conditions, and expected deliverables are defined in `Plans/research_creator_expansion.md`. A later implementation phase requires explicit approval after those research gates produce evidence.
+
+## Local CapCut editable-template import probe — 2026-10-11
+
+The user supplied a local CapCut draft `TINIX_CAPCUT_IMPORT_TEST` and exported reference video `C:\Users\Admin\AppData\Local\CapCut\Videos\1011.mp4`. The readable draft references template resource `7522343677012774197` (Variety show sense JP - いざ本番！), with text `Tinix — Thử nghiệm tiếng Việt`, a 5-second segment, and a 1920×1080/30fps canvas.
+
+Reading the exact referenced resources, without executing their scripts, established that this sample uses a white/yellow gradient, one brown stroke, two shadows, and M PLUS 1p ExtraBold. Its 1,033,333µs entrance animation uses Lua with Amaz/SDFText and character-level transforms. The ordinary segment keyframe list is empty: copying segment keyframes or resource IDs alone would not reproduce this animation. The current Tinix TextStyle and whole-item keyframe properties cannot represent the full sample.
+
+Two isolated projects were created through Tinix's existing CLI/Command Service. Editable extraction preserved Unicode text, segment timing, canvas and fps, while explicitly using default typography and omitting the native effect/animation. A separate Video-item import preserved the exported MP4's baked appearance and motion, but offered no editable text. Both passed dry-run, transactional apply, reopen, and real 150-frame/5-second exports. Contact sheets were inspected. The full-frame video SSIM was 0.999160, dominated by a large black background; this is not evidence of editable-template conversion or general pack compatibility. Source hashes remained stable during final verification.
+
+The source HEVC/yuv420p MP4 has no alpha and an opaque black background; direct video import is not a transparent title overlay. No reusable template registry entry, UI importer, application code change, or CapCut script runtime was added. Evidence and project artifacts are in `artifacts/capcut-user-sample-20261011/`, particularly `sample-analysis.json` and `README.md`.
+
+The bounded next feasibility target is to represent and recreate this sample using Tinix-owned rich text styling and character animation with preview/export parity, including changed Vietnamese text lengths. Only then should an adapter translate recognized CapCut resources, with explicit unsupported/missing-resource reporting. Agent generation should target the same Tinix semantics and Command Service. This recommendation does not establish universal import support or authorize a broad implementation phase.
+
+## Rich-text renderer reconnaissance — 2026-10-11
+
+The user subsequently approved the native-template-first direction and requested a phased plan, explicitly without code. `Plans/plan_animated_text_templates.md` defines Phases 27–36. The current request authorizes planning; no new renderer, dependency or project schema was implemented or benchmarked.
+
+Primary-source inputs checked for the renderer gate:
+
+- Skia documents paint effects including gradients, strokes and blur/mask operations. These make it a plausible candidate for a shared rich-text overlay compositor, not proof of Tinix integration or visual parity. The precise APIs/features of a pinned version must be checked in P28. [Skia paint overview](https://skia.org/docs/user/api/skpaint_overview/).
+- `rust-skia` provides Rust bindings for Skia. Its Windows build instructions include MSVC/C++ build tools, LLVM and Python prerequisites. P28 must measure fresh build, distribution size, installed resource lookup and Tauri preview delivery rather than assuming that a rendering library alone settles packaging. [rust-skia README](https://github.com/rust-skia/rust-skia#on-windows).
+- COSMIC Text documents Rust shaping/layout/rendering, bidirectional text, ligatures and color emoji, with Windows support. It is a candidate for a smaller shaping-oriented alternative if the preferred POC fails; its documentation does not by itself establish all required gradient/stroke/shadow or per-unit effects. [COSMIC Text repository](https://github.com/pop-os/cosmic-text).
+
+The native shared-compositor preference is an inference from Tinix's existing Rust composition/evaluation boundaries and the observed DOM/drawtext typography mismatch. It is not a completed architecture decision. P28 should test one minimum-feature candidate first and add a second experiment only when evidence requires it, then record an ADR before dependent implementation. No GPU backend, version number or new library is locked by reconnaissance.
+
+## Phase 28 Shared Text Renderer POC and Windows Delivery Evidence — 2026-10-25
+
+**Status:** COMPLETE (Gated & Reconciled via ADR-007; Implemented in Phase 28)
+**Governing Inputs:** `Plans/plan_phase28_text_renderer_poc.md`, `ARCHITECTURE.md` (ADR-007), `artifacts/animated-text-templates/phase-28/`
+
+The Phase 28 POC demonstrated that rich text styling (static-bounds-anchored 118° linear gradient fills, multi-layer outer strokes, multi-layer drop shadows, background boxes, and decorative shape layers) and character-level cascaded motion (Unicode NFC normalization + UAX #29 extended grapheme clusters, unified cluster mask rasterization before 2D rotation, virtual timeline offsets, and cubic Bézier easing curves) can be rendered deterministically with bit-for-bit preview/export parity.
+
+### 1. Evaluated Candidates & Architecture Decision (ADR-007)
+- **Candidate A (`skia-safe`):** Disqualified due to severe Windows delivery drawbacks: requires external LLVM/Clang and Python toolchains on Windows hosts, inflates binary size by +42 MB to +65 MB (installer exceeds packaging limits), and introduces cross-backend rendering divergences between differing Skia dynamic builds.
+- **Candidate B (Pure Rust Native Shaping & Rasterization Engine):** Selected and locked via ADR-007. Built using pure Rust typography stack (`ab_glyph 0.2.32`, `unicode-normalization 0.1.25`, `unicode-segmentation 1.13.3`) with zero external C++ toolchains. Adds < 850 KB binary overhead. Delivers 100% deterministic, bit-for-bit identical RGBA buffers across preview and headless export pipelines ($\Delta \text{PSNR} = \infty$, $\text{ROI SSIM} = 1.000000$, $\text{ROI MAE} = 0.000000$).
+
+### 2. Measured Windows Reference Host Benchmarks
+Measured on Windows 11 Pro 24H2 (i5-13400F, 64 GB RAM, RTX 3090) and saved to `artifacts/animated-text-templates/phase-28/benchmark-metrics.csv`:
+- **W1 (Single Title, 120 graphemes at 100% visibility, 2 strokes, 2 shadows):** Cold = 11.03 ms, Warm p50 = 4.94 ms, Warm p95 = **5.21 ms** (Budget $\le 16.0\text{ ms}$) — **PASS**.
+- **W2 (4 Non-Overlapping Concurrent Animated Titles + Background Boxes):** Cold = 12.92 ms, Warm p50 = 9.87 ms, Warm p95 = **14.87 ms** (Budget $\le 33.3\text{ ms}$) — **PASS**.
+- **W3 16:9 (16-Layer Density Stress = 8 Shapes + 8×32-Grapheme Slots):** Cold = 19.67 ms, Warm p50 = 16.30 ms, Warm p95 = **17.23 ms** (Budget $\le 50.0\text{ ms}$) — **PASS**.
+- **W3 9:16 (16-Layer Density Stress Vertical 1080×1920):** Cold = 19.60 ms, Warm p50 = 15.95 ms, Warm p95 = **16.92 ms** (Budget $\le 50.0\text{ ms}$) — **PASS**.
+- **W4 (Continuous FFmpeg Export Stream, 60 frames / 2.0 s):** **5.18× RTF** (`0.386 s` for `2.0 s` video; Budget $\ge 1.0\times$ RTF) — **PASS**.
+- **Bounded Glyph & Effect Cache (`BoundedGlyphCache`):** `176,499 bytes` (`0.17 MiB` / `256.00 MiB` max ceiling; `35` entries, `4,165` hits, `35` misses).
+
+### 3. Visual & Parity Integrity
+- **Vietnamese Diacritics & Unified Cluster Rotation:** NFC normalization and unified cluster mask rasterization ensure that complex tone marks and horn diacritics (`ử`, `ệ`, `ế`) remain indivisible units during 21-char vertical slide and 3-char bounce + Z-rotation (`24` non-space characters out of `29` graphemes).
+- **Alpha Compositing Across 4 Backgrounds:** Straight RGBA internal storage with Porter-Duff Over blending verified across white (`poc_alpha_white.png`), black (`poc_alpha_black.png`), solid green (`poc_alpha_color.png`), and video (`poc_alpha_video.png`) backgrounds with zero dark halo or double-premultiplication.
+- **Consumer Seams:** Verified Tauri IPC command `render_text_template_poc_preview` (`PreviewOverlayPacket` with cropped ROI PNG, $\text{ROI SSIM} = 1.000000$) and headless FFmpeg `rawvideo` stream overlay (encoded MP4 $\text{ROI SSIM} = 0.9978$).
+
+All criteria `P28-AC-01` through `P28-AC-08` passed. Gate 28 is locked; system is approved for Phase 29 (Rich Text Domain & Commands).
+

@@ -6,7 +6,16 @@ import {
   PreviewTransitionGroup,
   BenchmarkReport,
 } from "./types/preview";
-import { areRationalTimesEqual, isRangeAdjacent, rationalTimeToSeconds } from "./types/project";
+import {
+  areRationalTimesEqual,
+  Asset,
+  getDefaultAudioCrossfadeDurationFrames,
+  isRangeAdjacent,
+  rationalTimeToFrames,
+  rationalTimeToSeconds,
+  TimelineItem,
+} from "./types/project";
+import { getPendingPreviewVideoSeekTarget, shouldSeekPreviewVideo } from "./components/previewVideoSync";
 
 describe("HealthStatus Model", () => {
   it("validates healthy status response structure", () => {
@@ -24,6 +33,95 @@ describe("HealthStatus Model", () => {
   });
 });
 
+describe("RationalTime frame conversion", () => {
+  it("floors media duration to project frames without exceeding source duration", () => {
+    expect(
+      rationalTimeToFrames(
+        { value: 1_234_567_890, rate: { numerator: 1_000_000_000, denominator: 1 } },
+        { numerator: 30, denominator: 1 }
+      )
+    ).toBe(37);
+  });
+
+  it("chooses the longest default crossfade that fits known source and editorial handles", () => {
+    const rate = { numerator: 30, denominator: 1 };
+    const left = {
+      item_id: "left",
+      asset_id: "left-asset",
+      kind: "Audio",
+      source_range: {
+        start: { value: 0, rate },
+        duration: { value: 50, rate },
+      },
+      timeline_range: {
+        start: { value: 0, rate },
+        duration: { value: 50, rate },
+      },
+    } as TimelineItem;
+    const right = {
+      item_id: "right",
+      asset_id: "right-asset",
+      kind: "Audio",
+      source_range: {
+        start: { value: 7, rate },
+        duration: { value: 50, rate },
+      },
+      timeline_range: {
+        start: { value: 50, rate },
+        duration: { value: 50, rate },
+      },
+    } as TimelineItem;
+    const assets: Asset[] = [
+      {
+        asset_id: "left-asset",
+        name: "Left",
+        path: "left.wav",
+        media_kind: "Audio",
+        duration: { value: 100, rate },
+        file_size: 1,
+      },
+      {
+        asset_id: "right-asset",
+        name: "Right",
+        path: "right.wav",
+        media_kind: "Audio",
+        duration: { value: 100, rate },
+        file_size: 1,
+      },
+    ];
+
+    expect(getDefaultAudioCrossfadeDurationFrames(left, right, assets, rate)).toBe(15);
+    expect(
+      getDefaultAudioCrossfadeDurationFrames(left, right, assets.map((asset) => ({ ...asset, duration: undefined })), rate)
+    ).toBe(0);
+  });
+});
+
+describe("Preview video synchronization", () => {
+  it("does not restart a video decoder for normal playhead drift", () => {
+    expect(shouldSeekPreviewVideo(2.08, 2.1, true, false)).toBe(false);
+  });
+
+  it("seeks to large timeline jumps during playback when the decoder is idle", () => {
+    expect(shouldSeekPreviewVideo(2, 8, true, false)).toBe(true);
+  });
+
+  it("keeps paused scrubbing frame-accurate and avoids interrupting an active seek", () => {
+    expect(shouldSeekPreviewVideo(2, 2.1, false, false)).toBe(true);
+    expect(shouldSeekPreviewVideo(2, 8, false, true)).toBe(false);
+  });
+
+  it("settles an overlapping paused seek on the latest requested target", () => {
+    expect(getPendingPreviewVideoSeekTarget(2.2, 8, false, true)).toBeNull();
+    expect(getPendingPreviewVideoSeekTarget(4, 8, false, false)).toBe(8);
+    expect(getPendingPreviewVideoSeekTarget(8.01, 8, false, false)).toBeNull();
+  });
+
+  it("seeks a newly loaded video element to the pending timeline target", () => {
+    expect(getPendingPreviewVideoSeekTarget(0, 12, false, false)).toBe(12);
+  });
+});
+
 describe("Preview POC Model & Benchmark Targets", () => {
   it("validates PreviewFrameState and layer geometry structure", () => {
     const previewState: PreviewFrameState = {
@@ -38,11 +136,14 @@ describe("Preview POC Model & Benchmark Targets", () => {
           asset_path: "D:/media/sample.mp4",
           is_missing_media: false,
           source_time: { value: 0, rate: { numerator: 30, denominator: 1 } },
+          playback_rate: 1,
           position: [0, 0],
           scale: [1, 1],
+          content_size: [1920, 1080],
           rotation: 0,
           crop: { left: 0, right: 0, top: 0, bottom: 0 },
           opacity: 1.0,
+          visual_effect: "None",
           text: null,
           font_family: null,
           font_size: null,
@@ -54,6 +155,7 @@ describe("Preview POC Model & Benchmark Targets", () => {
           item_id: "clip_sample_1",
           effective_volume: 1.0,
           source_time: { value: 0, rate: { numerator: 30, denominator: 1 } },
+          playback_rate: 1,
         },
       ],
     };
@@ -233,28 +335,13 @@ describe("Phase 9 Waveform & Keyframe Models", () => {
     expect(evaluateTransitionOpacity(60, 90, transition)).toBe(1.0);
   });
 
-  it("enforces CrossDissolve is marked deferred and excluded from selectable production transitions", () => {
-    // Supported transitions in production capability contract
-    const supportedTransitions = ["FadeIn", "FadeOut", "FadeBlack"];
-    const allKnownTransitions = ["FadeIn", "FadeOut", "CrossDissolve", "FadeBlack"];
+  it("keeps item fades separate from supported cut transitions", () => {
+    const itemTransitions = ["FadeIn", "FadeOut", "FadeBlack"];
+    const cutTransitions = ["CrossDissolve", "DipToBlack"];
 
-    // Assert CrossDissolve is explicitly excluded from supported transitions
-    expect(supportedTransitions).not.toContain("CrossDissolve");
-    expect(supportedTransitions).toEqual(["FadeIn", "FadeOut", "FadeBlack"]);
-
-    // Option state simulation for Inspector selector
-    const transitionOptions = allKnownTransitions.map((t) => ({
-      kind: t,
-      disabled: t === "CrossDissolve",
-      label: t === "CrossDissolve" ? "Cross Dissolve (Deferred)" : t,
-    }));
-
-    const crossDissolveOption = transitionOptions.find((o) => o.kind === "CrossDissolve");
-    expect(crossDissolveOption?.disabled).toBe(true);
-    expect(crossDissolveOption?.label).toBe("Cross Dissolve (Deferred)");
-
-    const supportedOptions = transitionOptions.filter((o) => !o.disabled);
-    expect(supportedOptions.map((o) => o.kind)).toEqual(["FadeIn", "FadeOut", "FadeBlack"]);
+    expect(itemTransitions).not.toContain("CrossDissolve");
+    expect(itemTransitions).not.toContain("DipToBlack");
+    expect(cutTransitions).toEqual(["CrossDissolve", "DipToBlack"]);
   });
 });
 
@@ -267,11 +354,14 @@ describe("Phase 13 PreviewTransitionGroup & CrossDissolve Preview Semantics", ()
       z_index: 0,
       kind: "Video",
       source_time: { value: 35, rate },
+      playback_rate: 1,
       position: [0, 0],
       scale: [1, 1],
+      content_size: [1920, 1080],
       rotation: 0,
       crop: { left: 0, right: 0, top: 0, bottom: 0 },
       opacity: 0.5,
+      visual_effect: "None",
       is_missing_media: false,
       computed_bounds: { x: 0, y: 0, width: 1920, height: 1080 },
     };
@@ -281,11 +371,14 @@ describe("Phase 13 PreviewTransitionGroup & CrossDissolve Preview Semantics", ()
       z_index: 0,
       kind: "Video",
       source_time: { value: 15, rate },
+      playback_rate: 1,
       position: [0, 0],
       scale: [1, 1],
+      content_size: [1920, 1080],
       rotation: 0,
       crop: { left: 0, right: 0, top: 0, bottom: 0 },
       opacity: 0.5,
+      visual_effect: "None",
       is_missing_media: false,
       computed_bounds: { x: 0, y: 0, width: 1920, height: 1080 },
     };

@@ -1,0 +1,55 @@
+{
+  "operations": [
+    {
+      "operationId": "op_trk_editable",
+      "operation": {
+        "payload": {
+          "kind": "Video",
+          "track_id": "trk_editable",
+          "name": "CapCut sample - editable text only, effects unsupported"
+        },
+        "type": "TrackCreate"
+      }
+    },
+    {
+      "operationId": "op_clip_editable",
+      "operation": {
+        "payload": {
+          "timeline_start": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 0
+          },
+          "track_id": "trk_editable",
+          "duration": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 5000000
+          },
+          "item_id": "clip_editable",
+          "name": "CapCut sample - editable text only, effects unsupported",
+          "kind": "Text"
+        },
+        "type": "ClipCreate"
+      }
+    },
+    {
+      "operationId": "op_text_content",
+      "operation": {
+        "payload": {
+          "text": "Tinix — Thử nghiệm tiếng Việt",
+          "item_id": "clip_editable"
+        },
+        "type": "ClipTextSet"
+      }
+    }
+  ],
+  "schemaVersion": 9,
+  "projectId": "proj_55622e277623492d8c9304c4c58e6ecc",
+  "transactionId": "tx_editable-text-partial",
+  "baseRevision": 0
+}

@@ -195,6 +195,57 @@ impl RationalTime {
     pub fn semantic_lt(&self, other: &Self) -> bool {
         self.semantic_cmp(other) == std::cmp::Ordering::Less
     }
+
+    /// Adds two instants without rounding either operand to the other's rate.
+    ///
+    /// Timeline speed can map one timeline frame to a fractional source-frame
+    /// instant. Keeping the result exact here prevents preview and export from
+    /// drifting apart at 0.5x speed.
+    pub fn add_exact(&self, other: &Self) -> Self {
+        let lhs_num = self.value as i128 * self.rate.denominator as i128;
+        let lhs_den = self.rate.numerator as i128;
+        let rhs_num = other.value as i128 * other.rate.denominator as i128;
+        let rhs_den = other.rate.numerator as i128;
+
+        let common_den = lhs_den
+            .checked_mul(rhs_den)
+            .expect("canonical time denominator overflow");
+        let numerator = lhs_num
+            .checked_mul(rhs_den)
+            .and_then(|value| {
+                rhs_num
+                    .checked_mul(lhs_den)
+                    .and_then(|rhs| value.checked_add(rhs))
+            })
+            .expect("canonical time numerator overflow");
+        let divisor = gcd_i128(numerator, common_den);
+        let reduced_num = numerator / divisor;
+        let reduced_den = common_den / divisor;
+
+        assert!(
+            reduced_num >= i64::MIN as i128
+                && reduced_num <= i64::MAX as i128
+                && reduced_den > 0
+                && reduced_den <= u32::MAX as i128,
+            "canonical time is out of range"
+        );
+        Self::new(reduced_num as i64, FrameRate::new(reduced_den as u32, 1))
+    }
+
+    pub fn sub_exact(&self, other: &Self) -> Self {
+        self.add_exact(&Self::new(-other.value, other.rate))
+    }
+}
+
+fn gcd_i128(mut lhs: i128, mut rhs: i128) -> i128 {
+    lhs = lhs.abs();
+    rhs = rhs.abs();
+    while rhs != 0 {
+        let remainder = lhs % rhs;
+        lhs = rhs;
+        rhs = remainder;
+    }
+    lhs.max(1)
 }
 
 impl std::fmt::Display for RationalTime {

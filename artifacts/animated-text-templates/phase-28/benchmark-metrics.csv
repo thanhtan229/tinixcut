@@ -1,0 +1,8 @@
+workload,resolution,cold_ms,warm_p50_ms,warm_p95_ms,budget_p95_ms,cache_bytes,status
+W1_Single_120_Graphemes_2Stroke_2Shadow,1920x1080,11.31,5.60,7.10,16.00,402683,PASS
+W2_4_Concurrent_Titles_NonOverlapping,1920x1080,13.64,11.07,12.21,33.30,402683,PASS
+W3_16_Layers_8Shapes_8TextSlots_16x9,1920x1080,20.72,18.51,20.32,50.00,402683,PASS
+W3_16_Layers_Vertical_9x16,1080x1920,26.86,17.74,19.78,50.00,176499,PASS
+W1_Preview_IPC_Delivery_EndToEnd,1920x1080,0.00,12.81,13.83,16.00,402683,PASS
+Seek_Latency_Random_Timeline_Jumps,1920x1080,0.00,2.55,8.25,16.00,402683,PASS
+Edit_Latency_Text_Mutation,1920x1080,0.00,2.89,2.96,25.00,402683,PASS

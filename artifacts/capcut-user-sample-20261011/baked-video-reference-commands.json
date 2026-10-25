@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 9,
+  "transactionId": "tx_baked_video_reference",
+  "projectId": "proj_563e31a2b6d94aab878a8dc90905bb20",
+  "baseRevision": 0,
+  "operations": [
+    {
+      "operationId": "op_baked_track",
+      "operation": {
+        "payload": {
+          "name": "Baked CapCut animation",
+          "track_id": "trk_baked",
+          "kind": "Video"
+        },
+        "type": "TrackCreate"
+      }
+    },
+    {
+      "operationId": "op_baked_asset",
+      "operation": {
+        "payload": {
+          "name": "1011.mp4 - baked CapCut title",
+          "duration": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 5000000
+          },
+          "media_kind": "Video",
+          "asset_id": "asset_capcut_reference",
+          "path": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+          "dimensions": {
+            "width": 1920,
+            "height": 1080
+          },
+          "file_size": 301379
+        },
+        "type": "AssetImport"
+      }
+    },
+    {
+      "operationId": "op_baked_clip",
+      "operation": {
+        "payload": {
+          "kind": "Video",
+          "item_id": "clip_baked",
+          "track_id": "trk_baked",
+          "name": "Baked animation - text not editable",
+          "duration": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 5000000
+          },
+          "asset_id": "asset_capcut_reference",
+          "timeline_start": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 0
+          },
+          "source_start": {
+            "rate": {
+              "numerator": 1000000,
+              "denominator": 1
+            },
+            "value": 0
+          }
+        },
+        "type": "ClipCreate"
+      }
+    }
+  ]
+}

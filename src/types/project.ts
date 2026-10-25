@@ -18,6 +18,66 @@ export function rationalTimeToSeconds(rt: RationalTime): number {
   return (rt.value * rt.rate.denominator) / rt.rate.numerator;
 }
 
+export function rationalTimeToFrames(rt: RationalTime, targetRate: FrameRate): number {
+  if (!rt?.rate?.numerator || !targetRate.numerator || !targetRate.denominator) return 0;
+  const frames =
+    (rt.value * targetRate.numerator * rt.rate.denominator) /
+    (rt.rate.numerator * targetRate.denominator);
+  return Number.isFinite(frames) ? Math.floor(frames) : 0;
+}
+
+export function getDefaultAudioCrossfadeDurationFrames(
+  left: TimelineItem,
+  right: TimelineItem,
+  assets: Asset[],
+  rate: FrameRate,
+  maxDurationFrames = 30
+): number {
+  if (left.kind !== "Audio" || right.kind !== "Audio") return 0;
+  const leftAsset = assets.find((asset) => asset.asset_id === left.asset_id);
+  const rightAsset = assets.find((asset) => asset.asset_id === right.asset_id);
+  if (
+    leftAsset?.media_kind !== "Audio" ||
+    rightAsset?.media_kind !== "Audio" ||
+    !leftAsset.duration ||
+    !rightAsset.duration
+  ) {
+    return 0;
+  }
+
+  const leftPostroll =
+    rationalTimeToFrames(leftAsset.duration, rate) -
+    rationalTimeToFrames(left.source_range.start, rate) -
+    rationalTimeToFrames(left.source_range.duration, rate);
+  const rightPreroll = rationalTimeToFrames(right.source_range.start, rate);
+  const leftEditorial = rationalTimeToFrames(left.timeline_range.duration, rate);
+  const rightEditorial = rationalTimeToFrames(right.timeline_range.duration, rate);
+  const sourceFramesForTimelineFrames = (frames: number, speed: ClipSpeed | undefined): number | null => {
+    const [numerator, denominator] =
+      speed === "Half" ? [1, 2] : speed === "Double" ? [2, 1] : [1, 1];
+    const sourceFrames = frames * numerator;
+    return sourceFrames % denominator === 0 ? sourceFrames / denominator : null;
+  };
+
+  for (let duration = Math.floor(maxDurationFrames); duration >= 1; duration -= 1) {
+    const leftHalf = Math.floor(duration / 2);
+    const rightHalf = duration - leftHalf;
+    const requiredPostroll = sourceFramesForTimelineFrames(rightHalf, left.speed);
+    const requiredPreroll = sourceFramesForTimelineFrames(leftHalf, right.speed);
+    if (
+      requiredPostroll !== null &&
+      requiredPreroll !== null &&
+      leftPostroll >= requiredPostroll &&
+      rightPreroll >= requiredPreroll &&
+      leftEditorial >= leftHalf &&
+      rightEditorial >= rightHalf
+    ) {
+      return duration;
+    }
+  }
+  return 0;
+}
+
 export function areRationalTimesEqual(a: RationalTime, b: RationalTime): boolean {
   if (a.rate.numerator === b.rate.numerator && a.rate.denominator === b.rate.denominator) {
     return a.value === b.value;
@@ -50,6 +110,38 @@ export type MediaKind = "Video" | "Audio" | "Image";
 export type TrackKind = "Video" | "Audio";
 export type ItemKind = "Video" | "Audio" | "Image" | "Text";
 
+export type TextAlignment = "Left" | "Center" | "Right";
+export type TextAnchor =
+  | "TopLeft"
+  | "TopCenter"
+  | "TopRight"
+  | "MiddleLeft"
+  | "Center"
+  | "MiddleRight"
+  | "BottomLeft"
+  | "BottomCenter"
+  | "BottomRight";
+
+export interface TextStyle {
+  font_family: string;
+  font_size: number;
+  font_weight: number;
+  font_color: string;
+  accent_color?: string | null;
+  background_color?: string | null;
+  background_opacity: number;
+  padding_x: number;
+  padding_y: number;
+  alignment: TextAlignment;
+  line_height: number;
+  anchor: TextAnchor;
+}
+
+export interface TextTemplateReference {
+  template_id: string;
+  template_version: number;
+}
+
 export interface Asset {
   asset_id: string;
   name: string;
@@ -57,7 +149,15 @@ export interface Asset {
   media_kind: MediaKind;
   duration?: RationalTime;
   file_size: number;
+  dimensions?: AssetDimensions | null;
 }
+
+export interface AssetDimensions {
+  width: number;
+  height: number;
+}
+
+export type PlacementMode = "Fit" | "Fill";
 
 export type KeyframeProperty =
   | "PositionX"
@@ -86,13 +186,142 @@ export type TransitionKind =
   | "FadeIn"
   | "FadeOut"
   | "CrossDissolve"
-  | "FadeBlack";
+  | "FadeBlack"
+  | "DipToBlack";
+
+export type VisualEffectPreset = "None" | "Mono" | "Vivid" | "Muted";
+export type ClipSpeed = "Half" | "Normal" | "Double";
 
 export interface Transition {
   kind: TransitionKind;
   duration: RationalTime;
 }
 
+export type FontStyle = "Normal" | "Italic" | "Oblique";
+
+export interface FontReference {
+  family: string;
+  weight: number;
+  style?: FontStyle;
+  asset_id?: string | null;
+}
+
+export type TextWrapMode = "None" | "Wrap" | "AutoFit";
+
+export interface TextLayout {
+  max_width?: number | null;
+  alignment?: TextAlignment;
+  line_height?: number;
+  letter_spacing?: number;
+  wrap_mode?: TextWrapMode;
+  min_font_size?: number | null;
+  max_font_size?: number | null;
+}
+
+export type GradientKind = "Linear" | "Radial";
+
+export type GradientSpace = "All" | "Character";
+
+export interface GradientStop {
+  offset: number;
+  color: string;
+}
+
+export type TextFill =
+  | { kind: "Solid"; color: string }
+  | {
+      kind: "Gradient";
+      gradient_kind: GradientKind;
+      angle_deg: number;
+      radius?: number | null;
+      space?: GradientSpace;
+      stops: GradientStop[];
+    };
+
+export type StrokeAlign = "Outside" | "Center" | "Inside";
+
+export interface TextStroke {
+  color: string;
+  width: number;
+  align?: StrokeAlign;
+}
+
+export interface TextShadow {
+  color: string;
+  offset_x?: number;
+  offset_y?: number;
+  blur?: number;
+}
+
+export interface TextBackgroundBox {
+  fill?: TextFill;
+  padding_x?: number;
+  padding_y?: number;
+  corner_radius?: number;
+  opacity?: number;
+}
+
+export interface TextSpanStyle {
+  fill?: TextFill | null;
+  font?: FontReference | null;
+  font_size?: number | null;
+  letter_spacing?: number | null;
+}
+
+export interface RichTextSpan {
+  start: number;
+  end: number;
+  style?: TextSpanStyle;
+}
+
+export interface TextRichStyle {
+  font?: FontReference | null;
+  font_size?: number | null;
+  layout?: TextLayout;
+  fill?: TextFill;
+  strokes?: TextStroke[];
+  shadows?: TextShadow[];
+  background?: TextBackgroundBox | null;
+  spans?: RichTextSpan[];
+}
+
+export type AnimationUnit = "All" | "Grapheme" | "Word" | "Line";
+
+export type StaggerOrder = "Forward" | "Backward" | "CenterOut" | "Random";
+
+export type LoopMode = "None" | "Repeat" | "PingPong";
+
+export type DurationConflictPolicy = "Reject" | "ProportionalScale" | "ClampOut";
+
+export interface AnimationTransform {
+  translate_x: number;
+  translate_y: number;
+  scale_x: number;
+  scale_y: number;
+  rotation: number;
+  opacity: number;
+}
+
+export interface TextAnimationSegment {
+  duration: RationalTime;
+  easing?: KeyframeEasing;
+  stagger_ratio?: number;
+  from?: AnimationTransform;
+  to?: AnimationTransform;
+}
+
+export interface TextAnimation {
+  unit?: AnimationUnit;
+  order?: StaggerOrder;
+  seed?: number | null;
+  pivot_x?: number;
+  pivot_y?: number;
+  in_anim?: TextAnimationSegment | null;
+  loop_anim?: TextAnimationSegment | null;
+  out_anim?: TextAnimationSegment | null;
+  loop_mode?: LoopMode;
+  conflict_policy?: DurationConflictPolicy;
+}
 export interface TimelineItem {
   item_id: string;
   asset_id?: string;
@@ -105,10 +334,17 @@ export interface TimelineItem {
   opacity: number;
   volume: number;
   text_content?: string;
+  text_style?: TextStyle | null;
+  text_template?: TextTemplateReference | null;
+  text_rich?: TextRichStyle | null;
+  text_animation?: TextAnimation | null;
   fade_in?: RationalTime;
   fade_out?: RationalTime;
   transition?: Transition;
   keyframes?: Keyframe[];
+  placement_mode?: PlacementMode;
+  visual_effect?: VisualEffectPreset;
+  speed?: ClipSpeed;
 }
 
 export interface CutTransition {
@@ -142,6 +378,7 @@ export interface Track {
 export interface ProjectSettings {
   width: number;
   height: number;
+  canvas_background_color: string;
   frame_rate: FrameRate;
   sample_rate: number;
   channels: number;

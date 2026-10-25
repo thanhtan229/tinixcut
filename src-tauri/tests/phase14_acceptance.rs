@@ -121,9 +121,12 @@ fn read_raw_rgba_frames(path: &Path, width: usize, height: usize) -> Vec<Vec<u8>
 // =========================================================================
 #[test]
 fn test_p14_ac01_schema_v3_and_ac04_future_reader_safety() {
-    assert_eq!(CURRENT_SCHEMA_VERSION, 4, "Production schema must be v4");
+    assert!(
+        CURRENT_SCHEMA_VERSION >= 4,
+        "Production schema must remain compatible with Phase 14 migrations"
+    );
 
-    let project = Project::new("Schema v4 Project".to_string());
+    let project = Project::new("Current schema project".to_string());
     assert_eq!(project.schema_version, CURRENT_SCHEMA_VERSION);
 
     let serialized = serde_json::to_string(&project).expect("Serialization failed");
@@ -779,6 +782,7 @@ fn test_p14_ac22_ac24_through_ac27_full_export_video_schedule() {
         media_kind: MediaKind::Video,
         duration: None,
         file_size: 1000,
+        dimensions: None,
     };
     let asset_id = asset.asset_id.clone();
     project.assets.push(asset);
@@ -872,6 +876,7 @@ fn test_p14_ac28_cross_dissolve_coexistence() {
         media_kind: MediaKind::Video,
         duration: None,
         file_size: 1000,
+        dimensions: None,
     };
     let a2 = Asset {
         asset_id: "a2".to_string(),
@@ -880,6 +885,7 @@ fn test_p14_ac28_cross_dissolve_coexistence() {
         media_kind: MediaKind::Video,
         duration: None,
         file_size: 1000,
+        dimensions: None,
     };
     let id1 = a1.asset_id.clone();
     let id2 = a2.asset_id.clone();
@@ -967,6 +973,7 @@ fn test_p14_ac29_ac30_full_audio_volume_export() {
         media_kind: MediaKind::Audio,
         duration: None,
         file_size: 1000,
+        dimensions: None,
     };
     let asset_id = asset.asset_id.clone();
     project.assets.push(asset);
@@ -1039,6 +1046,7 @@ fn test_p14_ac29_audio_volume_export_non_48k_sample_rate() {
         media_kind: MediaKind::Audio,
         duration: None,
         file_size: 1000,
+        dimensions: None,
     };
     let asset_id = asset.asset_id.clone();
     project.assets.push(asset);

@@ -3,16 +3,19 @@
 //! Clips remain in timeline with offline status until relinked.
 
 pub mod cache;
+pub mod captions;
 pub mod ffmpeg;
 pub mod qualification;
 pub mod resolver;
+pub mod text_renderer_poc;
 pub mod transcription;
 pub mod waveform;
 
 pub use qualification::{Phase12QualificationHarness, Poc5MatrixReport};
 pub use resolver::{BinaryKind, BinaryOrigin, MediaBinaryResolver, ResolvedBinary};
 
-use crate::modules::domain::{Asset, MediaKind, Project};
+use crate::modules::domain::time::RationalTime;
+use crate::modules::domain::{Asset, AssetDimensions, MediaKind, Project};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -66,7 +69,9 @@ impl MediaCatalog {
         name: String,
         path: String,
         media_kind: MediaKind,
+        duration: Option<RationalTime>,
         file_size: u64,
+        dimensions: Option<AssetDimensions>,
     ) -> String {
         let id = asset_id.unwrap_or_else(crate::modules::domain::id::generate_asset_id);
         let asset = Asset {
@@ -74,8 +79,9 @@ impl MediaCatalog {
             name,
             path,
             media_kind,
-            duration: None,
+            duration,
             file_size,
+            dimensions,
         };
         project.assets.push(asset);
         id
@@ -129,7 +135,9 @@ mod tests {
             "sample_video.mp4".to_string(),
             missing_path.to_string(),
             MediaKind::Video,
+            None,
             1024 * 1024 * 50,
+            None,
         );
 
         // Asset is offline

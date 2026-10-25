@@ -1,0 +1,95 @@
+{
+  "projectId": "proj_2cec0f41bd854c4cb37a6bb6ee34587f",
+  "name": "CapCut text extraction POC - animation unsupported",
+  "revision": 1,
+  "durationFrames": 61,
+  "durationSeconds": 2.033333333333333,
+  "frameRate": {
+    "numerator": 30,
+    "denominator": 1
+  },
+  "resolution": [
+    1080,
+    1920
+  ],
+  "tracksCount": 1,
+  "clipsCount": 1,
+  "assetsCount": 0,
+  "transitionsCount": 0,
+  "tracks": [
+    {
+      "trackId": "trk_capcut_probe",
+      "name": "Extracted text only - original effect unsupported",
+      "kind": "Video",
+      "muted": false,
+      "itemsCount": 1,
+      "transitionsCount": 0
+    }
+  ],
+  "assets": [],
+  "supportedOperations": [
+    "TrackCreate",
+    "TrackDelete",
+    "TrackReorder",
+    "TrackMuteSet",
+    "ClipCreate",
+    "ClipMove",
+    "ClipTrim",
+    "ClipSplit",
+    "ClipDelete",
+    "ClipDuplicate",
+    "ClipTransformSet",
+    "ClipCropSet",
+    "ClipPlacementModeSet",
+    "ClipOpacitySet",
+    "ClipVolumeSet",
+    "ClipTextSet",
+    "ClipTextStyleSet",
+    "TextTemplateApply",
+    "ClipTextTemplateReset",
+    "ClipAudioFadeSet",
+    "ClipTransitionSet",
+    "ClipKeyframeAdd",
+    "ClipKeyframeRemove",
+    "ClipKeyframeMove",
+    "ClipKeyframeEasingSet",
+    "AssetImport",
+    "ProjectSettingsSet",
+    "CanvasBackgroundSet",
+    "CutTransitionCreate",
+    "CutTransitionUpdateDuration",
+    "CutTransitionRemove",
+    "AudioCrossfadeCreate",
+    "AudioCrossfadeUpdateDuration",
+    "AudioCrossfadeRemove",
+    "ClipGroupMove",
+    "ClipRippleDelete"
+  ],
+  "supportedTransitions": [
+    "FadeIn",
+    "FadeOut",
+    "FadeBlack",
+    "CrossDissolve"
+  ],
+  "schemaVersion": 9,
+  "supportedKeyframeProperties": [
+    "Opacity",
+    "PositionX",
+    "PositionY",
+    "ScaleX",
+    "ScaleY",
+    "Rotation",
+    "Volume"
+  ],
+  "supportedKeyframeEasings": [
+    "Linear",
+    "EaseIn",
+    "EaseOut",
+    "EaseInOut",
+    "CubicBezier"
+  ],
+  "customCubicBounds": [
+    0.0,
+    1.0
+  ]
+}

@@ -11,7 +11,7 @@ export interface TimelineShortcutsCallbacks {
   onDuplicatePrimary: (itemId: string) => void;
   onDeleteSelected: (itemIds: string[]) => void;
   onRippleDeletePrimary: (itemId: string) => void;
-  onTrimHeadToPlayhead: (itemId: string, newStart: number, newDuration: number, newSourceStart: number) => void;
+  onTrimHeadToPlayhead: (itemId: string, newStart: number, newDuration: number) => void;
   onTrimTailToPlayhead: (itemId: string, newDuration: number) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -152,8 +152,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
               if (playhead > start && playhead < end) {
                 const delta = playhead - start;
                 const newDuration = dur - delta;
-                const newSourceStart = it.source_range.start.value + delta;
-                cb.onTrimHeadToPlayhead(it.item_id, playhead, newDuration, newSourceStart);
+                cb.onTrimHeadToPlayhead(it.item_id, playhead, newDuration);
               }
               break;
             }

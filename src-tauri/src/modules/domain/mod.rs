@@ -4,14 +4,17 @@
 
 pub mod evaluator;
 pub mod id;
+pub mod text;
 pub mod time;
+
+pub use text::*;
 
 use self::id::*;
 use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -87,6 +90,26 @@ pub enum DomainError {
 
     #[error("Domain validation error: {0}")]
     Validation(String),
+
+    #[error("Text exceeds maximum allowed graphemes: max {max}, found {found}")]
+    TextTooLong { max: usize, found: usize },
+
+    #[error("Invalid text span [{start}, {end}): {reason}")]
+    InvalidTextSpan {
+        start: u32,
+        end: u32,
+        reason: String,
+    },
+
+    #[error("Text animation duration conflict: in {in_duration} + out {out_duration} exceeds clip duration {clip_duration}")]
+    AnimationDurationConflict {
+        in_duration: String,
+        out_duration: String,
+        clip_duration: String,
+    },
+
+    #[error("Unsupported text feature: {0}")]
+    UnsupportedTextFeature(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +131,142 @@ pub enum ItemKind {
     Audio,
     Image,
     Text,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TextAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextAnchor {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    Center,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextStyle {
+    pub font_family: String,
+    pub font_size: f32,
+    pub font_weight: u16,
+    pub font_color: String,
+    pub accent_color: Option<String>,
+    pub background_color: Option<String>,
+    pub background_opacity: f32,
+    pub padding_x: f32,
+    pub padding_y: f32,
+    pub alignment: TextAlignment,
+    pub line_height: f32,
+    pub anchor: TextAnchor,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font_family: "Inter".to_string(),
+            font_size: 48.0,
+            font_weight: 700,
+            font_color: "#FFFFFF".to_string(),
+            accent_color: None,
+            background_color: None,
+            background_opacity: 0.0,
+            padding_x: 0.0,
+            padding_y: 0.0,
+            alignment: TextAlignment::Center,
+            line_height: 1.0,
+            anchor: TextAnchor::Center,
+        }
+    }
+}
+
+impl TextStyle {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.font_family.trim().is_empty() {
+            return Err(DomainError::Validation(
+                "Text font family cannot be empty".to_string(),
+            ));
+        }
+        if !self.font_size.is_finite() || self.font_size <= 0.0 {
+            return Err(DomainError::Validation(
+                "Text font size must be finite and positive".to_string(),
+            ));
+        }
+        if !(100..=900).contains(&self.font_weight) {
+            return Err(DomainError::Validation(
+                "Text font weight must be between 100 and 900".to_string(),
+            ));
+        }
+        if !self.background_opacity.is_finite() || !(0.0..=1.0).contains(&self.background_opacity) {
+            return Err(DomainError::Validation(
+                "Text background opacity must be between 0 and 1".to_string(),
+            ));
+        }
+        if !self.padding_x.is_finite()
+            || !self.padding_y.is_finite()
+            || self.padding_x < 0.0
+            || self.padding_y < 0.0
+        {
+            return Err(DomainError::Validation(
+                "Text padding must be finite and non-negative".to_string(),
+            ));
+        }
+        if !self.line_height.is_finite() || self.line_height <= 0.0 {
+            return Err(DomainError::Validation(
+                "Text line height must be finite and positive".to_string(),
+            ));
+        }
+        for (name, color) in [
+            ("font_color", Some(self.font_color.as_str())),
+            ("accent_color", self.accent_color.as_deref()),
+            ("background_color", self.background_color.as_deref()),
+        ] {
+            if let Some(color) = color {
+                if !is_hex_color(color) {
+                    return Err(DomainError::Validation(format!(
+                        "Text {name} must be a #RRGGBB or #RRGGBBAA color"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextTemplateReference {
+    pub template_id: String,
+    pub template_version: u32,
+}
+
+impl TextTemplateReference {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if !is_valid_id(&self.template_id) {
+            return Err(DomainError::InvalidId(self.template_id.clone()));
+        }
+        if self.template_version == 0 {
+            return Err(DomainError::Validation(
+                "Text template version must be positive".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn is_hex_color(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (bytes.len() == 7 || bytes.len() == 9)
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,9 +313,15 @@ impl Default for Crop {
 pub struct ProjectSettings {
     pub width: u32,
     pub height: u32,
+    #[serde(default = "default_canvas_background_color")]
+    pub canvas_background_color: String,
     pub frame_rate: FrameRate,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+fn default_canvas_background_color() -> String {
+    "#000000".to_string()
 }
 
 impl Default for ProjectSettings {
@@ -164,11 +329,86 @@ impl Default for ProjectSettings {
         Self {
             width: 1920,
             height: 1080,
+            canvas_background_color: default_canvas_background_color(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
         }
     }
+}
+
+impl ProjectSettings {
+    /// Validate settings that define the canonical composition canvas.
+    ///
+    /// The supported H.264 export path produces yuv420p video, which requires
+    /// even dimensions. Keeping that invariant in the project model prevents a
+    /// project from previewing successfully but failing only when exported.
+    pub fn validate(&self) -> Result<(), DomainError> {
+        const MAX_CANVAS_DIMENSION: u32 = 8192;
+
+        if self.width == 0 || self.height == 0 {
+            return Err(DomainError::Validation(
+                "Project canvas dimensions must be positive integers".to_string(),
+            ));
+        }
+        if self.width > MAX_CANVAS_DIMENSION || self.height > MAX_CANVAS_DIMENSION {
+            return Err(DomainError::Validation(format!(
+                "Project canvas dimensions cannot exceed {MAX_CANVAS_DIMENSION}px"
+            )));
+        }
+        if !self.width.is_multiple_of(2) || !self.height.is_multiple_of(2) {
+            return Err(DomainError::Validation(
+                "Project canvas dimensions must be even for H.264 export".to_string(),
+            ));
+        }
+        let color = self.canvas_background_color.as_bytes();
+        if color.len() != 7 || color[0] != b'#' || !color[1..].iter().all(u8::is_ascii_hexdigit) {
+            return Err(DomainError::Validation(
+                "Project canvas background must be a #RRGGBB color".to_string(),
+            ));
+        }
+        if !matches!(self.sample_rate, 44_100 | 48_000) {
+            return Err(DomainError::Validation(
+                "Project audio sample rate must be 44100 or 48000 Hz".to_string(),
+            ));
+        }
+        if self.channels == 0 {
+            return Err(DomainError::Validation(
+                "Project audio channel count must be positive".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AssetDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl AssetDimensions {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(DomainError::Validation(
+                "Asset dimensions must be positive".to_string(),
+            ));
+        }
+        if self.width > 32_768 || self.height > 32_768 {
+            return Err(DomainError::Validation(
+                "Asset dimensions must not exceed 32768 pixels".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PlacementMode {
+    #[default]
+    Fit,
+    Fill,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,6 +419,8 @@ pub struct Asset {
     pub media_kind: MediaKind,
     pub duration: Option<RationalTime>,
     pub file_size: u64,
+    #[serde(default)]
+    pub dimensions: Option<AssetDimensions>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -273,12 +515,114 @@ impl Keyframe {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VisualEffectPreset {
+    #[default]
+    None,
+    Mono,
+    Vivid,
+    Muted,
+}
+
+/// Fixed clip speeds supported by the first non-destructive speed-control
+/// release. The source duration is always derived from timeline duration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipSpeed {
+    Half,
+    #[default]
+    Normal,
+    Double,
+}
+
+impl ClipSpeed {
+    pub fn as_f64(self) -> f64 {
+        match self {
+            Self::Half => 0.5,
+            Self::Normal => 1.0,
+            Self::Double => 2.0,
+        }
+    }
+
+    fn ratio(self) -> (i64, i64) {
+        match self {
+            Self::Half => (1, 2),
+            Self::Normal => (1, 1),
+            Self::Double => (2, 1),
+        }
+    }
+
+    /// Converts a timeline duration to an exactly representable source duration.
+    pub fn source_duration_for(
+        self,
+        timeline_duration: RationalTime,
+        source_rate: FrameRate,
+    ) -> Result<RationalTime, DomainError> {
+        if self == Self::Normal {
+            return Ok(timeline_duration.rescaled_to(source_rate));
+        }
+        let (speed_num, speed_den) = self.ratio();
+        let numerator = (timeline_duration.value as i128)
+            .checked_mul(timeline_duration.rate.denominator as i128)
+            .and_then(|value| value.checked_mul(speed_num as i128))
+            .and_then(|value| value.checked_mul(source_rate.numerator as i128))
+            .ok_or_else(|| DomainError::Validation("Speed duration overflow".to_string()))?;
+        let denominator = (timeline_duration.rate.numerator as i128)
+            .checked_mul(speed_den as i128)
+            .and_then(|value| value.checked_mul(source_rate.denominator as i128))
+            .ok_or_else(|| DomainError::Validation("Speed duration overflow".to_string()))?;
+        if denominator == 0 || numerator % denominator != 0 {
+            return Err(DomainError::Validation(format!(
+                "Speed {:?} cannot represent timeline duration {} exactly at source rate {}",
+                self, timeline_duration, source_rate
+            )));
+        }
+        let frames = numerator / denominator;
+        if !(0..=i64::MAX as i128).contains(&frames) {
+            return Err(DomainError::Validation(
+                "Speed duration is out of range".to_string(),
+            ));
+        }
+        Ok(RationalTime::new(frames as i64, source_rate))
+    }
+
+    pub fn source_offset_for(self, timeline_offset: RationalTime) -> RationalTime {
+        let (speed_num, speed_den) = self.ratio();
+        let numerator = timeline_offset.value as i128
+            * timeline_offset.rate.denominator as i128
+            * speed_num as i128;
+        let denominator = timeline_offset.rate.numerator as i128 * speed_den as i128;
+        let divisor = gcd_i128(numerator, denominator);
+        let numerator = numerator / divisor;
+        let denominator = denominator / divisor;
+        assert!(
+            numerator >= i64::MIN as i128
+                && numerator <= i64::MAX as i128
+                && denominator > 0
+                && denominator <= u32::MAX as i128,
+            "speed source offset is out of range"
+        );
+        RationalTime::new(numerator as i64, FrameRate::new(denominator as u32, 1))
+    }
+}
+
+fn gcd_i128(mut lhs: i128, mut rhs: i128) -> i128 {
+    lhs = lhs.abs();
+    rhs = rhs.abs();
+    while rhs != 0 {
+        let remainder = lhs % rhs;
+        lhs = rhs;
+        rhs = remainder;
+    }
+    lhs.max(1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransitionKind {
     FadeIn,
     FadeOut,
     CrossDissolve,
     FadeBlack,
+    DipToBlack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -362,9 +706,12 @@ impl CutTransition {
         if self.duration.value <= 0 {
             return Err(DomainError::NonPositiveDuration);
         }
-        if self.kind != TransitionKind::CrossDissolve {
+        if !matches!(
+            self.kind,
+            TransitionKind::CrossDissolve | TransitionKind::DipToBlack
+        ) {
             return Err(DomainError::Validation(
-                "Only CrossDissolve is supported for cut transitions in Phase 13".to_string(),
+                "Only CrossDissolve and DipToBlack are supported for cut transitions".to_string(),
             ));
         }
         Ok(())
@@ -381,9 +728,23 @@ pub struct TimelineItem {
     pub source_range: TimeRange,
     pub transform: Transform,
     pub crop: Crop,
+    #[serde(default)]
+    pub placement_mode: PlacementMode,
+    #[serde(default)]
+    pub visual_effect: VisualEffectPreset,
+    #[serde(default)]
+    pub speed: ClipSpeed,
     pub opacity: f32,
     pub volume: f32,
     pub text_content: Option<String>,
+    #[serde(default)]
+    pub text_style: Option<TextStyle>,
+    #[serde(default)]
+    pub text_template: Option<TextTemplateReference>,
+    #[serde(default)]
+    pub text_rich: Option<TextRichStyle>,
+    #[serde(default)]
+    pub text_animation: Option<TextAnimation>,
     pub fade_in: Option<RationalTime>,
     pub fade_out: Option<RationalTime>,
     pub transition: Option<Transition>,
@@ -408,9 +769,16 @@ impl TimelineItem {
             source_range,
             transform: Transform::default(),
             crop: Crop::default(),
+            placement_mode: PlacementMode::Fit,
+            visual_effect: VisualEffectPreset::None,
+            speed: ClipSpeed::Normal,
             opacity: 1.0,
             volume: 1.0,
             text_content: None,
+            text_style: (kind == ItemKind::Text).then(TextStyle::default),
+            text_template: None,
+            text_rich: None,
+            text_animation: None,
             fade_in: None,
             fade_out: None,
             transition: None,
@@ -430,16 +798,63 @@ impl TimelineItem {
         if self.source_range.duration.value <= 0 {
             return Err(DomainError::NonPositiveDuration);
         }
+        if let Some(text_style) = &self.text_style {
+            text_style.validate()?;
+        }
+        if let Some(text_template) = &self.text_template {
+            text_template.validate()?;
+        }
+        if self.kind != ItemKind::Text
+            && (self.text_rich.is_some() || self.text_animation.is_some())
+        {
+            return Err(DomainError::Validation(
+                "Only Text items can have text_rich or text_animation".to_string(),
+            ));
+        }
+        if let Some(rich) = &self.text_rich {
+            rich.validate(self.text_content.as_deref().unwrap_or(""))?;
+        }
+        if let Some(anim) = &self.text_animation {
+            anim.validate_for_clip_duration(self.timeline_range.duration)?;
+        }
+        if let Some(transition) = &self.transition {
+            if matches!(
+                transition.kind,
+                TransitionKind::CrossDissolve | TransitionKind::DipToBlack
+            ) {
+                return Err(DomainError::Validation(
+                    "Cut transitions must be stored on the track, not on a timeline item"
+                        .to_string(),
+                ));
+            }
+            if transition.duration.value <= 0 {
+                return Err(DomainError::NonPositiveDuration);
+            }
+        }
 
-        // Compare duration in same rate
-        let src_dur_aligned = self
+        if self.speed != ClipSpeed::Normal
+            && !matches!(self.kind, ItemKind::Video | ItemKind::Audio)
+        {
+            return Err(DomainError::Validation(
+                "Speed is supported only on video and audio clips".to_string(),
+            ));
+        }
+
+        let expected_source_duration = self.speed.source_duration_for(
+            self.timeline_range.duration,
+            self.source_range.duration.rate,
+        )?;
+        if !self
             .source_range
             .duration
-            .rescaled_to(self.timeline_range.duration.rate);
-        if src_dur_aligned.value != self.timeline_range.duration.value {
+            .semantic_eq(&expected_source_duration)
+        {
             return Err(DomainError::DurationMismatch {
                 source_dur: format!("{} frames", self.source_range.duration.value),
-                timeline_dur: format!("{} frames", self.timeline_range.duration.value),
+                timeline_dur: format!(
+                    "{} frames at {:?}",
+                    self.timeline_range.duration.value, self.speed
+                ),
             });
         }
 
@@ -844,6 +1259,12 @@ impl Project {
         if !is_valid_id(&self.project_id) {
             return Err(DomainError::InvalidId(self.project_id.clone()));
         }
+        self.settings.validate()?;
+        for asset in &self.assets {
+            if let Some(dimensions) = &asset.dimensions {
+                dimensions.validate()?;
+            }
+        }
 
         // Validate all tracks
         for track in &self.tracks {
@@ -1047,6 +1468,31 @@ mod tests {
             s_bad_range,
         );
         assert!(bad_item.is_err());
+    }
+
+    #[test]
+    fn speed_duration_mapping_requires_exact_source_frames() {
+        let rate = FrameRate::FPS_30;
+        let timeline_duration = RationalTime::from_frames(60, rate);
+
+        assert_eq!(
+            ClipSpeed::Half
+                .source_duration_for(timeline_duration, rate)
+                .expect("half speed maps 60 timeline frames to 30 source frames"),
+            RationalTime::from_frames(30, rate)
+        );
+        assert_eq!(
+            ClipSpeed::Double
+                .source_duration_for(timeline_duration, rate)
+                .expect("double speed maps 60 timeline frames to 120 source frames"),
+            RationalTime::from_frames(120, rate)
+        );
+        assert!(
+            ClipSpeed::Half
+                .source_duration_for(RationalTime::from_frames(1, rate), rate)
+                .is_err(),
+            "a half-speed clip cannot silently use half a source frame"
+        );
     }
 
     #[test]

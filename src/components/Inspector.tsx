@@ -1,5 +1,34 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Asset, AudioCrossfade, CutTransition, KeyframeEasing, KeyframeProperty, TimelineItem } from "../types/project";
+import {
+  Asset,
+  AudioCrossfade,
+  CutTransition,
+  KeyframeEasing,
+  KeyframeProperty,
+  TextAlignment,
+  TextAnchor,
+  TextStyle,
+  PlacementMode,
+  ClipSpeed,
+  TimelineItem,
+  TransitionKind,
+  VisualEffectPreset,
+} from "../types/project";
+
+const DEFAULT_TEXT_STYLE: TextStyle = {
+  font_family: "Inter",
+  font_size: 48,
+  font_weight: 700,
+  font_color: "#FFFFFF",
+  accent_color: null,
+  background_color: null,
+  background_opacity: 0,
+  padding_x: 0,
+  padding_y: 0,
+  alignment: "Center",
+  line_height: 1,
+  anchor: "Center",
+};
 
 interface InspectorProps {
   selectedItem: TimelineItem | null;
@@ -16,19 +45,42 @@ interface InspectorProps {
   assets?: Asset[];
   playheadFrame?: number;
   onUpdateTransform: (x: number, y: number, scale: number, rotation: number) => void;
+  onUpdatePlacementMode?: (placementMode: PlacementMode) => void;
   onUpdateOpacity: (opacity: number) => void;
   onUpdateVolume?: (volume: number) => void;
   onUpdateText?: (text: string) => void;
+  onApplyTextTemplate?: (templateId: string, templateVersion?: number) => void;
+  onApplyTextTemplateToTrack?: (
+    trackId: string,
+    templateId: string,
+    templateVersion?: number
+  ) => void;
+  onResetTextTemplate?: () => void;
+  onUpdateTextStyle?: (style: TextStyle) => void;
+  onApplyTextStyleToTrack?: (trackId: string, style: TextStyle) => void;
+  textTrack?: {
+    trackId: string;
+    name: string;
+    textItemCount: number;
+  } | null;
   onUpdateAudioFade?: (fadeInFrames: number, fadeOutFrames: number) => void;
   onUpdateTransition?: (
-    kind: "FadeIn" | "FadeOut" | "CrossDissolve" | "FadeBlack" | null,
+    kind: TransitionKind | null,
     durationFrames: number
   ) => void;
+  onUpdateVisualEffect?: (visualEffect: VisualEffectPreset) => void;
+  onUpdateSpeed?: (speed: ClipSpeed) => void;
   onAddKeyframe?: (property: KeyframeProperty, offsetFrame: number, value: number) => void;
   onRemoveKeyframe?: (property: KeyframeProperty, offsetFrame: number) => void;
   onSetKeyframeEasing?: (property: KeyframeProperty, offsetFrame: number, easing: KeyframeEasing) => void;
   onSeekPlayhead?: (frame: number) => void;
-  onCreateCutTransition?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
+  onCreateCutTransition?: (
+    trackId: string,
+    leftItemId: string,
+    rightItemId: string,
+    kind: "CrossDissolve" | "DipToBlack",
+    durationFrames: number
+  ) => void;
   onUpdateCutTransitionDuration?: (transitionId: string, newDurationFrames: number) => void;
   onRemoveCutTransition?: (transitionId: string) => void;
   onUpdateAudioCrossfadeDuration?: (transitionId: string, newDurationFrames: number) => void;
@@ -44,11 +96,20 @@ export const Inspector: React.FC<InspectorProps> = ({
   assets,
   playheadFrame = 0,
   onUpdateTransform,
+  onUpdatePlacementMode,
   onUpdateOpacity,
   onUpdateVolume,
   onUpdateText,
+  onApplyTextTemplate,
+  onApplyTextTemplateToTrack,
+  onResetTextTemplate,
+  onUpdateTextStyle,
+  onApplyTextStyleToTrack,
+  textTrack,
   onUpdateAudioFade,
   onUpdateTransition,
+  onUpdateVisualEffect,
+  onUpdateSpeed,
   onAddKeyframe,
   onRemoveKeyframe,
   onSetKeyframeEasing,
@@ -59,6 +120,25 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateAudioCrossfadeDuration,
   onRemoveAudioCrossfade,
 }) => {
+  const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
+  const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
+  const [applyTemplateToTrack, setApplyTemplateToTrack] = useState(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setAudioCrossfadeDurationDraft(
+      selectedAudioCrossfade ? String(selectedAudioCrossfade.duration.value) : ""
+    );
+  }, [selectedAudioCrossfade?.transition_id, selectedAudioCrossfade?.duration.value]);
+
+  useEffect(() => {
+    setLocalText(selectedItem?.text_content ?? "");
+  }, [selectedItem?.item_id, selectedItem?.text_content]);
+
+  useEffect(() => {
+    setApplyTemplateToTrack(false);
+  }, [selectedItem?.item_id]);
+
   if (selectedAudioCrossfade) {
     return (
       <aside className="right-panel">
@@ -80,11 +160,32 @@ export const Inspector: React.FC<InspectorProps> = ({
             <input
               type="number"
               min="1"
-              value={selectedAudioCrossfade.duration.value}
+              value={audioCrossfadeDurationDraft}
               onChange={(event) => {
-                const duration = Number.parseInt(event.target.value, 10);
+                setAudioCrossfadeDurationDraft(event.target.value);
+              }}
+              onBlur={(event) => {
+                if (event.currentTarget.dataset.cancelCommit === "true") {
+                  delete event.currentTarget.dataset.cancelCommit;
+                  setAudioCrossfadeDurationDraft(String(selectedAudioCrossfade.duration.value));
+                  return;
+                }
+                const duration = Number.parseInt(audioCrossfadeDurationDraft, 10);
                 if (Number.isFinite(duration) && duration > 0) {
-                  onUpdateAudioCrossfadeDuration?.(selectedAudioCrossfade.transition_id, duration);
+                  if (duration !== selectedAudioCrossfade.duration.value) {
+                    onUpdateAudioCrossfadeDuration?.(selectedAudioCrossfade.transition_id, duration);
+                  }
+                } else {
+                  setAudioCrossfadeDurationDraft(String(selectedAudioCrossfade.duration.value));
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.currentTarget.dataset.cancelCommit = "true";
+                  setAudioCrossfadeDurationDraft(String(selectedAudioCrossfade.duration.value));
+                  event.currentTarget.blur();
                 }
               }}
               style={{ width: "90px", padding: "4px", fontSize: "12px" }}
@@ -112,13 +213,16 @@ export const Inspector: React.FC<InspectorProps> = ({
   }
 
   if (selectedTransition) {
+    const transitionName =
+      selectedTransition.kind === "DipToBlack" ? "Dip to Black" : "Cross Dissolve";
+
     return (
       <aside className="right-panel">
-        <div className="panel-header">Inspector: CrossDissolve</div>
+        <div className="panel-header">Inspector: {transitionName}</div>
         <div className="panel-content" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
           <section>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "4px" }}>
-              CROSS DISSOLVE
+              {transitionName.toUpperCase()}
             </div>
             <div style={{ fontSize: "12px", color: "var(--text-main)", display: "flex", flexDirection: "column", gap: "4px" }}>
               <div><strong>Alignment:</strong> Centered Cut</div>
@@ -159,7 +263,7 @@ export const Inspector: React.FC<InspectorProps> = ({
                 cursor: "pointer",
               }}
             >
-              Remove CrossDissolve
+              Remove {transitionName}
             </button>
           </section>
         </div>
@@ -182,13 +286,6 @@ export const Inspector: React.FC<InspectorProps> = ({
   }
 
   const { transform, opacity, timeline_range, source_range } = selectedItem;
-  const [localText, setLocalText] = useState(selectedItem.text_content ?? "");
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Synchronize local state when selected item or backend text changes
-  useEffect(() => {
-    setLocalText(selectedItem.text_content ?? "");
-  }, [selectedItem.item_id, selectedItem.text_content]);
 
   const handleTextChange = (val: string) => {
     setLocalText(val);
@@ -490,11 +587,204 @@ export const Inspector: React.FC<InspectorProps> = ({
           </section>
         )}
 
+        {selectedItem.kind === "Text" && onApplyTextTemplate && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              TEXT TEMPLATES
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+              {[
+                ["clean-lower-third", "Lower third"],
+                ["bold-headline", "Bold headline"],
+                ["center-pop", "Center pop"],
+                ["subtitle-card", "Subtitle card"],
+                ["quote-card", "Quote card"],
+                ["call-to-action", "Call to action"],
+              ].map(([templateId, label]) => (
+                <button
+                  key={templateId}
+                  className="btn-action"
+                  type="button"
+                  onClick={() => {
+                    if (applyTemplateToTrack && textTrack && onApplyTextTemplateToTrack) {
+                      onApplyTextTemplateToTrack(textTrack.trackId, templateId);
+                      setApplyTemplateToTrack(false);
+                    } else {
+                      onApplyTextTemplate(templateId);
+                    }
+                  }}
+                  style={{ padding: "6px 7px", fontSize: "10px", textAlign: "left" }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {textTrack && textTrack.textItemCount > 1 && onApplyTextTemplateToTrack && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "7px",
+                  fontSize: "10px",
+                  color: "var(--text-muted)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={applyTemplateToTrack}
+                  onChange={(event) => setApplyTemplateToTrack(event.target.checked)}
+                />
+                Apply next template to all {textTrack.textItemCount} text clips on {textTrack.name}
+              </label>
+            )}
+            {selectedItem.text_template && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                  Active: {selectedItem.text_template.template_id} v{selectedItem.text_template.template_version}
+                </div>
+                {onResetTextTemplate && (
+                  <button
+                    className="btn-action"
+                    type="button"
+                    onClick={onResetTextTemplate}
+                    style={{ padding: "4px 7px", fontSize: "10px" }}
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {selectedItem.kind === "Text" && onUpdateTextStyle && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              TEXT STYLE
+            </div>
+            {(() => {
+              const style = selectedItem.text_style ?? DEFAULT_TEXT_STYLE;
+              const update = (patch: Partial<TextStyle>) => onUpdateTextStyle({ ...style, ...patch });
+              const alignmentOptions: TextAlignment[] = ["Left", "Center", "Right"];
+              const anchorOptions: TextAnchor[] = [
+                "TopLeft", "TopCenter", "TopRight",
+                "MiddleLeft", "Center", "MiddleRight",
+                "BottomLeft", "BottomCenter", "BottomRight",
+              ];
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-muted)" }}>
+                      FONT SIZE
+                      <input
+                        type="number"
+                        min="8"
+                        max="240"
+                        value={style.font_size}
+                        onChange={(event) => {
+                          const value = Math.max(8, Math.min(240, Number(event.target.value) || 8));
+                          update({ font_size: value });
+                        }}
+                        style={{ width: "100%", padding: "4px", fontSize: "12px" }}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-muted)" }}>
+                      TEXT COLOR
+                      <input
+                        type="color"
+                        value={style.font_color.slice(0, 7)}
+                        onChange={(event) => update({ font_color: event.target.value.toUpperCase() })}
+                        style={{ width: "100%", height: "28px", padding: "1px" }}
+                      />
+                    </label>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-muted)" }}>
+                      ALIGNMENT
+                      <select
+                        value={style.alignment}
+                        onChange={(event) => update({ alignment: event.target.value as TextAlignment })}
+                        style={{ width: "100%", padding: "4px", fontSize: "12px" }}
+                      >
+                        {alignmentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", color: "var(--text-muted)" }}>
+                      ANCHOR
+                      <select
+                        value={style.anchor}
+                        onChange={(event) => update({ anchor: event.target.value as TextAnchor })}
+                        style={{ width: "100%", padding: "4px", fontSize: "12px" }}
+                      >
+                        {anchorOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(style.background_color) && style.background_opacity > 0}
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
+                        update({
+                          background_color: enabled ? (style.background_color ?? "#000000") : null,
+                          background_opacity: enabled ? Math.max(style.background_opacity, 0.72) : 0,
+                        });
+                      }}
+                    />
+                    BACKGROUND
+                    <input
+                      type="color"
+                      value={(style.background_color ?? "#000000").slice(0, 7)}
+                      disabled={!style.background_color || style.background_opacity <= 0}
+                      onChange={(event) => update({ background_color: event.target.value.toUpperCase() })}
+                      style={{ marginLeft: "auto", width: "72px", height: "24px", padding: "1px" }}
+                    />
+                  </label>
+                  {textTrack && textTrack.textItemCount > 1 && onApplyTextStyleToTrack && (
+                    <button
+                      className="btn-action"
+                      type="button"
+                      onClick={() => onApplyTextStyleToTrack(textTrack.trackId, style)}
+                      style={{ padding: "6px 7px", fontSize: "10px", textAlign: "left" }}
+                    >
+                      Apply current style to all {textTrack.textItemCount} text clips on {textTrack.name}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
+          </section>
+        )}
+
         {/* Transform controls with keyframing */}
         <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
             TRANSFORM (WITH KEYFRAMES)
           </div>
+
+          {selectedItem.kind === "Video" && onUpdatePlacementMode && (
+            <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", fontSize: "12px" }}>
+              Frame placement:
+              <select
+                aria-label="Frame placement"
+                value={selectedItem.placement_mode ?? "Fit"}
+                onChange={(event) => onUpdatePlacementMode(event.target.value as PlacementMode)}
+                style={{
+                  flex: 1,
+                  maxWidth: "120px",
+                  padding: "4px 6px",
+                  backgroundColor: "var(--bg-surface)",
+                  color: "var(--text-main)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "3px",
+                }}
+              >
+                <option value="Fit">Fit</option>
+                <option value="Fill">Fill</option>
+              </select>
+            </label>
+          )}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <label style={{ fontSize: "12px" }}>Position X:</label>
@@ -606,7 +896,60 @@ export const Inspector: React.FC<InspectorProps> = ({
           {renderKeyframeEasingControl("Opacity")}
         </section>
 
-        {/* Visual Transitions (FadeIn, FadeOut, CrossDissolve, FadeBlack) */}
+        {onUpdateVisualEffect && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              VISUAL EFFECT
+            </div>
+            <select
+              aria-label="Visual Effect"
+              value={selectedItem.visual_effect ?? "None"}
+              onChange={(event) => onUpdateVisualEffect(event.target.value as VisualEffectPreset)}
+              style={{
+                width: "100%",
+                padding: "4px",
+                fontSize: "12px",
+                background: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+              }}
+            >
+              <option value="None">None</option>
+              <option value="Mono">Mono</option>
+              <option value="Vivid">Vivid</option>
+              <option value="Muted">Muted</option>
+            </select>
+          </section>
+        )}
+
+        {onUpdateSpeed && (selectedItem.kind === "Video" || selectedItem.kind === "Audio") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              SPEED
+            </div>
+            <select
+              aria-label="Speed"
+              value={selectedItem.speed ?? "Normal"}
+              onChange={(event) => onUpdateSpeed(event.target.value as ClipSpeed)}
+              style={{
+                width: "100%",
+                padding: "4px",
+                fontSize: "12px",
+                background: "var(--bg-secondary)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+              }}
+            >
+              <option value="Half">0.5×</option>
+              <option value="Normal">1×</option>
+              <option value="Double">2×</option>
+            </select>
+          </section>
+        )}
+
+        {/* Item transitions only apply to the selected item's own boundaries. */}
         {onUpdateTransition && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (
           <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
@@ -641,9 +984,6 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <option value="None">None</option>
                 <option value="FadeIn">Fade In</option>
                 <option value="FadeOut">Fade Out</option>
-                <option value="CrossDissolve" disabled>
-                  Cross Dissolve (Deferred)
-                </option>
                 <option value="FadeBlack">Fade Black</option>
               </select>
             </div>
@@ -667,16 +1007,21 @@ export const Inspector: React.FC<InspectorProps> = ({
           </section>
         )}
 
-        {/* Cut Transitions (CrossDissolve) */}
+        {/* Cut transitions are owned by the track seam between two adjacent clips. */}
         {(adjacentInfo?.nextClip || adjacentInfo?.prevClip) && selectedItem.kind === "Video" && (
           <section style={{ display: "flex", flexDirection: "column", gap: "8px", borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
-              CROSS DISSOLVE (CUT TRANSITION)
+              CUT TRANSITION
             </div>
             {adjacentInfo?.outgoingTransition ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", backgroundColor: "var(--bg-secondary)", padding: "8px", borderRadius: "4px" }}>
                 <div style={{ fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
-                  <span>With next clip: <strong>{adjacentInfo.nextClip?.name}</strong></span>
+                  <span>
+                    {adjacentInfo.outgoingTransition.kind === "CrossDissolve"
+                      ? "Cross Dissolve"
+                      : "Dip to Black"}{" "}
+                    with <strong>{adjacentInfo.nextClip?.name}</strong>
+                  </span>
                   <span style={{ color: "#f59e0b", fontWeight: 600 }}>Active</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -705,7 +1050,7 @@ export const Inspector: React.FC<InspectorProps> = ({
                     marginTop: "4px",
                   }}
                 >
-                  Remove CrossDissolve
+                  Remove cut transition
                 </button>
               </div>
             ) : adjacentInfo?.nextClip && adjacentInfo.nextClip.kind === "Video" ? (
@@ -719,6 +1064,7 @@ export const Inspector: React.FC<InspectorProps> = ({
                       adjacentInfo.trackId!,
                       selectedItem.item_id,
                       adjacentInfo.nextClip!.item_id,
+                      "CrossDissolve",
                       30
                     )
                   }
@@ -734,6 +1080,29 @@ export const Inspector: React.FC<InspectorProps> = ({
                   }}
                 >
                   + Add CrossDissolve (30f)
+                </button>
+                <button
+                  onClick={() =>
+                    onCreateCutTransition?.(
+                      adjacentInfo.trackId!,
+                      selectedItem.item_id,
+                      adjacentInfo.nextClip!.item_id,
+                      "DipToBlack",
+                      30
+                    )
+                  }
+                  style={{
+                    padding: "5px 10px",
+                    backgroundColor: "var(--bg-secondary)",
+                    color: "var(--text-primary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  + Add Dip to Black (30f)
                 </button>
               </div>
             ) : null}

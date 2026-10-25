@@ -3,7 +3,7 @@
 ## 1. Plan Metadata
 
 **Project:** Automation-First CapCut-like Desktop Video Editor  
-**Plan status:** READY FOR IMPLEMENTATION  
+**Plan status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–36 PLANNED
 **Plan date:** 2026-10-03  
 **Inputs:** `RESEARCH.md`, `ARCHITECTURE.md`  
 **Primary target:** Windows 10/11 desktop first  
@@ -1753,9 +1753,100 @@ This sequence protects the two aspects that will be hardest to retrofit later: *
 
 **Milestone:** `Phase 18 — Audio Crossfade Semantics & Preview/Export Parity`
 **Governing inputs:** `Plans/plan_phase18.md`, ADR-006, `RESEARCH.md` Phase 18, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
-**Status:** COMPLETE WITH DEFERRED ITEMS — automated acceptance passes; interactive Windows qualification remains deferred.
+**Status:** IMPLEMENTED — INTERACTIVE QUALIFICATION OPEN. Automated acceptance passes, and the user reports the clip-selection/preview/Inspector smoke retest now passes. The broader Windows UI acceptance for accessible crossfade editing and undo/redo remains unverified.
 **Schema:** v4 implemented with lossless v1→v4 migration.
 
 Phase 18 adds persistent equal-power crossfades between adjacent standalone audio clips on Audio tracks. Audio timeline ranges remain adjacent; verified source handles provide audio across the centered cut interval, and project duration remains invariant. One canonical gain evaluator drives preview samples and sample-grid export envelopes. Standalone Audio-track media becomes audible in preview. All create/update/remove operations use the existing Command Service and automation surfaces.
 
 The authoritative scope, semantics, 14 acceptance criteria, evidence, validation path, and deferred gates are in `Plans/plan_phase18.md`. ADR-006 governs durable semantics. Historical deferrals in earlier phase records describe their state at those phase completions.
+
+# Phase 19 — Text Templates and Caption-Ready Text Foundation
+
+**Milestone:** `Phase 19 — Text Templates and Caption-Ready Text Foundation`
+**Governing inputs:** `Plans/research_creator_expansion.md`, `Plans/plan_phase19_text_templates.md`, `RESEARCH.md`, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
+**Status:** COMPLETE WITH ACCEPTED FALLBACK AND DEFERRED ENVIRONMENT GATES
+**Schema:** v5 active; v4→v5 migration implemented and covered by targeted tests
+
+Phase 19 is the first bounded creator-expansion phase after the Phase 18 checkpoint. It adds a typed, versioned text-style payload, six built-in declarative text templates, command-backed template application, and shared preview/export text semantics. Implementation and automated qualification are complete. The user reports PASS for native template insertion, picker/style/reset, undo/redo, save/reopen, preview, and export. The deterministic FFmpeg font fallback is accepted for personal-use v1; font weight and line-height are not fully represented by the current drawtext fallback.
+
+The existing deferred typed health IPC, preview cleanup, P16 GUI, clean-VM, and hardware qualifications remain separately tracked until their required evidence is available.
+
+# Phase 20 — Manual Captions and SRT/VTT Foundation
+
+**Milestone:** `Phase 20 — Manual Captions and SRT/VTT Foundation`
+**Governing inputs:** `Plans/plan_phase20_manual_captions.md`, `Plans/research_creator_expansion.md`, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
+**Status:** IMPLEMENTED — INTERACTIVE SMOKE OPEN
+
+Phase 20 adds a bounded manual-caption workflow. SRT and WebVTT files are parsed with integer timestamp conversion into the canonical project frame rate, validated for size, cue count, text length, positive duration, and overlap, then imported as Text items on a dedicated Video track through one Command Service transaction. Existing Text items can be exported as SRT or WebVTT using an atomic sibling-file replacement.
+
+Automatic speech recognition, karaoke or word timing, caption styling metadata, overlapping cue tracks, and schema changes remain outside this phase. Acceptance is defined in `Plans/plan_phase20_manual_captions.md`.
+
+Automated implementation and runtime validation passed on 2026-10-09. The remaining acceptance item is the interactive desktop smoke for importing a valid SRT/VTT file, undo/redo of the single import transaction, and exporting SRT/VTT; native-window observation is unavailable in the current session.
+
+# Phase 21 — Social Video Workflow
+
+**Milestone:** `Phase 21 — Social Video Workflow`
+**Governing inputs:** `Plans/plan_phase21_social_video_workflow.md`, `Plans/research_creator_expansion.md`, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
+**Status:** IMPLEMENTED
+
+Phase 21 makes the project canvas an explicit creator workflow rather than an implicit 16:9 export default. The canonical project settings define the composition canvas. A single command changes its dimensions, and preview, persistence/history, automation, and the default export profile consume that same state.
+
+The implementation order is:
+
+1. command-backed 16:9, 9:16, 1:1, and 4:5 canvas presets; preview sizing and default export inheritance;
+2. canonical fit/fill media placement semantics carried by the composition plan;
+3. persisted solid-color canvas background and safe-zone overlays, with preview/export parity;
+4. explicit export presets that derive from, but do not silently mutate, project settings.
+
+Blur-fill is deliberately deferred until the composition model can express it without storing FFmpeg graphs or preview-specific objects. Every slice must preserve undo/redo, save/reopen, composition parity, and the existing media-proxy behavior.
+
+# Phase 22 — Curated Effects and Transitions
+
+**Milestone:** `Phase 22 — Curated Effects and Transitions`
+**Governing inputs:** `Plans/plan_phase22_curated_effects_transitions.md`, `Plans/research_creator_expansion.md`, `ARCHITECTURE.md`, `UX_UI.md`, `DEVELOPMENT_WORKFLOW.md`
+**Status:** IMPLEMENTED — schema v8, command-backed visual effects and cut transitions, normalized preview/export mappings, and automated regression evidence complete; native qualification is batched in Phase 26
+
+Phase 22 will add a small, application-owned set of deterministic visual effects and transitions. The selected effects must be represented as typed canonical parameters and normalized composition semantics; arbitrary FFmpeg filters, plugin code, shader marketplaces, and unrestricted filter graphs remain out of scope. Preview/export parity fixtures and undo/redo evidence are required before adding each effect family.
+
+# Phase 23 — Speed Controls
+
+**Milestone:** `Phase 23 — Speed Controls`
+**Status:** IMPLEMENTED — schema v9 bounded constant speeds, shared composition/preview/export mapping, and automated regression evidence complete; native qualification is batched in Phase 26
+
+Phase 23 introduced the canonical `Half`, `Normal`, and `Double` clip-speed choices. The domain preserves timeline time while mapping source coverage exactly, rejects invalid edits and transitions, and shares normalized speed semantics across composition, preview, and export. Preview and export retain pitch with `preservesPitch` and bounded FFmpeg `atempo` mappings. Speed ramps, reverse playback, optical flow, and automatic beat synchronization remain separate decisions.
+
+# Phase 24 — Caption Enhancement
+
+**Milestone:** `Phase 24 — Caption Enhancement`
+**Status:** IMPLEMENTED — command-backed text-track template/style batches and automated regression evidence complete; native qualification is batched in Phase 26
+
+Phase 24 keeps captions as ordinary Phase 20 Text items. It adds atomic Command Service operations to apply a declarative style or versioned built-in template to every Text item on one selected track. The Inspector exposes those operations only when the track has multiple text clips. SRT/VTT import/export and existing normalized preview/export typography remain unchanged. Word-level timing, karaoke behavior, animated captions, and a second caption model are deferred.
+
+# Phase 25 — Automatic Captions
+
+**Milestone:** `Phase 25 — Automatic Captions`
+**Status:** IMPLEMENTED — local bounded transcription enters the existing text-caption command path; native end-to-end qualification is batched in Phase 26
+
+Phase 25 implements an opt-in local workflow using user-provided compatible `whisper-cli.exe` and model `.bin` paths. A cancellable, single-flight `Transcription` job makes a disposable 16 kHz mono WAV through the existing FFmpeg boundary, executes Whisper for JSON, parses integer-millisecond segments, clips them to the source trim, maps them through fixed clip speed into canonical project time, and creates ordinary Phase 20 Text clips through one Command Service transaction. Tool paths and language remain local UI preferences rather than project data, source media is never uploaded, temporary output is removed on every terminal path, and stale result commits are rejected. See `Plans/plan_phase25_automatic_captions.md` for acceptance evidence and the remaining Phase 26 native smoke.
+
+# Phase 26 — Final Integration and Qualification
+
+**Milestone:** `Phase 26 — Final Integration and Qualification`
+**Status:** PLANNED
+
+Phase 26 consolidates all deferred manual acceptance into one native-desktop qualification pass after the feature phases stabilize. It includes creator workflows across canvas ratios, text templates, captions, playback, mute, transitions, export, save/reopen, undo/redo, and missing-media handling. Automated regression, parity, packaging, and exact local-runtime restart checks remain required throughout the preceding phases; manual testing is intentionally batched here rather than repeated after each intermediate slice.
+
+Use `Plans/phase26_manual_qualification.md` for the exact one-pass native qualification sequence and result format.
+
+# Phases 27–36 — Rich Animated Text Templates, CapCut Conversion and Agent Generation
+
+**Planning authorization:** 2026-10-11 — the user approved the proposed native-template-first direction and requested a phased implementation plan, explicitly without writing code in this task.
+**Status:** PLANNED — no Phase 27–36 implementation has started.
+
+The authoritative extension roadmap is [Animated Text Templates — Phase 27–36](Plans/plan_animated_text_templates.md). It links ten individual phase plans with dependencies, bounded slices, acceptance IDs, stop conditions and required evidence.
+
+Execution order: contract/baseline → renderer POC/ADR → typed domain/migration/commands → shared rich-text rendering → character animation and the editable user sample → layered reusable packs → authoring/library UI → supported CapCut adapters → agent generation → final integration/qualification.
+
+The first mandatory product gate is the user's sample recreated as editable Tinix text with verified preview/export semantics. Automated CapCut conversion and agent generation follow the same canonical template system; baked MP4 import is not editable-template conversion. Renderer/dependency selection remains gated by the POC rather than being preselected by this plan.
+
+Phase 19 remains the completed basic-preset foundation. Phase 26 and all prior environment qualifications remain open until supported by evidence; the new program must preserve those gates. Implementation starts at Phase 27 when coding is requested, not during this planning-only task.

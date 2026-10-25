@@ -13,6 +13,7 @@ pub enum JobKind {
     Thumbnail,
     Proxy,
     Waveform,
+    Transcription,
     Export,
 }
 
@@ -64,7 +65,7 @@ impl JobManager {
         for (existing_id, job) in &self.jobs {
             if job.dedupe_key == dedupe_key {
                 match job.status {
-                    JobStatus::Queued | JobStatus::Running | JobStatus::Completed => {
+                    JobStatus::Queued | JobStatus::Running => {
                         return (existing_id.clone(), true); // Deduplicated!
                     }
                     _ => {}
@@ -106,6 +107,12 @@ impl JobManager {
 
     pub fn can_start(&self) -> bool {
         self.running_count() < self.max_concurrency
+    }
+
+    pub fn has_active_kind(&self, kind: JobKind) -> bool {
+        self.jobs.values().any(|job| {
+            job.kind == kind && matches!(job.status, JobStatus::Queued | JobStatus::Running)
+        })
     }
 
     /// Transitions a Queued job to Running if concurrency permits, returning its cancel flag
@@ -318,5 +325,27 @@ mod tests {
             job.status,
             JobStatus::Failed("No audio stream detected".to_string())
         );
+    }
+
+    #[test]
+    fn completed_work_can_be_requested_again() {
+        let mut jm = JobManager::new(1);
+        let (first_id, _) = jm.submit_job(
+            "job_caption_first".to_string(),
+            JobKind::Transcription,
+            "caption_clip_a".to_string(),
+            10,
+        );
+        jm.start_job(&first_id).unwrap();
+        jm.mark_completed(&first_id);
+
+        let (second_id, deduped) = jm.submit_job(
+            "job_caption_second".to_string(),
+            JobKind::Transcription,
+            "caption_clip_a".to_string(),
+            10,
+        );
+        assert_eq!(second_id, "job_caption_second");
+        assert!(!deduped);
     }
 }

@@ -1,0 +1,188 @@
+{
+  "matrix_version": "1.1",
+  "program": "Tinix Animated Text Templates (Phases 27-36)",
+  "validation_limits": {
+    "max_layers_per_instance": 16,
+    "max_text_slots": 8,
+    "max_graphemes_per_text_slot": 512,
+    "max_strokes_per_slot": 4,
+    "max_shadows_per_slot": 4,
+    "max_gradient_stops": 8,
+    "max_layer_depth": 1,
+    "duration_conflict_default": "Reject with validation error unless explicit conflict_policy override is specified",
+    "exceed_policy": "Explicit validation rejection in Command Service; MUST NOT silently truncate user content"
+  },
+  "options": [
+    {
+      "id": "TYPO_BASIC",
+      "category": "Typography",
+      "feature": "Font family, size, weight, italic, underline, alignment",
+      "tier": "Core",
+      "owner_phase": "Phase 29",
+      "test_scenarios": ["P29-AC-01", "P30-AC-01"],
+      "status": "Planned"
+    },
+    {
+      "id": "TYPO_ADVANCED",
+      "category": "Typography",
+      "feature": "Letter-spacing (tracking), line height, auto-fit, word-wrap",
+      "tier": "Core",
+      "owner_phase": "Phase 29",
+      "test_scenarios": ["P29-AC-02", "P30-AC-02"],
+      "status": "Planned"
+    },
+    {
+      "id": "TYPO_VIETNAMESE",
+      "category": "Typography",
+      "feature": "Full Vietnamese diacritics, NFC/NFD normalization, tone marks preservation during animation",
+      "tier": "Core",
+      "owner_phase": "Phase 29",
+      "test_scenarios": ["P29-AC-03", "P31-AC-02"],
+      "status": "Planned"
+    },
+    {
+      "id": "TYPO_RICH_SPANS",
+      "category": "Typography",
+      "feature": "Inline rich text spans (color, weight, font override per grapheme range)",
+      "tier": "Extended",
+      "owner_phase": "Phase 29",
+      "test_scenarios": ["P29-AC-04", "P30-AC-03"],
+      "status": "Planned"
+    },
+    {
+      "id": "STYLE_GRADIENT",
+      "category": "Appearance",
+      "feature": "Linear and radial gradients (up to 8 stops, angle/radius)",
+      "tier": "Core",
+      "owner_phase": "Phase 30",
+      "test_scenarios": ["P30-AC-04"],
+      "status": "Planned"
+    },
+    {
+      "id": "STYLE_MULTI_STROKE",
+      "category": "Appearance",
+      "feature": "Up to 4 layered strokes (color, width, join, cap, outer/inner/center alignment)",
+      "tier": "Core",
+      "owner_phase": "Phase 30",
+      "test_scenarios": ["P30-AC-05"],
+      "status": "Planned"
+    },
+    {
+      "id": "STYLE_MULTI_SHADOW",
+      "category": "Appearance",
+      "feature": "Up to 4 drop shadows and glow effects (angle, distance, blur, color, opacity)",
+      "tier": "Core",
+      "owner_phase": "Phase 30",
+      "test_scenarios": ["P30-AC-06"],
+      "status": "Planned"
+    },
+    {
+      "id": "STYLE_BACKGROUND_BOX",
+      "category": "Appearance",
+      "feature": "Background highlight box with padding, corner radius, solid/gradient fill",
+      "tier": "Core",
+      "owner_phase": "Phase 30",
+      "test_scenarios": ["P30-AC-07"],
+      "status": "Planned"
+    },
+    {
+      "id": "MOTION_SEGMENTS",
+      "category": "Motion",
+      "feature": "In-animation, loop-animation, out-animation lifecycle model",
+      "tier": "Core",
+      "owner_phase": "Phase 31",
+      "test_scenarios": ["P31-AC-01", "P31-AC-03"],
+      "status": "Planned"
+    },
+    {
+      "id": "MOTION_STAGGER",
+      "category": "Motion",
+      "feature": "Character grapheme and word stagger (forward, backward, center-out, random)",
+      "tier": "Core",
+      "owner_phase": "Phase 31",
+      "test_scenarios": ["P31-AC-04"],
+      "status": "Planned"
+    },
+    {
+      "id": "MOTION_TRANSFORMS",
+      "category": "Motion",
+      "feature": "2D Translation, Scale (with overshoot/elastic), Rotation, Opacity, Standard Easing curves",
+      "tier": "Core",
+      "owner_phase": "Phase 31",
+      "test_scenarios": ["P31-AC-05"],
+      "status": "Planned"
+    },
+    {
+      "id": "LAYERS_MULTIPLE",
+      "category": "Multilayer",
+      "feature": "Multi-layer composition (text slots, shapes, decorative images/stickers, layer z-order)",
+      "tier": "Core",
+      "owner_phase": "Phase 32",
+      "test_scenarios": ["P32-AC-01"],
+      "status": "Planned"
+    },
+    {
+      "id": "TEMPLATE_PACKS",
+      "category": "Reuse",
+      "feature": "Template pack export/import (.tinixtpl), isolated asset bundling, versioning",
+      "tier": "Core",
+      "owner_phase": "Phase 32",
+      "test_scenarios": ["P32-AC-02", "P32-AC-03"],
+      "status": "Planned"
+    },
+    {
+      "id": "UI_AUTHORING",
+      "category": "UI",
+      "feature": "Interactive template customizer, animated preview cards, parameter overrides",
+      "tier": "Core",
+      "owner_phase": "Phase 33",
+      "test_scenarios": ["P33-AC-01", "P33-AC-02"],
+      "status": "Planned"
+    },
+    {
+      "id": "CAPCUT_IMPORT_ADAPTER",
+      "category": "Interoperability",
+      "feature": "Resource-aware CapCut draft inspector, compatibility reporting, deterministic conversion",
+      "tier": "Extended",
+      "owner_phase": "Phase 34",
+      "test_scenarios": ["P34-AC-01", "P34-AC-02"],
+      "status": "Planned"
+    },
+    {
+      "id": "AGENT_GENERATION",
+      "category": "Automation",
+      "feature": "Agentic template creation/modification via typed Command Service CLI/MCP",
+      "tier": "Extended",
+      "owner_phase": "Phase 35",
+      "test_scenarios": ["P35-AC-01", "P35-AC-02"],
+      "status": "Planned"
+    },
+    {
+      "id": "UNSUPPORTED_3D_SCENE",
+      "category": "Out of Scope",
+      "feature": "True 3D mesh rendering, depth-buffer lighting, 3D camera projections",
+      "tier": "Unsupported",
+      "owner_phase": "N/A",
+      "rejection_policy": "Report unsupported effect in inspection report; fallback to 2D layer or reject import gracefully",
+      "status": "Excluded"
+    },
+    {
+      "id": "UNSUPPORTED_LUA_EXECUTION",
+      "category": "Out of Scope",
+      "feature": "Executing proprietary CapCut Lua / Amaz scripts or arbitrary user scripts",
+      "tier": "Unsupported",
+      "owner_phase": "N/A",
+      "rejection_policy": "Explicit security constraint; native execution is never permitted",
+      "status": "Excluded"
+    },
+    {
+      "id": "UNSUPPORTED_CLOUD_MARKETPLACE",
+      "category": "Out of Scope",
+      "feature": "Cloud account syncing, commercial marketplace browsing, online DRM streaming",
+      "tier": "Unsupported",
+      "owner_phase": "N/A",
+      "rejection_policy": "Tinix is an offline-first desktop application; all resources are local",
+      "status": "Excluded"
+    }
+  ]
+}

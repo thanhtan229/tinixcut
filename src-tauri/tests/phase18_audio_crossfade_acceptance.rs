@@ -99,6 +99,7 @@ fn phase18_crossfade_export_preserves_duration_and_both_tones() {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::new(75, rate)),
             file_size: 0,
+            dimensions: None,
         },
         Asset {
             asset_id: "asset_incoming".to_string(),
@@ -107,6 +108,7 @@ fn phase18_crossfade_export_preserves_duration_and_both_tones() {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::new(75, rate)),
             file_size: 0,
+            dimensions: None,
         },
     ]);
 

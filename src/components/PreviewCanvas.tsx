@@ -1,8 +1,115 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Project, TimelineItem } from "../types/project";
 import { PreviewFrameState, PreviewSampledLayer, BenchmarkReport, ParitySuiteReport } from "../types/preview";
 import { editorApi } from "../services/editorApi";
+import { getPendingPreviewVideoSeekTarget } from "./previewVideoSync";
+
+interface PreviewVideoLayerProps {
+  layer: PreviewSampledLayer;
+  assetUrl: string;
+  scaleRatio: number;
+  mixBlendMode?: React.CSSProperties["mixBlendMode"];
+  videoRefs: React.MutableRefObject<Record<string, HTMLVideoElement | null>>;
+  syncVideoToLatestTarget: (itemId: string, video: HTMLVideoElement) => void;
+  onMediaError: (layer: PreviewSampledLayer) => void;
+}
+
+const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
+  layer,
+  assetUrl,
+  scaleRatio,
+  mixBlendMode,
+  videoRefs,
+  syncVideoToLatestTarget,
+  onMediaError,
+}: PreviewVideoLayerProps) {
+  const elementRef = useRef<HTMLVideoElement | null>(null);
+  const hasDecodedFrameRef = useRef(false);
+  const visibleWidth = Math.max(0.001, 1 - layer.crop.left - layer.crop.right);
+  const visibleHeight = Math.max(0.001, 1 - layer.crop.top - layer.crop.bottom);
+  const contentWidth = Math.max(1, layer.content_size[0] * scaleRatio);
+  const contentHeight = Math.max(1, layer.content_size[1] * scaleRatio);
+
+  useEffect(() => {
+    hasDecodedFrameRef.current = false;
+    const noFrameTimeout = window.setTimeout(() => {
+      const video = elementRef.current;
+      if (
+        video &&
+        !hasDecodedFrameRef.current &&
+        (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+          video.videoWidth === 0 ||
+          video.videoHeight === 0)
+      ) {
+        // WebView2 can expose an audio track without ever raising `error` for an
+        // unsupported video stream. Treat the absence of a decoded frame as a
+        // compatibility failure so the bounded proxy path can recover it.
+        onMediaError(layer);
+      }
+    }, 2_000);
+
+    return () => window.clearTimeout(noFrameTimeout);
+  }, [assetUrl, layer.item_id, onMediaError]);
+
+  useEffect(() => {
+    const video = elementRef.current;
+    if (!video) return;
+    video.playbackRate = layer.playback_rate;
+    video.preservesPitch = true;
+  }, [layer.playback_rate]);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        width: contentWidth,
+        height: contentHeight,
+        overflow: "hidden",
+        transform: `translate(-50%, -50%) translate(${layer.position[0] * scaleRatio}px, ${layer.position[1] * scaleRatio}px) rotate(${layer.rotation}deg)`,
+        opacity: layer.opacity,
+        zIndex: layer.z_index,
+        pointerEvents: "none",
+        mixBlendMode,
+        filter: visualEffectCssFilter(layer.visual_effect),
+      }}
+    >
+      <video
+        ref={(element) => {
+          elementRef.current = element;
+          videoRefs.current[layer.item_id] = element;
+        }}
+        src={assetUrl}
+        playsInline
+        onLoadedMetadata={(event) => {
+          if (event.currentTarget.videoWidth === 0 || event.currentTarget.videoHeight === 0) {
+            onMediaError(layer);
+            return;
+          }
+          syncVideoToLatestTarget(layer.item_id, event.currentTarget);
+        }}
+        onLoadedData={() => {
+          hasDecodedFrameRef.current = true;
+        }}
+        onSeeked={(event) => {
+          syncVideoToLatestTarget(layer.item_id, event.currentTarget);
+        }}
+        onError={() => onMediaError(layer)}
+        style={{
+          position: "absolute",
+          width: `${100 / visibleWidth}%`,
+          height: `${100 / visibleHeight}%`,
+          left: `${(-layer.crop.left / visibleWidth) * 100}%`,
+          top: `${(-layer.crop.top / visibleHeight) * 100}%`,
+          objectFit: "fill",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+});
 
 interface PreviewCanvasProps {
   project?: Project | null;
@@ -11,6 +118,7 @@ interface PreviewCanvasProps {
   onPlayheadChange: (frame: number) => void;
   isPlaying?: boolean;
   onTogglePlay?: () => void;
+  onRegisterAudioUnlock?: (unlock: () => void) => void;
 }
 
 function safeConvertFileSrc(path?: string | null): string {
@@ -22,6 +130,19 @@ function safeConvertFileSrc(path?: string | null): string {
   }
 }
 
+function visualEffectCssFilter(effect?: PreviewSampledLayer["visual_effect"]): string | undefined {
+  switch (effect) {
+    case "Mono":
+      return "saturate(0%)";
+    case "Vivid":
+      return "contrast(112%) saturate(125%)";
+    case "Muted":
+      return "contrast(96%) saturate(70%)";
+    default:
+      return undefined;
+  }
+}
+
 export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   project,
   playheadFrame,
@@ -29,11 +150,26 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   onPlayheadChange,
   isPlaying: externalIsPlaying,
   onTogglePlay,
+  onRegisterAudioUnlock,
 }) => {
   const [sampledState, setSampledState] = useState<PreviewFrameState | null>(null);
   const [internalIsPlaying, setInternalIsPlaying] = useState<boolean>(false);
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
+  const [audioPlaybackError, setAudioPlaybackError] = useState<string | null>(null);
+  const unlockAudioPlayback = useCallback(() => {
+    for (const element of Object.values(audioRefs.current)) {
+      if (!element) continue;
+      void element.play().then(() => setAudioPlaybackError(null)).catch((error: unknown) => {
+        setAudioPlaybackError(error instanceof Error ? error.message : "Audio playback could not be started.");
+      });
+    }
+  }, []);
+  useEffect(() => {
+    onRegisterAudioUnlock?.(unlockAudioPlayback);
+    return () => onRegisterAudioUnlock?.(() => {});
+  }, [onRegisterAudioUnlock, unlockAudioPlayback]);
   const handleTogglePlay = () => {
+    if (!isPlaying && !onTogglePlay) unlockAudioPlayback();
     if (onTogglePlay) {
       onTogglePlay();
     } else {
@@ -49,34 +185,69 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [parityReport, setParityReport] = useState<ParitySuiteReport | null>(null);
   const [isRunningParity, setIsRunningParity] = useState<boolean>(false);
   const [mediaErrors, setMediaErrors] = useState<Record<string, boolean>>({});
+  const [proxyRequestedAssetIds, setProxyRequestedAssetIds] = useState<Record<string, true>>({});
+  const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, string>>({});
+  const [proxyPollAttempt, setProxyPollAttempt] = useState(0);
+  const [showSafeZones, setShowSafeZones] = useState(false);
 
   const requestCounterRef = useRef<number>(0);
+  const completedRequestCounterRef = useRef<number>(0);
+  const previewSampleInFlightRef = useRef(false);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const videoSeekTargetsRef = useRef<Record<string, { targetSec: number; isPlaying: boolean }>>({});
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioGainNodesRef = useRef<WeakMap<HTMLAudioElement, GainNode>>(new WeakMap());
+  const playheadFrameRef = useRef(playheadFrame);
+  const onPlayheadChangeRef = useRef(onPlayheadChange);
+  const onTogglePlayRef = useRef(onTogglePlay);
+  playheadFrameRef.current = playheadFrame;
+  onPlayheadChangeRef.current = onPlayheadChange;
+  onTogglePlayRef.current = onTogglePlay;
+
+  const drainLatestPreviewSample = useCallback(() => {
+    if (previewSampleInFlightRef.current) return;
+
+    previewSampleInFlightRef.current = true;
+    const drain = async () => {
+      try {
+        while (completedRequestCounterRef.current !== requestCounterRef.current) {
+          const requestId = requestCounterRef.current;
+          const startTime = performance.now();
+
+          try {
+            // Keep only one native IPC request in flight. During playback the
+            // renderer produces many playhead updates, and queuing all of them
+            // previously delayed a later user-initiated seek behind stale work.
+            const state = await editorApi.samplePreviewAt(playheadFrameRef.current);
+            if (requestId !== requestCounterRef.current) {
+              setSupersededRequests((count) => count + 1);
+            } else {
+              setSeekLatencyMs(performance.now() - startTime);
+              setSampledState(state);
+            }
+          } catch (error) {
+            console.warn("Preview sample error:", error);
+          } finally {
+            completedRequestCounterRef.current = requestId;
+          }
+        }
+      } finally {
+        previewSampleInFlightRef.current = false;
+        // A playhead update can land after the loop condition and before the
+        // in-flight flag is released. Start one more drain in that narrow case.
+        if (completedRequestCounterRef.current !== requestCounterRef.current) {
+          drainLatestPreviewSample();
+        }
+      }
+    };
+
+    void drain();
+  }, []);
 
   // 1. Synchronize Playhead & Sampled Composition via Rust Core (Milestone 3 & 4)
   useEffect(() => {
-    const requestId = ++requestCounterRef.current;
-    const startTime = performance.now();
-
-    editorApi
-      .samplePreviewAt(playheadFrame)
-      .then((state) => {
-        // Milestone 6: Bounded / Supersedable preview work. Drop response if playhead moved since
-        if (requestId !== requestCounterRef.current) {
-          setSupersededRequests((c) => c + 1);
-          return;
-        }
-        const latency = performance.now() - startTime;
-        setSeekLatencyMs(latency);
-        setSampledState(state);
-      })
-      .catch((err) => {
-        console.warn("Preview sample error:", err);
-      });
-  }, [playheadFrame, project?.revision]);
+    requestCounterRef.current += 1;
+    drainLatestPreviewSample();
+  }, [playheadFrame, project?.revision, drainLatestPreviewSample]);
 
   // 2. Continuous Playback Loop (Milestone 5)
   useEffect(() => {
@@ -112,17 +283,17 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         const framesToAdvance = Math.floor(elapsed / frameDurationMs);
         lastTimestamp = now - (elapsed % frameDurationMs);
 
-        const nextFrame = playheadFrame + framesToAdvance;
+        const nextFrame = playheadFrameRef.current + framesToAdvance;
         if (nextFrame >= maxDurationFrames) {
-          if (externalIsPlaying !== undefined && onTogglePlay) {
-            onTogglePlay();
+          if (externalIsPlaying !== undefined && onTogglePlayRef.current) {
+            onTogglePlayRef.current();
           } else {
             setInternalIsPlaying(false);
           }
-          onPlayheadChange(0);
+          onPlayheadChangeRef.current(0);
           return;
         } else {
-          onPlayheadChange(nextFrame);
+          onPlayheadChangeRef.current(nextFrame);
         }
       }
       animId = requestAnimationFrame(step);
@@ -130,9 +301,91 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
     animId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, playheadFrame, project, onPlayheadChange, externalIsPlaying, onTogglePlay]);
+  }, [
+    isPlaying,
+    project?.settings.frame_rate.numerator,
+    project?.settings.frame_rate.denominator,
+    project?.tracks,
+    externalIsPlaying,
+  ]);
 
   // 3. Spacebar Keyboard Shortcut is centralized in useTimelineShortcuts (P16-AC-48)
+
+  const syncVideoToLatestTarget = useCallback((itemId: string, video: HTMLVideoElement) => {
+    const desired = videoSeekTargetsRef.current[itemId];
+    if (!desired || video.readyState < 1) return;
+
+    const seekTarget = getPendingPreviewVideoSeekTarget(
+      video.currentTime,
+      desired.targetSec,
+      desired.isPlaying,
+      video.seeking
+    );
+    if (seekTarget !== null) {
+      video.currentTime = seekTarget;
+    }
+  }, []);
+  const handleVideoMediaError = useCallback((layer: PreviewSampledLayer) => {
+    if (!layer.asset_id || compatibleVideoSources[layer.asset_id]) {
+      setMediaErrors((previous) => ({ ...previous, [layer.item_id]: true }));
+      return;
+    }
+    setProxyRequestedAssetIds((previous) =>
+      previous[layer.asset_id!] ? previous : { ...previous, [layer.asset_id!]: true }
+    );
+  }, [compatibleVideoSources]);
+
+  // A proxy is created only when the WebView rejects the original video's codec.
+  // It is a disposable cache entry; project serialization and export keep the source asset.
+  useEffect(() => {
+    const allVideoLayers = [
+      ...(sampledState?.active_layers ?? []),
+      ...((sampledState?.transition_groups ?? []).flatMap((group) => [group.left_layer, group.right_layer])),
+    ];
+    const requestedAssetIds = Object.keys(proxyRequestedAssetIds).filter(
+      (assetId) => !compatibleVideoSources[assetId]
+    );
+    if (requestedAssetIds.length === 0) return;
+
+    let disposed = false;
+    let shouldPollAgain = false;
+    const resolveSources = async () => {
+      await Promise.all(
+        requestedAssetIds.map(async (assetId) => {
+          try {
+            const result = await editorApi.getCompatiblePreviewVideo(assetId);
+            if (disposed) return;
+            if (result.status === "Ready") {
+              setCompatibleVideoSources((previous) => ({ ...previous, [assetId]: result.payload.path }));
+            } else if (result.status === "Pending") {
+              shouldPollAgain = true;
+            } else {
+              setMediaErrors((previous) => {
+                const next = { ...previous };
+                allVideoLayers
+                  .filter((layer) => layer.asset_id === assetId)
+                  .forEach((layer) => {
+                    next[layer.item_id] = true;
+                  });
+                return next;
+              });
+            }
+          } catch {
+            if (!disposed) shouldPollAgain = true;
+          }
+        })
+      );
+      if (!disposed && shouldPollAgain) {
+        window.setTimeout(() => {
+          if (!disposed) setProxyPollAttempt((attempt) => attempt + 1);
+        }, 500);
+      }
+    };
+    void resolveSources();
+    return () => {
+      disposed = true;
+    };
+  }, [proxyRequestedAssetIds, compatibleVideoSources, proxyPollAttempt]);
 
   // 4. Synchronize video elements to exact source times when paused or seeking
   useEffect(() => {
@@ -144,22 +397,29 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     for (const layer of allVideoLayers) {
       if (layer.kind === "Video" && layer.asset_path) {
         const v = videoRefs.current[layer.item_id];
-        if (v && v.readyState >= 1) {
-          const targetSec =
-            layer.source_time.value /
-            (layer.source_time.rate.numerator / layer.source_time.rate.denominator);
-          if (Math.abs(v.currentTime - targetSec) > 0.05) {
-            v.currentTime = targetSec;
-          }
+        const targetSec =
+          layer.source_time.value /
+          (layer.source_time.rate.numerator / layer.source_time.rate.denominator);
+        videoSeekTargetsRef.current[layer.item_id] = { targetSec, isPlaying };
+        if (v) {
+          v.playbackRate = layer.playback_rate;
+          v.preservesPitch = true;
+          syncVideoToLatestTarget(layer.item_id, v);
+          const audio = sampledState.active_audio.find((sample) => sample.item_id === layer.item_id);
+          const gain = audio ? Math.max(0, Math.min(1, audio.effective_volume)) : 0;
+          v.volume = gain;
+          v.muted = gain === 0;
           if (isPlaying && v.paused) {
-            v.play().catch(() => {});
+            v.play().catch((error: unknown) => {
+              setAudioPlaybackError(error instanceof Error ? error.message : "Video playback could not be started.");
+            });
           } else if (!isPlaying && !v.paused) {
             v.pause();
           }
         }
       }
     }
-  }, [sampledState, isPlaying]);
+  }, [sampledState, isPlaying, syncVideoToLatestTarget]);
 
   useEffect(() => {
     const activeIds = new Set((sampledState?.active_audio ?? []).map((audio) => audio.item_id));
@@ -169,55 +429,23 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         if (element && !element.paused) element.pause();
         continue;
       }
-      const source = safeConvertFileSrc(audio.asset_path);
-      if (element.dataset.source !== source) {
-        element.src = source;
-        element.dataset.source = source;
-      }
       const sourceSeconds =
         audio.source_time.value /
         (audio.source_time.rate.numerator / audio.source_time.rate.denominator);
       if (Math.abs(element.currentTime - sourceSeconds) > 0.12) {
         element.currentTime = Math.max(0, sourceSeconds);
       }
+      element.playbackRate = audio.playback_rate;
+      element.preservesPitch = true;
       const gain = Math.max(0, Math.min(1, audio.effective_volume));
-      let gainNode: GainNode | undefined;
-      try {
-        let context = audioContextRef.current;
-        if (!context) {
-          const AudioContextConstructor =
-            window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (AudioContextConstructor) {
-            context = new AudioContextConstructor();
-            audioContextRef.current = context;
-          }
-        }
-        if (context) {
-          gainNode = audioGainNodesRef.current.get(element);
-          if (!gainNode) {
-            const source = context.createMediaElementSource(element);
-            gainNode = context.createGain();
-            source.connect(gainNode);
-            gainNode.connect(context.destination);
-            audioGainNodesRef.current.set(element, gainNode);
-          }
-          const now = context.currentTime;
-          gainNode.gain.cancelScheduledValues(now);
-          gainNode.gain.setTargetAtTime(gain, now, 0.015);
-          element.volume = 1;
-          if (isPlaying && context.state === "suspended") {
-            void context.resume().catch(() => {});
-          }
-        }
-      } catch {
-        // Keep preview audible on WebViews where Web Audio routing is unavailable.
-        gainNode = undefined;
-      }
-      if (!gainNode) {
-        element.volume = gain;
-      }
-      if (isPlaying && gain > 0 && element.paused) {
-        element.play().catch(() => {});
+      // Native media output is reliable in WebView2 for local asset URLs. Routing an
+      // <audio> through createMediaElementSource can silently disconnect its output.
+      element.volume = gain;
+      element.muted = gain === 0;
+      if (isPlaying && element.paused) {
+        element.play().catch((error: unknown) => {
+          setAudioPlaybackError(error instanceof Error ? error.message : "Audio media could not be played.");
+        });
       } else if (!isPlaying && !element.paused) {
         element.pause();
       }
@@ -227,7 +455,6 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   useEffect(
     () => () => {
       Object.values(audioRefs.current).forEach((element) => element?.pause());
-      void audioContextRef.current?.close();
     },
     []
   );
@@ -271,20 +498,42 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
   };
 
-  // Canvas viewport geometry scale factor: 1920x1080 -> 720x405 (ratio: 0.375)
+  // Fit the canonical project canvas into the available preview area while
+  // preserving its aspect ratio. Layer coordinates stay in project pixels.
   const canvasWidth = project?.settings.width ?? 1920;
   const canvasHeight = project?.settings.height ?? 1080;
-  const viewportWidth = 720;
-  const viewportHeight = 405;
-  const scaleRatio = viewportWidth / canvasWidth;
+  const canvasBackgroundColor = project?.settings.canvas_background_color ?? "#000000";
+  const supportsSafeZones =
+    canvasWidth === canvasHeight ||
+    canvasWidth * 16 === canvasHeight * 9 ||
+    canvasWidth * 5 === canvasHeight * 4;
+  const maxViewportWidth = 720;
+  const maxViewportHeight = 405;
+  const scaleRatio = Math.min(maxViewportWidth / canvasWidth, maxViewportHeight / canvasHeight);
+  const viewportWidth = Math.max(1, Math.round(canvasWidth * scaleRatio));
+  const viewportHeight = Math.max(1, Math.round(canvasHeight * scaleRatio));
 
   const activeLayers = sampledState?.active_layers ?? [];
   const transitionGroups = sampledState?.transition_groups ?? [];
   const activeAudio = sampledState?.active_audio ?? [];
+  const activeVideoItemIds = new Set(
+    [
+      ...activeLayers,
+      ...transitionGroups.flatMap((group) => [group.left_layer, group.right_layer]),
+    ]
+      .filter((layer) => layer.kind === "Video")
+      .map((layer) => layer.item_id)
+  );
+  const standaloneAudio = activeAudio.filter((audio) => !activeVideoItemIds.has(audio.item_id));
+  const isPreparingCompatiblePreview = Object.keys(proxyRequestedAssetIds).some(
+    (assetId) => !compatibleVideoSources[assetId]
+  );
 
   const renderLayer = (layer: PreviewSampledLayer, mixBlendMode?: "plus-lighter") => {
     const hasError = mediaErrors[layer.item_id] || layer.is_missing_media;
-    const assetUrl = safeConvertFileSrc(layer.asset_path);
+    const assetUrl = safeConvertFileSrc(
+      layer.asset_id ? compatibleVideoSources[layer.asset_id] ?? layer.asset_path : layer.asset_path
+    );
 
     // Compute normalized transform coordinates
     const posX = layer.position[0] * scaleRatio;
@@ -299,8 +548,33 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     const cropRight = layer.crop.right * 100;
     const cropBottom = layer.crop.bottom * 100;
     const cropLeft = layer.crop.left * 100;
+    const textStyle = layer.text_style;
+    const textAnchor = textStyle?.anchor ?? "Center";
+    const textAlignItems = textAnchor.endsWith("Left")
+      ? "flex-start"
+      : textAnchor.endsWith("Right")
+        ? "flex-end"
+        : "center";
+    const textJustifyContent = textAnchor.startsWith("Top")
+      ? "flex-start"
+      : textAnchor.startsWith("Bottom")
+        ? "flex-end"
+        : "center";
 
-    const isSelected = selectedItem?.item_id === layer.item_id;
+    if (layer.kind === "Video" && !hasError) {
+      return (
+        <PreviewVideoLayer
+          key={layer.item_id}
+          layer={layer}
+          assetUrl={assetUrl}
+          scaleRatio={scaleRatio}
+          mixBlendMode={mixBlendMode}
+          videoRefs={videoRefs}
+          syncVideoToLatestTarget={syncVideoToLatestTarget}
+          onMediaError={handleVideoMediaError}
+        />
+      );
+    }
 
     return (
       <div
@@ -312,16 +586,15 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           width: "100%",
           height: "100%",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
+          alignItems: layer.kind === "Text" ? textJustifyContent : "center",
+          justifyContent: layer.kind === "Text" ? textAlignItems : "center",
           transform: `translate(${posX}px, ${posY}px) scale(${scaleX}, ${scaleY}) rotate(${rotation}deg)`,
           opacity,
           clipPath: `inset(${cropTop}% ${cropRight}% ${cropBottom}% ${cropLeft}%)`,
           zIndex: layer.z_index,
           pointerEvents: "none",
-          outline: isSelected ? "2px solid var(--accent-primary)" : "none",
-          outlineOffset: "-2px",
           mixBlendMode,
+          filter: visualEffectCssFilter(layer.visual_effect),
         }}
       >
         {hasError ? (
@@ -349,25 +622,6 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
               {layer.asset_path || "Unknown source path"}
             </span>
           </div>
-        ) : layer.kind === "Video" ? (
-          // Real Decoded Hardware Video Stream (Milestone 3, Candidate A)
-          <video
-            ref={(el) => {
-              videoRefs.current[layer.item_id] = el;
-            }}
-            src={assetUrl}
-            muted
-            playsInline
-            onError={() => {
-              setMediaErrors((prev) => ({ ...prev, [layer.item_id]: true }));
-            }}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              pointerEvents: "none",
-            }}
-          />
         ) : layer.kind === "Image" ? (
           // Real Image Pixel Render
           <img
@@ -387,10 +641,16 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           // Text overlay layer
           <div
             style={{
-              color: "#ffffff",
-              fontSize: `${(layer.font_size ?? 48) * scaleRatio}px`,
-              fontFamily: layer.font_family ?? "Inter, sans-serif",
-              fontWeight: 600,
+              color: textStyle?.font_color ?? "#ffffff",
+              fontSize: `${(textStyle?.font_size ?? layer.font_size ?? 48) * scaleRatio}px`,
+              fontFamily: textStyle?.font_family ?? layer.font_family ?? "Inter, sans-serif",
+              fontWeight: textStyle?.font_weight ?? 600,
+              textAlign: textStyle?.alignment?.toLowerCase() as "left" | "center" | "right" | undefined,
+              lineHeight: textStyle?.line_height ?? 1,
+              backgroundColor: textStyle?.background_color ?? "transparent",
+              padding: textStyle
+                ? `${textStyle.padding_y * scaleRatio}px ${textStyle.padding_x * scaleRatio}px`
+                : undefined,
               textShadow: "0 2px 6px rgba(0, 0, 0, 0.9)",
             }}
           >
@@ -422,21 +682,88 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     );
   };
 
+  const renderSelectionOutline = (layer: PreviewSampledLayer, key: string, zIndex = layer.z_index) => {
+    // WebView2 can composite accelerated video on a separate surface; overlays can
+    // occlude that surface even when visually transparent. Keep selection styling
+    // on the timeline for video clips instead of drawing over their preview surface.
+    if (layer.kind === "Video" || selectedItem?.item_id !== layer.item_id) return null;
+
+    return (
+      <div
+        key={key}
+        aria-hidden="true"
+        className="preview-selection-outline"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: "100%",
+          height: "100%",
+          boxSizing: "border-box",
+          transform: `translate(${layer.position[0] * scaleRatio}px, ${layer.position[1] * scaleRatio}px) scale(${layer.scale[0]}, ${layer.scale[1]}) rotate(${layer.rotation}deg)`,
+          opacity: layer.opacity,
+          clipPath: `inset(${layer.crop.top * 100}% ${layer.crop.right * 100}% ${layer.crop.bottom * 100}% ${layer.crop.left * 100}%)`,
+          zIndex,
+          pointerEvents: "none",
+          outline: "2px solid var(--accent-primary)",
+          outlineOffset: "-2px",
+        }}
+      />
+    );
+  };
+
   return (
     <div className="canvas-area" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-      {activeAudio.map((audio) => (
+      {standaloneAudio.map((audio) => (
         <audio
           key={audio.item_id}
           ref={(element) => {
             audioRefs.current[audio.item_id] = element;
           }}
+          src={safeConvertFileSrc(audio.asset_path)}
           preload="auto"
           onError={() => {
-            setMediaErrors((previous) => ({ ...previous, [audio.item_id]: true }));
+            setAudioPlaybackError("Audio file could not be decoded.");
           }}
           style={{ display: "none" }}
         />
       ))}
+      {audioPlaybackError && (
+        <div
+          role="alert"
+          style={{
+            width: "min(720px, 100%)",
+            boxSizing: "border-box",
+            marginBottom: "8px",
+            padding: "6px 10px",
+            color: "#fecaca",
+            background: "rgba(127, 29, 29, 0.7)",
+            border: "1px solid #b91c1c",
+            borderRadius: "4px",
+            fontSize: "12px",
+          }}
+        >
+          Audio playback failed: {audioPlaybackError}
+        </div>
+      )}
+      {isPreparingCompatiblePreview && (
+        <div
+          role="status"
+          style={{
+            width: "min(720px, 100%)",
+            boxSizing: "border-box",
+            marginBottom: "8px",
+            padding: "6px 10px",
+            color: "#bfdbfe",
+            background: "rgba(30, 64, 175, 0.45)",
+            border: "1px solid #2563eb",
+            borderRadius: "4px",
+            fontSize: "12px",
+          }}
+        >
+          Preparing a compatible video preview…
+        </div>
+      )}
       {/* Real Decoded Viewport */}
       <div
         className="canvas-viewport"
@@ -445,7 +772,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           height: `${viewportHeight}px`,
           position: "relative",
           overflow: "hidden",
-          backgroundColor: "#000000",
+          backgroundColor: canvasBackgroundColor,
           boxShadow: "0 8px 32px rgba(0, 0, 0, 0.75)",
           borderRadius: "4px",
           border: "1px solid var(--border-color)",
@@ -492,13 +819,72 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
                   isolation: "isolate",
                   zIndex: group.z_index,
                   pointerEvents: "none",
+                  backgroundColor: group.kind === "DipToBlack" ? "#000" : undefined,
                 }}
               >
-                {renderLayer(group.left_layer, "plus-lighter")}
-                {renderLayer(group.right_layer, "plus-lighter")}
+                {renderLayer(
+                  group.left_layer,
+                  group.kind === "CrossDissolve" ? "plus-lighter" : undefined
+                )}
+                {renderLayer(
+                  group.right_layer,
+                  group.kind === "CrossDissolve" ? "plus-lighter" : undefined
+                )}
               </div>
             ))}
           </>
+        )}
+        {activeLayers.map((layer) => renderSelectionOutline(layer, `selection-${layer.item_id}`))}
+        {transitionGroups.flatMap((group) => [
+          renderSelectionOutline(
+            group.left_layer,
+            `selection-${group.transition_id}-${group.left_layer.item_id}`,
+            group.z_index
+          ),
+          renderSelectionOutline(
+            group.right_layer,
+            `selection-${group.transition_id}-${group.right_layer.item_id}`,
+            group.z_index
+          ),
+        ])}
+
+        {showSafeZones && supportsSafeZones && (
+          <div
+            aria-label="Social safe-zone guides"
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 45,
+              pointerEvents: "none",
+              border: "1px dashed rgba(255, 255, 255, 0.45)",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                top: "8%",
+                right: "7%",
+                bottom: "18%",
+                left: "7%",
+                border: "1px dashed rgba(96, 165, 250, 0.9)",
+                borderRadius: "2px",
+              }}
+            />
+            <span
+              style={{
+                position: "absolute",
+                top: "8%",
+                left: "7%",
+                transform: "translateY(-100%)",
+                padding: "2px 4px",
+                color: "#bfdbfe",
+                background: "rgba(15, 23, 42, 0.8)",
+                fontSize: "9px",
+              }}
+            >
+              Social safe area
+            </span>
+          </div>
         )}
 
         {/* Timecode overlay badge */}
@@ -598,6 +984,21 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             style={{ padding: "4px 8px", fontSize: "12px" }}
           >
             ▶
+          </button>
+          <button
+            className="btn-action"
+            disabled={!supportsSafeZones}
+            onClick={() => setShowSafeZones((visible) => !visible)}
+            title={supportsSafeZones ? "Toggle social safe-zone guides (preview only)" : "Safe-zone guides are available for 9:16, 1:1, and 4:5 canvases"}
+            aria-pressed={showSafeZones}
+            style={{
+              padding: "4px 8px",
+              fontSize: "11px",
+              color: showSafeZones ? "#bfdbfe" : undefined,
+              borderColor: showSafeZones ? "#60a5fa" : undefined,
+            }}
+          >
+            Safe zones
           </button>
           <span style={{ fontSize: "12px", fontFamily: "ui-monospace, monospace", marginLeft: "8px" }}>
             {formatTimecode(playheadFrame)}

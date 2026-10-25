@@ -94,6 +94,7 @@ fn create_sample_project_with_media(
             tinixcut_lib::modules::domain::time::FrameRate::FPS_30,
         )),
         file_size: 1024,
+        dimensions: None,
     });
     let mut track = Track::new("Video Track 1".to_string(), TrackKind::Video);
     let item = tinixcut_lib::modules::domain::TimelineItem::new(
@@ -546,6 +547,7 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::new(100, rate)),
             file_size: 1,
+            dimensions: None,
         });
         track.items.push(
             TimelineItem::new(

@@ -1,0 +1,200 @@
+{
+  "corpus_version": "1.2",
+  "program": "Tinix Animated Text Templates (Phases 27-36)",
+  "comparison_policy": {
+    "roi_evaluation": "Compare tight bounding box Region of Interest (ROI) plus margin, never whole-canvas black background",
+    "alpha_evaluation": "Strict alpha-channel diff; detect and fail on opaque black halos or clipping",
+    "layout_metrics_tolerance_px": 1.0,
+    "color_tolerance_rgb_delta": 3,
+    "ssim_threshold_roi": 0.985
+  },
+  "supported_aspect_ratios": [
+    { "id": "16x9", "width": 1920, "height": 1080 },
+    { "id": "9x16", "width": 1080, "height": 1920 },
+    { "id": "1x1", "width": 1080, "height": 1080 },
+    { "id": "4x5", "width": 1080, "height": 1350 }
+  ],
+  "supported_frame_rates": [
+    { "name": "24fps", "num": 24, "den": 1 },
+    { "name": "25fps", "num": 25, "den": 1 },
+    { "name": "30fps", "num": 30, "den": 1 },
+    { "name": "60fps", "num": 60, "den": 1 },
+    { "name": "29.97fps", "num": 30000, "den": 1001 }
+  ],
+  "sampling_checkpoints": [
+    "t0_start (t=0.0s)",
+    "stagger_step_samples (each character stagger entrance)",
+    "in_animation_completion (t=1.033333s)",
+    "hold_steady_phase (t=3.0s)",
+    "loop_boundary_transitions (if loop animation enabled)",
+    "out_animation_start (t=D_clip - D_out)",
+    "out_animation_completion",
+    "last_frame_of_clip"
+  ],
+  "fixtures": [
+    {
+      "id": "F01_CAPCUT_USER_SAMPLE",
+      "purpose": "Verify exact recreation of user CapCut sample without relying on proprietary engine",
+      "text": "Tinix — Thử nghiệm tiếng Việt",
+      "grapheme_count": 29,
+      "non_space_character_count": 24,
+      "text_variants": [
+        { "name": "full_reference", "text": "Tinix — Thử nghiệm tiếng Việt", "valid_count": 24 },
+        { "name": "short_text", "text": "Tinix", "valid_count": 5, "description": "Tests 2 slide characters + 3 bounce characters" },
+        { "name": "ultra_short", "text": "Hi", "valid_count": 2, "description": "Tests spring_num = 1 branch (validCount <= 3)" }
+      ],
+      "category": "ReferenceRecreation",
+      "typography": {
+        "reference_family": "M PLUS 1p ExtraBold",
+        "tinix_recreation_family": "Roboto Bold",
+        "tinix_recreation_font_path": "src-tauri/fixtures/fonts/Roboto-Bold.ttf",
+        "tinix_recreation_font_sha256": "61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334",
+        "weight": 700,
+        "segment_scale": 0.31,
+        "template_scale": 1.903216,
+        "combined_scale": 0.589997,
+        "alignment": "Center"
+      },
+      "style": {
+        "fill_gradient": {
+          "angle_deg": 118.0,
+          "mode": "all",
+          "stops": [
+            { "offset": 0.05088495, "hex": "#ffe35f" },
+            { "offset": 0.94911504, "hex": "#ffffff" }
+          ]
+        },
+        "stroke": {
+          "hex": "#AD5100",
+          "normalized_width": 0.03808219
+        },
+        "shadows": [
+          { "hex": "#AD5100", "alpha": 0.9, "angle_deg": -45.0, "distance": 5.0, "diffuse": 0.0 },
+          { "hex": "#FFA758", "alpha": 0.9, "angle_deg": -45.0, "distance": 2.06849, "diffuse": 0.03413 }
+        ]
+      },
+      "motion": {
+        "duration_us": 1033333,
+        "duration_frames": 31,
+        "stagger_step_virtual_frames": 5,
+        "virtual_timeline_formula": "totalFrame = (validCount - 1) * 5 + 41",
+        "spring_num_rule": "spring_num = (validCount <= 3) ? 1 : 3",
+        "group_a_first_21_chars": {
+          "translate_y": ["-avgSize", 0.0],
+          "opacity": [0.0, 1.0],
+          "bezier": [0.166667, 0.166667, 0.14, 1.0]
+        },
+        "group_b_last_3_chars": {
+          "translate_y_bounce_ch1": { "range": ["-avgSize", "+avgSize"], "bezier": [0.166667, 0.166667, 0.0, 1.0] },
+          "translate_y_bounce_ch2": { "range": ["+avgSize", 0.0], "bezier": [1.0, 0.0, 0.833333, 0.833333] },
+          "rotation_z_deg": { "range": [-180.0, -360.0], "bezier": [0.015, 0.213203433, 0.09, 1.0] },
+          "opacity": [0.0, 1.0]
+        }
+      }
+    },
+    {
+      "id": "F02_VIETNAMESE_DIACRITICS_NFC_NFD",
+      "purpose": "Verify NFC and NFD normalization produces identical glyph clusters and character transforms",
+      "text_nfc": "Tiếng Việt đầy đủ dấu: ắ, ằ, ẳ, ẵ, ặ, ê, ế, ề, ể, ễ, ệ, ơ, ớ, ờ, ở, ỡ, ợ, ư, ứ, ừ, ử, ữ, ự",
+      "category": "Diacritics",
+      "requirement": "Combining tone marks must remain attached to base glyph throughout scale/rotation animations"
+    },
+    {
+      "id": "F03_EMOJI_ZWJ_CLUSTERS",
+      "purpose": "Verify emoji with zero-width joiners and skin tone modifiers animate as single graphemes",
+      "text": "Hello 👨‍👩‍👧‍👦 World 🚀 Tinix ✨ 👍🏽",
+      "category": "UnicodeClusters",
+      "requirement": "Family emoji must not break into individual man/woman/child glyphs during stagger"
+    },
+    {
+      "id": "F04_MULTILINE_WORD_WRAP",
+      "purpose": "Verify multiline text wrapping, alignment (left/center/right), and line height consistency",
+      "text": "Dòng tiêu đề thứ nhất\nDòng phụ có độ dài tương đối dài để kiểm tra ngắt dòng tự động\nDòng kết thúc",
+      "category": "Layout",
+      "modes": ["Left", "Center", "Right"]
+    },
+    {
+      "id": "F05_EDGE_EMPTY_WHITESPACE",
+      "purpose": "Verify empty string, whitespace-only, and single-character clips evaluate safely",
+      "cases": ["", "   ", "A", "\n\n", " \t "],
+      "category": "EdgeCases",
+      "requirement": "Zero panic, zero crash, empty overlay returned cleanly"
+    },
+    {
+      "id": "F06_LATIN_LIGATURES",
+      "purpose": "Verify Latin standard ligatures (fi, fl, ffi, ffl) shape properly",
+      "text": "The difficult official flight reflected visual affinity",
+      "category": "TypographyShaping"
+    },
+    {
+      "id": "F07_DIAGNOSTIC_BOUNDARIES_CJK_RTL",
+      "purpose": "Explicitly identify boundaries for CJK ideographs and Arabic RTL text",
+      "text_cjk": "日本語テスト — いざ本番！",
+      "text_rtl": "مرحبا بك في تينيكس",
+      "category": "DiagnosticBoundary",
+      "tier": "Diagnostic-Only (Reported as non-primary target until full bidi shaping is implemented)"
+    },
+    {
+      "id": "F08_MULTI_STROKE_SHADOW_STRESS",
+      "purpose": "Verify 4 strokes and 4 shadows layered correctly without visual distortion",
+      "text": "STRESS TEST 4X STROKE 4X SHADOW",
+      "category": "Appearance",
+      "strokes_count": 4,
+      "shadows_count": 4
+    },
+    {
+      "id": "F09_GRADIENT_STOPS_ANGLES",
+      "purpose": "Verify linear and radial gradients at 0, 45, 90, 118, 180, 270 degrees with up to 8 stops",
+      "text": "GRADIENT VARIATIONS",
+      "category": "Appearance"
+    },
+    {
+      "id": "F10_MOTION_LIFECYCLE_COLLISION",
+      "purpose": "Verify duration collision handling when In + Out > Clip duration",
+      "clip_duration_s": 2.0,
+      "in_duration_s": 1.5,
+      "out_duration_s": 1.5,
+      "category": "MotionLifecycle",
+      "expected_behavior_default": "Command Service rejects with DurationConflict validation error (no silent tempo distortion)",
+      "expected_behavior_proportional": "When explicit conflict_policy='ProportionalScale' is provided: In = 1.0s, Out = 1.0s, Steady = 0.0s",
+      "expected_behavior_clamp": "When explicit conflict_policy='ClampOut' is provided: In = 1.5s, Out = 0.5s, Steady = 0.0s"
+    },
+    {
+      "id": "F11_ASPECT_RATIO_RESPONSIVE_ANCHORS",
+      "purpose": "Verify template anchors adapt correctly across 16:9, 9:16, 1:1, and 4:5 canvases",
+      "text": "RESPONSIVE ANCHOR TEST",
+      "anchors": ["top_left", "center", "bottom_center", "lower_third"],
+      "category": "Responsiveness"
+    },
+    {
+      "id": "F12_RICH_SPANS_BACKGROUND_GLOW",
+      "purpose": "Verify inline rich text spans (color/font/weight overrides per grapheme range) combined with background highlight box and outer glow",
+      "text": "Tinix Rich Text: Điểm Nhấn Nổi Bật",
+      "rich_spans": [
+        { "range_graphemes": [0, 5], "fill_color": "#00E5FF", "weight": 900 },
+        { "range_graphemes": [17, 25], "fill_color": "#FFEA00", "weight": 800 }
+      ],
+      "background_box": { "color": "#1A1A1ACC", "padding_x": 16.0, "padding_y": 8.0, "border_radius": 6.0 },
+      "glow": { "color": "#FF007F", "blur_radius": 12.0 },
+      "category": "TypographyAndAppearance"
+    },
+    {
+      "id": "F13_MULTILAYER_DENSITY_STRESS",
+      "purpose": "Verify maximum allowable layer density (16 layers: 8 text slots + 8 shapes/decorations) rendering without artifacts",
+      "slots_count": 8,
+      "decorative_shapes_count": 8,
+      "total_layers": 16,
+      "category": "Multilayer"
+    },
+    {
+      "id": "F14_IN_LOOP_OUT_FULL_LIFECYCLE",
+      "purpose": "Verify full animation lifecycle containing In-Animation, Loop-Animation (Repeat & PingPong modes), and Out-Animation transitions",
+      "in_duration_s": 1.0,
+      "loop_duration_s": 2.0,
+      "out_duration_s": 1.0,
+      "clip_duration_s": 6.0,
+      "loop_modes": ["Repeat", "PingPong"],
+      "category": "MotionLifecycle"
+    }
+  ]
+}

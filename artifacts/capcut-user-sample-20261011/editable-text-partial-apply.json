@@ -1,0 +1,26 @@
+{
+  "projectId": "proj_55622e277623492d8c9304c4c58e6ecc",
+  "priorRevision": 0,
+  "newRevision": 1,
+  "transactionId": "tx_editable-text-partial",
+  "operationsApplied": 3,
+  "receipts": [
+    {
+      "operationId": "op_trk_editable",
+      "status": "applied",
+      "affectedTrackId": "trk_editable"
+    },
+    {
+      "operationId": "op_clip_editable",
+      "status": "applied",
+      "affectedItemId": "clip_editable",
+      "affectedTrackId": "trk_editable"
+    },
+    {
+      "operationId": "op_text_content",
+      "status": "applied",
+      "affectedItemId": "clip_editable"
+    }
+  ],
+  "idempotencyScope": "structured"
+}

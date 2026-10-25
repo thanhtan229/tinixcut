@@ -6,9 +6,12 @@
 use crate::modules::domain::id::*;
 use crate::modules::domain::time::{RationalTime, TimeRange};
 use crate::modules::domain::{
-    AudioCrossfade, CommandLedgerEntry, Crop, CutTransition, DomainError, ItemKind, Keyframe,
-    KeyframeEasing, KeyframeProperty, MediaKind, Project, TimelineItem, Track, TrackKind,
-    Transform, Transition, TransitionKind, CURRENT_SCHEMA_VERSION,
+    grapheme_count, AssetDimensions, AudioCrossfade, ClipSpeed, CommandLedgerEntry, Crop,
+    CutTransition, DomainError, FontReference, ItemKind, Keyframe, KeyframeEasing,
+    KeyframeProperty, MediaKind, PlacementMode, Project, ProjectSettings, RichTextSpan,
+    TextAnimation, TextBackgroundBox, TextFill, TextLayout, TextRichStyle, TextShadow, TextStroke,
+    TextStyle, TextTemplateReference, TimelineItem, Track, TrackKind, Transform, Transition,
+    TransitionKind, VisualEffectPreset, CURRENT_SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -152,6 +155,10 @@ pub enum CommandOperation {
         item_id: String,
         crop: Crop,
     },
+    ClipPlacementModeSet {
+        item_id: String,
+        placement_mode: PlacementMode,
+    },
     ClipOpacitySet {
         item_id: String,
         opacity: f32,
@@ -164,6 +171,13 @@ pub enum CommandOperation {
         track_id: String,
         muted: bool,
     },
+    ProjectSettingsSet {
+        width: u32,
+        height: u32,
+    },
+    CanvasBackgroundSet {
+        color: String,
+    },
     ClipVolumeSet {
         item_id: String,
         volume: f32,
@@ -173,11 +187,67 @@ pub enum CommandOperation {
         name: String,
         path: String,
         media_kind: crate::modules::domain::MediaKind,
+        #[serde(default)]
+        duration: Option<RationalTime>,
         file_size: u64,
+        #[serde(default)]
+        dimensions: Option<AssetDimensions>,
     },
     ClipTextSet {
         item_id: String,
         text: String,
+    },
+    ClipTextStyleSet {
+        item_id: String,
+        style: TextStyle,
+    },
+    TextTrackStyleSet {
+        track_id: String,
+        style: TextStyle,
+    },
+    TextTemplateApply {
+        item_id: String,
+        template_id: String,
+        template_version: u32,
+    },
+    TextTrackTemplateApply {
+        track_id: String,
+        template_id: String,
+        template_version: u32,
+    },
+    ClipTextTemplateReset {
+        item_id: String,
+    },
+    ClipTextRichSet {
+        item_id: String,
+        rich: TextRichStyle,
+    },
+    ClipTextSpansSet {
+        item_id: String,
+        spans: Vec<RichTextSpan>,
+    },
+    ClipTextLayoutSet {
+        item_id: String,
+        layout: TextLayout,
+    },
+    ClipTextAppearanceSet {
+        item_id: String,
+        fill: TextFill,
+        strokes: Vec<TextStroke>,
+        shadows: Vec<TextShadow>,
+        background: Option<TextBackgroundBox>,
+    },
+    ClipTextFontSet {
+        item_id: String,
+        font: FontReference,
+        font_size: Option<f32>,
+    },
+    ClipTextAnimationSet {
+        item_id: String,
+        animation: Option<TextAnimation>,
+    },
+    ClipTextRichReset {
+        item_id: String,
     },
     ClipAudioFadeSet {
         item_id: String,
@@ -187,6 +257,14 @@ pub enum CommandOperation {
     ClipTransitionSet {
         item_id: String,
         transition: Option<Transition>,
+    },
+    ClipVisualEffectSet {
+        item_id: String,
+        visual_effect: VisualEffectPreset,
+    },
+    ClipSpeedSet {
+        item_id: String,
+        speed: ClipSpeed,
     },
     ClipKeyframeAdd {
         item_id: String,
@@ -363,6 +441,13 @@ pub enum DiffChange {
     },
     AssetImported {
         asset_id: String,
+    },
+    ProjectSettingsModified {
+        width: u32,
+        height: u32,
+    },
+    ProjectCanvasBackgroundModified {
+        color: String,
     },
     CutTransitionCreated {
         transition_id: String,
@@ -555,6 +640,7 @@ impl CommandService {
                                 Some(new_item_id.clone())
                             }
                             DiffChange::ClipModified { item_id } => Some(item_id.clone()),
+                            DiffChange::ProjectCanvasBackgroundModified { .. } => None,
                             DiffChange::CutTransitionCreated { transition_id, .. } => {
                                 Some(transition_id.clone())
                             }
@@ -671,6 +757,8 @@ impl CommandService {
                     Some(DiffChange::TrackDeleted { track_id }) => (None, Some(track_id.clone())),
                     Some(DiffChange::TrackModified { track_id }) => (None, Some(track_id.clone())),
                     Some(DiffChange::AssetImported { asset_id }) => (Some(asset_id.clone()), None),
+                    Some(DiffChange::ProjectSettingsModified { .. })
+                    | Some(DiffChange::ProjectCanvasBackgroundModified { .. }) => (None, None),
                     Some(DiffChange::CutTransitionCreated {
                         transition_id,
                         track_id,
@@ -1257,6 +1345,41 @@ impl CommandService {
         op_id: &str,
     ) -> Result<Option<DiffChange>, CommandError> {
         match operation {
+            CommandOperation::CanvasBackgroundSet { color } => {
+                let mut candidate = project.settings.clone();
+                candidate.canvas_background_color = color.trim().to_ascii_uppercase();
+                candidate
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+
+                let color = candidate.canvas_background_color.clone();
+                project.settings = candidate;
+                Ok(Some(DiffChange::ProjectCanvasBackgroundModified { color }))
+            }
+
+            CommandOperation::ProjectSettingsSet { width, height } => {
+                let candidate = ProjectSettings {
+                    width: *width,
+                    height: *height,
+                    ..project.settings.clone()
+                };
+                candidate
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+
+                project.settings = candidate;
+                Ok(Some(DiffChange::ProjectSettingsModified {
+                    width: *width,
+                    height: *height,
+                }))
+            }
+
             CommandOperation::TrackCreate {
                 track_id,
                 name,
@@ -1376,6 +1499,7 @@ impl CommandService {
                     item_id,
                     new_timeline_range,
                     new_source_range,
+                    None,
                     op_id,
                 )?;
 
@@ -1691,19 +1815,36 @@ impl CommandService {
                             }
                         }
 
+                        let left_source_duration = item
+                            .speed
+                            .source_duration_for(left_dur, item.source_range.duration.rate)
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        let right_source_duration = item
+                            .speed
+                            .source_duration_for(right_dur, item.source_range.duration.rate)
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+
                         let mut right_item = item.clone();
                         let right_id = new_right_item_id.clone().unwrap_or_else(generate_item_id);
                         right_item.item_id = right_id.clone();
                         right_item.timeline_range = TimeRange::new(*split_time, right_dur);
-                        right_item.source_range =
-                            TimeRange::new(item.source_range.start + left_dur, right_dur);
+                        right_item.source_range = TimeRange::new(
+                            item.source_range.start.add_exact(&left_source_duration),
+                            right_source_duration,
+                        );
                         right_item.keyframes = right_keyframes;
 
                         let left_item = &mut track.items[pos];
                         left_item.timeline_range =
                             TimeRange::new(left_item.timeline_range.start, left_dur);
                         left_item.source_range =
-                            TimeRange::new(left_item.source_range.start, left_dur);
+                            TimeRange::new(left_item.source_range.start, left_source_duration);
                         left_item.keyframes = left_keyframes;
 
                         left_item.validate()?;
@@ -1890,6 +2031,36 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::ClipPlacementModeSet {
+                item_id,
+                placement_mode,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Video {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Placement mode is only supported for video clips"
+                                    .to_string(),
+                            });
+                        }
+                        item.placement_mode = *placement_mode;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
             CommandOperation::ClipOpacitySet { item_id, opacity } => {
                 let mut found = false;
                 for track in &mut project.tracks {
@@ -1968,7 +2139,9 @@ impl CommandService {
                 name,
                 path,
                 media_kind,
+                duration,
                 file_size,
+                dimensions,
             } => {
                 let id = crate::modules::media::MediaCatalog::register_asset(
                     project,
@@ -1976,7 +2149,9 @@ impl CommandService {
                     name.clone(),
                     path.clone(),
                     *media_kind,
+                    *duration,
                     *file_size,
+                    dimensions.clone(),
                 );
                 Ok(Some(DiffChange::AssetImported { asset_id: id }))
             }
@@ -1985,7 +2160,512 @@ impl CommandService {
                 let mut found = false;
                 for track in &mut project.tracks {
                     if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text content",
+                                    item_id
+                                ),
+                            });
+                        }
+                        if let Some(ref rich) = item.text_rich {
+                            let mut candidate_rich = rich.clone();
+                            let old_text = item.text_content.as_deref().unwrap_or("");
+                            let old_count = grapheme_count(old_text) as u32;
+                            let new_count = grapheme_count(text) as u32;
+
+                            for span in &mut candidate_rich.spans {
+                                if span.start == 0 && span.end == old_count {
+                                    span.end = new_count;
+                                } else {
+                                    span.start = span.start.min(new_count);
+                                    span.end = span.end.min(new_count);
+                                }
+                            }
+                            candidate_rich.spans.retain(|s| s.start < s.end);
+
+                            candidate_rich.validate(text).map_err(|error| {
+                                CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                }
+                            })?;
+                            item.text_rich = Some(candidate_rich);
+                        }
                         item.text_content = Some(text.clone());
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextStyleSet { item_id, style } => {
+                style
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        item.text_style = Some(style.clone());
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TextTrackStyleSet { track_id, style } => {
+                style
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                let mut updated_count = 0;
+                for item in &mut track.items {
+                    if item.kind == ItemKind::Text {
+                        item.text_style = Some(style.clone());
+                        updated_count += 1;
+                    }
+                }
+                if updated_count == 0 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Track '{}' does not contain text items to style",
+                            track_id
+                        ),
+                    });
+                }
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::TextTemplateApply {
+                item_id,
+                template_id,
+                template_version,
+            } => {
+                let reference = TextTemplateReference {
+                    template_id: template_id.clone(),
+                    template_version: *template_version,
+                };
+                reference
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+                let style = crate::modules::text_templates::resolve_template(&reference)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Unknown text template '{}' version {}",
+                            template_id, template_version
+                        ),
+                    })?;
+
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive a text template",
+                                    item_id
+                                ),
+                            });
+                        }
+                        item.text_style = Some(style.clone());
+                        item.text_template = Some(reference.clone());
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TextTrackTemplateApply {
+                track_id,
+                template_id,
+                template_version,
+            } => {
+                let reference = TextTemplateReference {
+                    template_id: template_id.clone(),
+                    template_version: *template_version,
+                };
+                reference
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+                let style = crate::modules::text_templates::resolve_template(&reference)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Unknown text template '{}' version {}",
+                            template_id, template_version
+                        ),
+                    })?;
+
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                let mut updated_count = 0;
+                for item in &mut track.items {
+                    if item.kind == ItemKind::Text {
+                        item.text_style = Some(style.clone());
+                        item.text_template = Some(reference.clone());
+                        updated_count += 1;
+                    }
+                }
+                if updated_count == 0 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Track '{}' does not contain text items to apply a template",
+                            track_id
+                        ),
+                    });
+                }
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextTemplateReset { item_id } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot reset a text template",
+                                    item_id
+                                ),
+                            });
+                        }
+                        if let Some(reference) = item.text_template.clone() {
+                            let style = crate::modules::text_templates::resolve_template(&reference)
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Cannot reset text template '{}' version {} because it is unavailable",
+                                        reference.template_id, reference.template_version
+                                    ),
+                                })?;
+                            item.text_style = Some(style);
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextRichSet { item_id, rich } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        rich.validate(item.text_content.as_deref().unwrap_or(""))
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        item.text_rich = Some(rich.clone());
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextSpansSet { item_id, spans } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        let mut rich = item.text_rich.clone().unwrap_or_default();
+                        rich.spans = spans.clone();
+                        rich.validate(item.text_content.as_deref().unwrap_or(""))
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        item.text_rich = Some(rich);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextLayoutSet { item_id, layout } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        let mut rich = item.text_rich.clone().unwrap_or_default();
+                        rich.layout = layout.clone();
+                        rich.validate(item.text_content.as_deref().unwrap_or(""))
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        item.text_rich = Some(rich);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextAppearanceSet {
+                item_id,
+                fill,
+                strokes,
+                shadows,
+                background,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        let mut rich = item.text_rich.clone().unwrap_or_default();
+                        rich.fill = fill.clone();
+                        rich.strokes = strokes.clone();
+                        rich.shadows = shadows.clone();
+                        rich.background = background.clone();
+                        rich.validate(item.text_content.as_deref().unwrap_or(""))
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        item.text_rich = Some(rich);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextFontSet {
+                item_id,
+                font,
+                font_size,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        let mut rich = item.text_rich.clone().unwrap_or_default();
+                        rich.font = Some(font.clone());
+                        rich.font_size = *font_size;
+                        rich.validate(item.text_content.as_deref().unwrap_or(""))
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?;
+                        item.text_rich = Some(rich);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextAnimationSet { item_id, animation } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive text animation",
+                                    item_id
+                                ),
+                            });
+                        }
+                        if let Some(ref anim) = animation {
+                            anim.validate_for_clip_duration(item.timeline_range.duration)
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?;
+                        }
+                        item.text_animation = animation.clone();
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipTextRichReset { item_id } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot reset text styling",
+                                    item_id
+                                ),
+                            });
+                        }
+                        item.text_rich = None;
                         found = true;
                         break;
                     }
@@ -2031,10 +2711,13 @@ impl CommandService {
                 transition,
             } => {
                 if let Some(ref t) = transition {
-                    if t.kind == TransitionKind::CrossDissolve {
+                    if matches!(
+                        t.kind,
+                        TransitionKind::CrossDissolve | TransitionKind::DipToBlack
+                    ) {
                         return Err(CommandError::UnsupportedTransition {
                             operation_id: op_id.to_string(),
-                            transition: "CrossDissolve".to_string(),
+                            transition: format!("{:?}", t.kind),
                         });
                     }
                     if t.duration.value <= 0 {
@@ -2070,6 +2753,113 @@ impl CommandService {
                         message: format!("Item '{}' not found", item_id),
                     });
                 }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipVisualEffectSet {
+                item_id,
+                visual_effect,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if !matches!(item.kind, ItemKind::Video | ItemKind::Image) {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message:
+                                    "Visual effects are supported only on video and image clips"
+                                        .to_string(),
+                            });
+                        }
+                        item.visual_effect = *visual_effect;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipSpeedSet { item_id, speed } => {
+                let (item, asset_duration) = project
+                    .tracks
+                    .iter()
+                    .flat_map(|track| track.items.iter())
+                    .find(|item| item.item_id == *item_id)
+                    .map(|item| {
+                        let asset_duration = item
+                            .asset_id
+                            .as_ref()
+                            .and_then(|asset_id| project.find_asset(asset_id))
+                            .and_then(|asset| asset.duration);
+                        (item.clone(), asset_duration)
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Audio) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Speed controls are supported only on video and audio clips"
+                            .to_string(),
+                    });
+                }
+
+                let asset_duration =
+                    asset_duration.ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Speed controls require a media asset with a known duration"
+                            .to_string(),
+                    })?;
+                let new_source_duration = speed
+                    .source_duration_for(
+                        item.timeline_range.duration,
+                        item.source_range.duration.rate,
+                    )
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+                let new_source_range = TimeRange::new(item.source_range.start, new_source_duration);
+
+                if new_source_range.end().semantic_gt(&asset_duration) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Speed change would read beyond the available media source range"
+                            .to_string(),
+                    });
+                }
+
+                Self::reconcile_dependent_transitions_before_trim(
+                    project,
+                    item_id,
+                    &item.timeline_range,
+                    &new_source_range,
+                    Some(*speed),
+                    op_id,
+                )?;
+
+                for track in &mut project.tracks {
+                    if let Some(current) = track.find_item_mut(item_id) {
+                        current.speed = *speed;
+                        current.source_range = new_source_range;
+                        current.validate()?;
+                        break;
+                    }
+                }
+
+                Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
                 Ok(Some(DiffChange::ClipModified {
                     item_id: item_id.clone(),
                 }))
@@ -2381,7 +3171,10 @@ impl CommandService {
                 kind,
                 duration,
             } => {
-                if *kind != TransitionKind::CrossDissolve {
+                if !matches!(
+                    *kind,
+                    TransitionKind::CrossDissolve | TransitionKind::DipToBlack
+                ) {
                     return Err(CommandError::UnsupportedTransition {
                         operation_id: op_id.to_string(),
                         transition: format!("{:?}", kind),
@@ -2694,8 +3487,8 @@ impl CommandService {
 
         let l_ticks = d_ticks / 2;
         let r_ticks = d_ticks - l_ticks;
-        let required_preroll = RationalTime::new(l_ticks, target_rate);
-        let required_postroll = RationalTime::new(r_ticks, target_rate);
+        let required_preroll_timeline = RationalTime::new(l_ticks, target_rate);
+        let required_postroll_timeline = RationalTime::new(r_ticks, target_rate);
 
         let left_asset_id =
             left.asset_id
@@ -2758,9 +3551,25 @@ impl CommandService {
 
         let left_editorial_ticks = left.timeline_range.duration.rescaled_to(target_rate).value;
         let right_editorial_ticks = right.timeline_range.duration.rescaled_to(target_rate).value;
+        let required_postroll = left
+            .speed
+            .source_duration_for(required_postroll_timeline, left.source_range.duration.rate)
+            .map_err(|error| CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: error.to_string(),
+            })?
+            .rescaled_to(target_rate);
+        let required_preroll = right
+            .speed
+            .source_duration_for(required_preroll_timeline, right.source_range.duration.rate)
+            .map_err(|error| CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: error.to_string(),
+            })?
+            .rescaled_to(target_rate);
 
-        if avail_postroll_ticks < r_ticks
-            || avail_preroll_ticks < l_ticks
+        if avail_postroll_ticks < required_postroll.value
+            || avail_preroll_ticks < required_preroll.value
             || left_editorial_ticks < l_ticks
             || right_editorial_ticks < r_ticks
         {
@@ -2871,16 +3680,36 @@ impl CommandService {
         let right_preroll = right.source_range.start.rescaled_to(rate).value;
         let left_extent = left.timeline_range.duration.rescaled_to(rate).value;
         let right_extent = right.timeline_range.duration.rescaled_to(rate).value;
-        if left_postroll < r || right_preroll < l || left_extent < l || right_extent < r {
+        let required_postroll = left
+            .speed
+            .source_duration_for(RationalTime::new(r, rate), left.source_range.duration.rate)
+            .map_err(|error| CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: error.to_string(),
+            })?
+            .rescaled_to(rate);
+        let required_preroll = right
+            .speed
+            .source_duration_for(RationalTime::new(l, rate), right.source_range.duration.rate)
+            .map_err(|error| CommandError::OperationValidationFailed {
+                operation_id: op_id.to_string(),
+                message: error.to_string(),
+            })?
+            .rescaled_to(rate);
+        if left_postroll < required_postroll.value
+            || right_preroll < required_preroll.value
+            || left_extent < l
+            || right_extent < r
+        {
             return Err(CommandError::InsufficientTransitionHandle {
                 operation_id: op_id.to_string(),
                 code: "INSUFFICIENT_TRANSITION_HANDLE".to_string(),
                 message:
                     "Audio crossfade requires source handles and editorial extent on both clips"
                         .to_string(),
-                required_preroll: RationalTime::new(l, rate),
+                required_preroll,
                 available_preroll: RationalTime::new(right_preroll, rate),
-                required_postroll: RationalTime::new(r, rate),
+                required_postroll,
                 available_postroll: RationalTime::new(left_postroll, rate),
             });
         }
@@ -2978,6 +3807,7 @@ impl CommandService {
         item_id: &str,
         new_timeline_range: &TimeRange,
         new_source_range: &TimeRange,
+        candidate_speed: Option<ClipSpeed>,
         op_id: &str,
     ) -> Result<(), CommandError> {
         let target_rate = project.settings.frame_rate;
@@ -2986,9 +3816,8 @@ impl CommandService {
                 let d_ticks = t.duration.rescaled_to(target_rate).value;
                 let l_ticks = d_ticks / 2;
                 let r_ticks = d_ticks - l_ticks;
-                let req_preroll = RationalTime::new(l_ticks, target_rate);
-                let req_postroll = RationalTime::new(r_ticks, target_rate);
-
+                let req_preroll_timeline = RationalTime::new(l_ticks, target_rate);
+                let req_postroll_timeline = RationalTime::new(r_ticks, target_rate);
                 if t.left_item_id == item_id {
                     if let Some(right) = track.find_item(&t.right_item_id) {
                         if new_timeline_range
@@ -3040,14 +3869,36 @@ impl CommandService {
                             let right_src_start = right.source_range.start.rescaled_to(target_rate);
                             let avail_preroll_ticks = right_src_start.value;
                             let avail_preroll = RationalTime::new(avail_preroll_ticks, target_rate);
+                            let left_speed = candidate_speed.unwrap_or(left_item.speed);
+                            let required_postroll = left_speed
+                                .source_duration_for(
+                                    req_postroll_timeline,
+                                    new_source_range.duration.rate,
+                                )
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?
+                                .rescaled_to(target_rate);
+                            let required_preroll = right
+                                .speed
+                                .source_duration_for(
+                                    req_preroll_timeline,
+                                    right.source_range.duration.rate,
+                                )
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?
+                                .rescaled_to(target_rate);
 
                             let left_ext_ticks =
                                 new_timeline_range.duration.rescaled_to(target_rate).value;
                             let right_ext_ticks =
                                 right.timeline_range.duration.rescaled_to(target_rate).value;
 
-                            if avail_postroll_ticks < r_ticks
-                                || avail_preroll_ticks < l_ticks
+                            if avail_postroll_ticks < required_postroll.value
+                                || avail_preroll_ticks < required_preroll.value
                                 || left_ext_ticks < l_ticks
                                 || right_ext_ticks < r_ticks
                             {
@@ -3055,9 +3906,9 @@ impl CommandService {
                                     operation_id: op_id.to_string(),
                                     code: "INSUFFICIENT_TRANSITION_HANDLE".to_string(),
                                     message: "Cannot create CrossDissolve: required media handle exceeds available source frames.".to_string(),
-                                    required_preroll: req_preroll,
+                                    required_preroll,
                                     available_preroll: avail_preroll,
-                                    required_postroll: req_postroll,
+                                    required_postroll,
                                     available_postroll: avail_postroll,
                                 });
                             }
@@ -3115,14 +3966,36 @@ impl CommandService {
                             let new_src_start = new_source_range.start.rescaled_to(target_rate);
                             let avail_preroll_ticks = new_src_start.value;
                             let avail_preroll = RationalTime::new(avail_preroll_ticks, target_rate);
+                            let required_postroll = left
+                                .speed
+                                .source_duration_for(
+                                    req_postroll_timeline,
+                                    left.source_range.duration.rate,
+                                )
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?
+                                .rescaled_to(target_rate);
+                            let right_speed = candidate_speed.unwrap_or(right_item.speed);
+                            let required_preroll = right_speed
+                                .source_duration_for(
+                                    req_preroll_timeline,
+                                    new_source_range.duration.rate,
+                                )
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?
+                                .rescaled_to(target_rate);
 
                             let left_ext_ticks =
                                 left.timeline_range.duration.rescaled_to(target_rate).value;
                             let right_ext_ticks =
                                 new_timeline_range.duration.rescaled_to(target_rate).value;
 
-                            if avail_preroll_ticks < l_ticks
-                                || avail_postroll_ticks < r_ticks
+                            if avail_preroll_ticks < required_preroll.value
+                                || avail_postroll_ticks < required_postroll.value
                                 || left_ext_ticks < l_ticks
                                 || right_ext_ticks < r_ticks
                             {
@@ -3130,9 +4003,9 @@ impl CommandService {
                                     operation_id: op_id.to_string(),
                                     code: "INSUFFICIENT_TRANSITION_HANDLE".to_string(),
                                     message: "Cannot create CrossDissolve: required media handle exceeds available source frames.".to_string(),
-                                    required_preroll: req_preroll,
+                                    required_preroll,
                                     available_preroll: avail_preroll,
-                                    required_postroll: req_postroll,
+                                    required_postroll,
                                     available_postroll: avail_postroll,
                                 });
                             }
@@ -3601,7 +4474,9 @@ mod tests {
                         name: "camera_footage.mp4".to_string(),
                         path: "D:/media/camera_footage.mp4".to_string(),
                         media_kind: crate::modules::domain::MediaKind::Video,
+                        duration: Some(RationalTime::from_frames(300, rate)),
                         file_size: 1024 * 1024 * 10,
+                        dimensions: None,
                     },
                 }],
             })
@@ -3777,6 +4652,413 @@ mod tests {
         assert_eq!(loaded, *proj);
 
         let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_phase19_text_template_style_and_reset_round_trip() {
+        let rate = FrameRate::FPS_30;
+        let mut service = CommandService::new(create_test_project());
+        let pid = service.project().project_id.clone();
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase19_create".to_string()),
+                operations: vec![
+                    OperationEnvelope {
+                        operation_id: "op_phase19_track".to_string(),
+                        operation: CommandOperation::TrackCreate {
+                            track_id: Some("trk_phase19_text".to_string()),
+                            name: "Text".to_string(),
+                            kind: TrackKind::Video,
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase19_clip".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: "trk_phase19_text".to_string(),
+                            item_id: Some("clip_phase19_text".to_string()),
+                            name: "Title".to_string(),
+                            kind: ItemKind::Text,
+                            asset_id: None,
+                            timeline_start: RationalTime::zero(rate),
+                            duration: RationalTime::from_frames(90, rate),
+                            source_start: Some(RationalTime::zero(rate)),
+                        },
+                    },
+                ],
+            })
+            .unwrap();
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase19_template".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase19_template".to_string(),
+                    operation: CommandOperation::TextTemplateApply {
+                        item_id: "clip_phase19_text".to_string(),
+                        template_id: "center-pop".to_string(),
+                        template_version: 1,
+                    },
+                }],
+            })
+            .unwrap();
+
+        let item = service.project().tracks[0]
+            .find_item("clip_phase19_text")
+            .unwrap();
+        assert_eq!(
+            item.text_template,
+            Some(TextTemplateReference {
+                template_id: "center-pop".to_string(),
+                template_version: 1,
+            })
+        );
+        assert_eq!(
+            item.text_style.as_ref().unwrap().anchor,
+            crate::modules::domain::TextAnchor::Center
+        );
+        assert_eq!(item.text_style.as_ref().unwrap().font_size, 64.0);
+
+        let mut custom_style = TextStyle::default();
+        custom_style.font_color = "#00FF88".to_string();
+        custom_style.alignment = crate::modules::domain::TextAlignment::Left;
+        custom_style.anchor = crate::modules::domain::TextAnchor::BottomLeft;
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: 2,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase19_custom_style".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase19_custom_style".to_string(),
+                    operation: CommandOperation::ClipTextStyleSet {
+                        item_id: "clip_phase19_text".to_string(),
+                        style: custom_style.clone(),
+                    },
+                }],
+            })
+            .unwrap();
+
+        let item = service.project().tracks[0]
+            .find_item("clip_phase19_text")
+            .unwrap();
+        assert_eq!(
+            item.text_template,
+            Some(TextTemplateReference {
+                template_id: "center-pop".to_string(),
+                template_version: 1,
+            })
+        );
+        assert_eq!(item.text_style, Some(custom_style.clone()));
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid,
+                base_revision: 3,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase19_reset".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase19_reset".to_string(),
+                    operation: CommandOperation::ClipTextTemplateReset {
+                        item_id: "clip_phase19_text".to_string(),
+                    },
+                }],
+            })
+            .unwrap();
+
+        let item = service.project().tracks[0]
+            .find_item("clip_phase19_text")
+            .unwrap();
+        assert_eq!(
+            item.text_template,
+            Some(TextTemplateReference {
+                template_id: "center-pop".to_string(),
+                template_version: 1,
+            })
+        );
+        assert_eq!(item.text_style.as_ref().unwrap().font_size, 64.0);
+        assert_eq!(
+            item.text_style.as_ref().unwrap().anchor,
+            crate::modules::domain::TextAnchor::Center
+        );
+
+        for (index, template_id) in [
+            "clean-lower-third",
+            "bold-headline",
+            "center-pop",
+            "subtitle-card",
+            "quote-card",
+            "call-to-action",
+        ]
+        .iter()
+        .enumerate()
+        {
+            service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: service.project().project_id.clone(),
+                    base_revision: service.revision(),
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: Some(format!("tx_phase19_template_{index}")),
+                    operations: vec![OperationEnvelope {
+                        operation_id: format!("op_phase19_template_{index}"),
+                        operation: CommandOperation::TextTemplateApply {
+                            item_id: "clip_phase19_text".to_string(),
+                            template_id: (*template_id).to_string(),
+                            template_version: 1,
+                        },
+                    }],
+                })
+                .unwrap();
+
+            let item = service.project().tracks[0]
+                .find_item("clip_phase19_text")
+                .unwrap();
+            assert_eq!(
+                item.text_template.as_ref().unwrap().template_id,
+                *template_id
+            );
+            assert!(item.text_style.is_some());
+        }
+    }
+
+    #[test]
+    fn test_phase24_text_track_style_and_template_batches_are_atomic_and_scoped() {
+        let rate = FrameRate::FPS_30;
+        let mut service = CommandService::new(create_test_project());
+        let project_id = service.project().project_id.clone();
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase24_create".to_string()),
+                operations: vec![
+                    OperationEnvelope {
+                        operation_id: "op_phase24_caption_track".to_string(),
+                        operation: CommandOperation::TrackCreate {
+                            track_id: Some("trk_phase24_captions".to_string()),
+                            name: "Captions".to_string(),
+                            kind: TrackKind::Video,
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase24_note_track".to_string(),
+                        operation: CommandOperation::TrackCreate {
+                            track_id: Some("trk_phase24_notes".to_string()),
+                            name: "Notes".to_string(),
+                            kind: TrackKind::Video,
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase24_empty_track".to_string(),
+                        operation: CommandOperation::TrackCreate {
+                            track_id: Some("trk_phase24_empty".to_string()),
+                            name: "Empty captions".to_string(),
+                            kind: TrackKind::Video,
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase24_caption_a".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: "trk_phase24_captions".to_string(),
+                            item_id: Some("clip_phase24_caption_a".to_string()),
+                            name: "Caption A".to_string(),
+                            kind: ItemKind::Text,
+                            asset_id: None,
+                            timeline_start: RationalTime::zero(rate),
+                            duration: RationalTime::from_frames(90, rate),
+                            source_start: Some(RationalTime::zero(rate)),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase24_caption_b".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: "trk_phase24_captions".to_string(),
+                            item_id: Some("clip_phase24_caption_b".to_string()),
+                            name: "Caption B".to_string(),
+                            kind: ItemKind::Text,
+                            asset_id: None,
+                            timeline_start: RationalTime::from_frames(90, rate),
+                            duration: RationalTime::from_frames(90, rate),
+                            source_start: Some(RationalTime::zero(rate)),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase24_note".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: "trk_phase24_notes".to_string(),
+                            item_id: Some("clip_phase24_note".to_string()),
+                            name: "Note".to_string(),
+                            kind: ItemKind::Text,
+                            asset_id: None,
+                            timeline_start: RationalTime::zero(rate),
+                            duration: RationalTime::from_frames(60, rate),
+                            source_start: Some(RationalTime::zero(rate)),
+                        },
+                    },
+                ],
+            })
+            .unwrap();
+
+        let note_style_before = service
+            .project()
+            .find_track("trk_phase24_notes")
+            .unwrap()
+            .find_item("clip_phase24_note")
+            .unwrap()
+            .text_style
+            .clone();
+
+        let mut style = TextStyle::default();
+        style.font_color = "#00FF88".to_string();
+        style.font_size = 52.0;
+
+        let style_receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase24_style".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase24_style".to_string(),
+                    operation: CommandOperation::TextTrackStyleSet {
+                        track_id: "trk_phase24_captions".to_string(),
+                        style: style.clone(),
+                    },
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(style_receipt.operations_applied, 1);
+        assert_eq!(
+            style_receipt.receipts[0].affected_track_id.as_deref(),
+            Some("trk_phase24_captions")
+        );
+        let caption_track = service
+            .project()
+            .find_track("trk_phase24_captions")
+            .unwrap();
+        for item_id in ["clip_phase24_caption_a", "clip_phase24_caption_b"] {
+            assert_eq!(
+                caption_track.find_item(item_id).unwrap().text_style,
+                Some(style.clone())
+            );
+        }
+        assert_eq!(
+            service
+                .project()
+                .find_track("trk_phase24_notes")
+                .unwrap()
+                .find_item("clip_phase24_note")
+                .unwrap()
+                .text_style,
+            note_style_before
+        );
+
+        let template_receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 2,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase24_template".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase24_template".to_string(),
+                    operation: CommandOperation::TextTrackTemplateApply {
+                        track_id: "trk_phase24_captions".to_string(),
+                        template_id: "subtitle-card".to_string(),
+                        template_version: 1,
+                    },
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(template_receipt.operations_applied, 1);
+        assert_eq!(
+            template_receipt.receipts[0].affected_track_id.as_deref(),
+            Some("trk_phase24_captions")
+        );
+        let caption_track = service
+            .project()
+            .find_track("trk_phase24_captions")
+            .unwrap();
+        for item_id in ["clip_phase24_caption_a", "clip_phase24_caption_b"] {
+            let item = caption_track.find_item(item_id).unwrap();
+            assert_eq!(
+                item.text_template,
+                Some(TextTemplateReference {
+                    template_id: "subtitle-card".to_string(),
+                    template_version: 1,
+                })
+            );
+            assert!(item.text_style.is_some());
+        }
+
+        let err = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 3,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase24_empty".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase24_empty".to_string(),
+                    operation: CommandOperation::TextTrackStyleSet {
+                        track_id: "trk_phase24_empty".to_string(),
+                        style,
+                    },
+                }],
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            CommandError::OperationValidationFailed { ref message, .. }
+                if message.contains("does not contain text items")
+        ));
+        assert_eq!(service.revision(), 3);
     }
 
     #[test]
@@ -5094,6 +6376,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(100, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         };
         let a2 = crate::modules::domain::Asset {
             asset_id: "ast_2".to_string(),
@@ -5102,6 +6385,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(100, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(a1);
         project.assets.push(a2);
@@ -5566,6 +6850,62 @@ mod tests {
     }
 
     #[test]
+    fn test_phase22_visual_effect_command_and_history_round_trip() {
+        use crate::modules::domain::VisualEffectPreset;
+
+        let (project, pid, _track_id, item_id, _right_item_id) = setup_phase13_test_project();
+        let mut service = CommandService::new(project.clone());
+        let prior_snapshot = project;
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p22_effect".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p22_effect".to_string(),
+                    operation: CommandOperation::ClipVisualEffectSet {
+                        item_id: item_id.clone(),
+                        visual_effect: VisualEffectPreset::Vivid,
+                    },
+                }],
+            })
+            .expect("video visual effect command succeeds");
+
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .visual_effect,
+            VisualEffectPreset::Vivid
+        );
+
+        let mut history = crate::modules::history::HistoryManager::new(20);
+        let mut active = service.project().clone();
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Set Vivid effect".to_string(),
+            transaction_id: Some("tx_p22_effect".to_string()),
+            prior_snapshot,
+            resulting_snapshot: active.clone(),
+        });
+        history.undo(&mut active).expect("undo visual effect");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().visual_effect,
+            VisualEffectPreset::None
+        );
+        history.redo(&mut active).expect("redo visual effect");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().visual_effect,
+            VisualEffectPreset::Vivid
+        );
+    }
+
+    #[test]
     fn test_phase13_zero_duration_rejected() {
         let (project, pid, trk_id, itm1, itm2) = setup_phase13_test_project();
         let mut service = CommandService::new(project);
@@ -5763,6 +7103,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(35, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         };
         // Clip 2: asset duration = 50 frames. source: 5..35. Available preroll = 5 frames.
         let a2 = crate::modules::domain::Asset {
@@ -5772,6 +7113,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(50, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(a1);
         project.assets.push(a2);
@@ -6182,6 +7524,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(100, fps)),
             file_size: 1024,
+            dimensions: None,
         };
         let ast2 = Asset {
             asset_id: "ast_trim_2".to_string(),
@@ -6190,6 +7533,7 @@ mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(100, fps)),
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(ast1);
         project.assets.push(ast2);
@@ -6538,6 +7882,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(120, FrameRate::FPS_30)), // 4.0s
             file_size: 1024,
+            dimensions: None,
         };
         let a2 = crate::modules::domain::Asset {
             asset_id: "ast_mixed_2".to_string(),
@@ -6546,6 +7891,7 @@ mod tests {
             media_kind: crate::modules::domain::MediaKind::Video,
             duration: Some(RationalTime::new(240, FrameRate::FPS_60)), // 4.0s
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(a1);
         project.assets.push(a2);
@@ -6809,5 +8155,301 @@ mod tests {
         assert_eq!(reopened_plan.transitions[0].cut_time.to_seconds(), 2.0);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn project_canvas_settings_command_is_validated_and_round_trips_through_history() {
+        let project = create_test_project();
+        let project_id = project.project_id.clone();
+        let prior_snapshot = project.clone();
+        let mut service = CommandService::new(project);
+
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_canvas_preset".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_canvas_vertical".to_string(),
+                    operation: CommandOperation::ProjectSettingsSet {
+                        width: 1080,
+                        height: 1920,
+                    },
+                }],
+            })
+            .expect("vertical canvas command should succeed");
+
+        assert_eq!(receipt.operations_applied, 1);
+        assert_eq!(service.project().settings.width, 1080);
+        assert_eq!(service.project().settings.height, 1920);
+        assert_eq!(service.project().revision, 1);
+
+        let resulting_snapshot = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(20);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Canvas preset: 9:16 Vertical".to_string(),
+            transaction_id: receipt.transaction_id,
+            prior_snapshot,
+            resulting_snapshot: resulting_snapshot.clone(),
+        });
+
+        let mut active = resulting_snapshot;
+        history.undo(&mut active).expect("canvas edit should undo");
+        assert_eq!(
+            (active.settings.width, active.settings.height),
+            (1920, 1080)
+        );
+        history.redo(&mut active).expect("canvas edit should redo");
+        assert_eq!(
+            (active.settings.width, active.settings.height),
+            (1080, 1920)
+        );
+
+        let invalid = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: service.project().project_id.clone(),
+            base_revision: service.revision(),
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_canvas_invalid".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_canvas_odd_dimension".to_string(),
+                operation: CommandOperation::ProjectSettingsSet {
+                    width: 1081,
+                    height: 1920,
+                },
+            }],
+        });
+        assert!(matches!(
+            invalid,
+            Err(CommandError::OperationValidationFailed { ref message, .. })
+                if message.contains("even")
+        ));
+        assert_eq!(
+            (
+                service.project().settings.width,
+                service.project().settings.height
+            ),
+            (1080, 1920),
+            "a rejected canvas command must not change the current project"
+        );
+    }
+
+    #[test]
+    fn canvas_background_command_is_validated_and_round_trips_through_history() {
+        let project = create_test_project();
+        let project_id = project.project_id.clone();
+        let prior_snapshot = project.clone();
+        let mut service = CommandService::new(project);
+
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_canvas_background".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_canvas_background".to_string(),
+                    operation: CommandOperation::CanvasBackgroundSet {
+                        color: "#3b82f6".to_string(),
+                    },
+                }],
+            })
+            .expect("canvas background command should succeed");
+
+        assert_eq!(receipt.operations_applied, 1);
+        assert_eq!(
+            service.project().settings.canvas_background_color,
+            "#3B82F6"
+        );
+
+        let resulting_snapshot = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(20);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Canvas background".to_string(),
+            transaction_id: receipt.transaction_id,
+            prior_snapshot,
+            resulting_snapshot: resulting_snapshot.clone(),
+        });
+
+        let mut active = resulting_snapshot;
+        history
+            .undo(&mut active)
+            .expect("background edit should undo");
+        assert_eq!(active.settings.canvas_background_color, "#000000");
+        history
+            .redo(&mut active)
+            .expect("background edit should redo");
+        assert_eq!(active.settings.canvas_background_color, "#3B82F6");
+
+        let invalid = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: service.project().project_id.clone(),
+            base_revision: service.revision(),
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_canvas_background_invalid".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_canvas_background_invalid".to_string(),
+                operation: CommandOperation::CanvasBackgroundSet {
+                    color: "blue".to_string(),
+                },
+            }],
+        });
+        assert!(matches!(
+            invalid,
+            Err(CommandError::OperationValidationFailed { ref message, .. })
+                if message.contains("#RRGGBB")
+        ));
+        assert_eq!(
+            service.project().settings.canvas_background_color,
+            "#3B82F6",
+            "a rejected background command must not change the current project"
+        );
+    }
+
+    #[test]
+    fn clip_placement_mode_is_a_video_command() {
+        let project = create_test_project();
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_create_video_for_placement".to_string()),
+                operations: vec![
+                    OperationEnvelope {
+                        operation_id: "op_track".to_string(),
+                        operation: CommandOperation::TrackCreate {
+                            track_id: Some("trk_video".to_string()),
+                            name: "Video".to_string(),
+                            kind: TrackKind::Video,
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_clip".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: "trk_video".to_string(),
+                            item_id: Some("clip_video".to_string()),
+                            name: "Video".to_string(),
+                            kind: ItemKind::Video,
+                            asset_id: None,
+                            timeline_start: RationalTime::zero(FrameRate::FPS_30),
+                            duration: RationalTime::from_frames(30, FrameRate::FPS_30),
+                            source_start: None,
+                        },
+                    },
+                ],
+            })
+            .expect("video clip creation should succeed");
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: service.project().project_id.clone(),
+                base_revision: service.revision(),
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_fill_placement".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_fill".to_string(),
+                    operation: CommandOperation::ClipPlacementModeSet {
+                        item_id: "clip_video".to_string(),
+                        placement_mode: PlacementMode::Fill,
+                    },
+                }],
+            })
+            .expect("video placement mode should succeed");
+
+        assert_eq!(
+            service.project().tracks[0].items[0].placement_mode,
+            PlacementMode::Fill
+        );
+    }
+
+    #[test]
+    fn clip_speed_set_updates_source_coverage_and_rejects_overrun() {
+        let (project, project_id, _, item_id, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_double_speed".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_double_speed".to_string(),
+                    operation: CommandOperation::ClipSpeedSet {
+                        item_id: item_id.clone(),
+                        speed: ClipSpeed::Double,
+                    },
+                }],
+            })
+            .expect("double speed should use 60 source frames for a 30-frame timeline clip");
+
+        let item = service.project().tracks[0]
+            .find_item(&item_id)
+            .expect("speed-up clip exists");
+        assert_eq!(item.speed, ClipSpeed::Double);
+        assert_eq!(
+            item.source_range.duration,
+            RationalTime::from_frames(60, FrameRate::FPS_30)
+        );
+
+        let (mut too_short_project, too_short_project_id, _, too_short_item_id, _) =
+            setup_phase13_test_project();
+        too_short_project.assets[0].duration =
+            Some(RationalTime::from_frames(65, FrameRate::FPS_30));
+        let mut too_short_service = CommandService::new(too_short_project);
+        let result = too_short_service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: too_short_project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_reject_overrun".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_reject_overrun".to_string(),
+                operation: CommandOperation::ClipSpeedSet {
+                    item_id: too_short_item_id,
+                    speed: ClipSpeed::Double,
+                },
+            }],
+        });
+
+        assert!(matches!(
+            result,
+            Err(CommandError::OperationValidationFailed { ref message, .. })
+                if message.contains("beyond the available media source range")
+        ));
     }
 }

@@ -13,7 +13,7 @@ pub use automation::{
 
 use crate::modules::composition::CompositionPlan;
 use crate::modules::domain::time::FrameRate;
-use crate::modules::domain::Project;
+use crate::modules::domain::{Project, ProjectSettings};
 use crate::modules::media::resolver::MediaBinaryResolver;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -44,6 +44,43 @@ pub enum ExportError {
 
 fn default_export_audio_sample_rate() -> u32 {
     48000
+}
+
+/// Named, output-only quality choices for MP4 rendering.
+///
+/// Every preset inherits the project canvas and frame rate. This keeps export
+/// composition aligned with the canonical project semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportPreset {
+    Balanced,
+    HighQuality,
+    SmallerFile,
+}
+
+impl Default for ExportPreset {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl ExportPreset {
+    pub fn profile_for(self, settings: &ProjectSettings) -> ExportProfile {
+        let mut profile = ExportProfile::from_project_settings(settings);
+        match self {
+            Self::Balanced => {}
+            Self::HighQuality => {
+                profile.crf = 18;
+                profile.preset = "slow".to_string();
+                profile.audio_bitrate = "256k".to_string();
+            }
+            Self::SmallerFile => {
+                profile.crf = 28;
+                profile.audio_bitrate = "128k".to_string();
+            }
+        }
+        profile
+    }
 }
 
 /// Bounded output profile for deterministic MP4 export
@@ -78,6 +115,17 @@ impl Default for ExportProfile {
 }
 
 impl ExportProfile {
+    /// Derive the default export target from the canonical project canvas.
+    pub fn from_project_settings(settings: &ProjectSettings) -> Self {
+        Self {
+            width: settings.width,
+            height: settings.height,
+            frame_rate: settings.frame_rate,
+            audio_sample_rate: settings.sample_rate,
+            ..Self::default()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ExportError> {
         let supported_codecs = ["auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf"];
         if !supported_codecs.contains(&self.video_codec.as_str()) {
@@ -106,6 +154,25 @@ impl ExportProfile {
         if self.crf > 51 {
             return Err(ExportError::UnsupportedProfile(
                 "CRF must be between 0 and 51".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The current composition renderer always renders the canonical project
+    /// canvas and frame rate. Reject contradictory profiles instead of
+    /// accepting output settings that the renderer cannot honor.
+    pub fn validate_for_project(&self, settings: &ProjectSettings) -> Result<(), ExportError> {
+        self.validate()?;
+        if self.width != settings.width || self.height != settings.height {
+            return Err(ExportError::UnsupportedProfile(format!(
+                "Export dimensions {}x{} must match the project canvas {}x{}",
+                self.width, self.height, settings.width, settings.height
+            )));
+        }
+        if self.frame_rate != settings.frame_rate {
+            return Err(ExportError::UnsupportedProfile(
+                "Export frame rate must match the project frame rate".to_string(),
             ));
         }
         Ok(())
@@ -281,6 +348,16 @@ impl ExportEngine {
                     ExportError::RenderFailed(format!("Failed to spawn FFmpeg process: {e}"))
                 })?;
 
+            // Drain stderr concurrently while FFmpeg runs. Reading it only after
+            // wait/try_wait can deadlock when the OS pipe buffer fills.
+            let mut stderr_reader = child.stderr.take().map(|mut err_pipe| {
+                std::thread::spawn(move || {
+                    use std::io::Read;
+                    let mut stderr = String::new();
+                    let _ = err_pipe.read_to_string(&mut stderr);
+                    stderr
+                })
+            });
             let mut cancelled = false;
             let mut render_success = false;
             let mut stderr_str = String::new();
@@ -291,6 +368,9 @@ impl ExportEngine {
                         cancelled = true;
                         let _ = child.kill();
                         let _ = child.wait();
+                        if let Some(reader) = stderr_reader.take() {
+                            let _ = reader.join();
+                        }
                         break;
                     }
                 }
@@ -299,11 +379,11 @@ impl ExportEngine {
                     Ok(Some(status)) => {
                         if status.success() {
                             render_success = true;
-                        } else {
-                            if let Some(mut err_pipe) = child.stderr.take() {
-                                use std::io::Read;
-                                let _ = err_pipe.read_to_string(&mut stderr_str);
-                            }
+                        }
+                        if let Some(reader) = stderr_reader.take() {
+                            stderr_str = reader
+                                .join()
+                                .unwrap_or_else(|_| "Failed to collect FFmpeg stderr".to_string());
                         }
                         break;
                     }
@@ -312,6 +392,10 @@ impl ExportEngine {
                     }
                     Err(e) => {
                         let _ = child.kill();
+                        let _ = child.wait();
+                        if let Some(reader) = stderr_reader.take() {
+                            let _ = reader.join();
+                        }
                         let _ = fs::remove_file(&temp_output_path);
                         return Err(ExportError::RenderFailed(format!(
                             "Error checking FFmpeg process: {e}"
@@ -411,6 +495,26 @@ pub mod tests {
         dir
     }
 
+    #[test]
+    fn default_profile_inherits_the_canonical_project_canvas() {
+        let settings = ProjectSettings {
+            width: 1080,
+            height: 1920,
+            canvas_background_color: "#000000".to_string(),
+            frame_rate: FrameRate::FPS_60,
+            sample_rate: 44_100,
+            channels: 2,
+        };
+
+        let profile = ExportProfile::from_project_settings(&settings);
+
+        assert_eq!(profile.width, 1080);
+        assert_eq!(profile.height, 1920);
+        assert_eq!(profile.frame_rate, FrameRate::FPS_60);
+        assert_eq!(profile.audio_sample_rate, 44_100);
+        assert!(profile.validate().is_ok());
+    }
+
     fn generate_synthetic_mp4(path: &Path, duration_secs: u32, color: &str) {
         if path.exists() {
             return;
@@ -466,6 +570,53 @@ pub mod tests {
     }
 
     #[test]
+    fn social_export_presets_inherit_the_canonical_project_canvas() {
+        let settings = ProjectSettings {
+            width: 1080,
+            height: 1920,
+            canvas_background_color: "#000000".to_string(),
+            frame_rate: FrameRate::FPS_60,
+            sample_rate: 48000,
+            channels: 2,
+        };
+
+        let balanced = ExportPreset::Balanced.profile_for(&settings);
+        let high_quality = ExportPreset::HighQuality.profile_for(&settings);
+        let smaller_file = ExportPreset::SmallerFile.profile_for(&settings);
+
+        for profile in [&balanced, &high_quality, &smaller_file] {
+            assert_eq!((profile.width, profile.height), (1080, 1920));
+            assert_eq!(profile.frame_rate, FrameRate::FPS_60);
+            assert_eq!(profile.audio_sample_rate, 48000);
+            assert!(profile.validate_for_project(&settings).is_ok());
+        }
+        assert_eq!(balanced.crf, 23);
+        assert_eq!(high_quality.crf, 18);
+        assert_eq!(high_quality.audio_bitrate, "256k");
+        assert_eq!(smaller_file.crf, 28);
+        assert_eq!(smaller_file.audio_bitrate, "128k");
+    }
+
+    #[test]
+    fn export_profile_rejects_a_canvas_or_frame_rate_that_cannot_be_rendered() {
+        let settings = ProjectSettings {
+            width: 1080,
+            height: 1920,
+            canvas_background_color: "#000000".to_string(),
+            frame_rate: FrameRate::FPS_30,
+            sample_rate: 48000,
+            channels: 2,
+        };
+        let mut profile = ExportPreset::Balanced.profile_for(&settings);
+        profile.width = 1920;
+        assert!(profile.validate_for_project(&settings).is_err());
+
+        profile.width = settings.width;
+        profile.frame_rate = FrameRate::FPS_60;
+        assert!(profile.validate_for_project(&settings).is_err());
+    }
+
+    #[test]
     fn test_export_snapshot_isolation_and_atomic_promotion() {
         let fixture_dir = get_fixture_dir();
         let test_dir = fixture_dir.join("isolation_sub");
@@ -477,6 +628,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 640,
             height: 360,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
@@ -490,6 +642,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(90, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
@@ -566,6 +719,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 640,
             height: 360,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
@@ -579,6 +733,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(120, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
@@ -647,6 +802,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 640,
             height: 360,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
@@ -660,6 +816,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(90, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let mut track = Track::new("Video Track".to_string(), TrackKind::Video);

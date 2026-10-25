@@ -3,7 +3,10 @@
 //! Invariant: No FFmpeg syntax or HTML/CSS in canonical domain state; both preview and export consume this normalized plan.
 
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
-use crate::modules::domain::{Crop, ItemKind, Project, TrackKind, Transform};
+use crate::modules::domain::{
+    AssetDimensions, ClipSpeed, Crop, ItemKind, PlacementMode, Project, TextAnimation,
+    TextRichStyle, TextStyle, TextTemplateReference, TrackKind, Transform, VisualEffectPreset,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,6 +41,17 @@ pub use parity::{
     ParitySuiteReport,
 };
 
+/// Keeps source timestamps in the asset's native timebase when doing so does
+/// not discard a fractional source-frame position introduced by speed control.
+fn preserve_source_rate_when_exact(time: RationalTime, source_rate: FrameRate) -> RationalTime {
+    let rescaled = time.rescaled_to(source_rate);
+    if rescaled.semantic_eq(&time) {
+        rescaled
+    } else {
+        time
+    }
+}
+
 /// Bounding rectangle on the canvas coordinate space
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -58,20 +72,75 @@ pub struct CompositionVisualLayer {
     pub kind: ItemKind,
     pub asset_id: Option<String>,
     pub asset_path: Option<PathBuf>,
+    pub source_dimensions: Option<AssetDimensions>,
     pub timeline_range: TimeRange,
     pub source_range: TimeRange,
+    pub speed: ClipSpeed,
     pub transform: Transform,
     pub crop: Crop,
+    pub placement_mode: PlacementMode,
+    pub visual_effect: VisualEffectPreset,
     pub opacity: f32,
     pub text_content: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub font_color: Option<String>,
+    pub text_style: Option<TextStyle>,
+    pub text_template: Option<TextTemplateReference>,
+    #[serde(default)]
+    pub text_rich: Option<TextRichStyle>,
+    #[serde(default)]
+    pub text_animation: Option<TextAnimation>,
     pub keyframes: Vec<CompositionKeyframe>,
     pub transition: Option<CompositionTransition>,
 }
 
 impl CompositionVisualLayer {
+    pub fn source_time_at(&self, timeline_time: RationalTime) -> RationalTime {
+        let offset = timeline_time.sub_exact(&self.timeline_range.start);
+        preserve_source_rate_when_exact(
+            self.source_range
+                .start
+                .add_exact(&self.speed.source_offset_for(offset)),
+            self.source_range.start.rate,
+        )
+    }
+
+    /// Returns post-crop display dimensions in canvas pixels. Source metadata is
+    /// optional for compatibility with legacy projects; without it we preserve
+    /// the original canvas-sized placement behavior.
+    pub fn rendered_size(
+        &self,
+        canvas_width: f32,
+        canvas_height: f32,
+        scale_x: f32,
+        scale_y: f32,
+    ) -> (f32, f32) {
+        let crop_width = 1.0 - self.crop.left - self.crop.right;
+        let crop_height = 1.0 - self.crop.top - self.crop.bottom;
+        if let Some(dimensions) = &self.source_dimensions {
+            let cropped_width = dimensions.width as f32 * crop_width;
+            let cropped_height = dimensions.height as f32 * crop_height;
+            let canvas_scale = match self.placement_mode {
+                PlacementMode::Fit => {
+                    (canvas_width / cropped_width).min(canvas_height / cropped_height)
+                }
+                PlacementMode::Fill => {
+                    (canvas_width / cropped_width).max(canvas_height / cropped_height)
+                }
+            };
+            return (
+                cropped_width * canvas_scale * scale_x,
+                cropped_height * canvas_scale * scale_y,
+            );
+        }
+
+        (
+            canvas_width * crop_width * scale_x,
+            canvas_height * crop_height * scale_y,
+        )
+    }
+
     /// Evaluates animated property at a given clip-relative offset using canonical evaluator
     pub fn evaluate_property(&self, prop: KeyframeProperty, clip_offset: RationalTime) -> f32 {
         let base_val = match prop {
@@ -116,7 +185,7 @@ impl CompositionVisualLayer {
                             1.0
                         }
                     }
-                    TransitionKind::CrossDissolve => 1.0,
+                    TransitionKind::CrossDissolve | TransitionKind::DipToBlack => 1.0,
                 };
                 op *= trans_factor;
             }
@@ -135,6 +204,7 @@ pub struct CompositionAudioLayer {
     pub asset_path: Option<PathBuf>,
     pub timeline_range: TimeRange,
     pub source_range: TimeRange,
+    pub speed: ClipSpeed,
     pub volume: f32,
     pub muted: bool,
     pub fade_in: Option<RationalTime>,
@@ -143,6 +213,16 @@ pub struct CompositionAudioLayer {
 }
 
 impl CompositionAudioLayer {
+    pub fn source_time_at(&self, timeline_time: RationalTime) -> RationalTime {
+        let offset = timeline_time.sub_exact(&self.timeline_range.start);
+        preserve_source_rate_when_exact(
+            self.source_range
+                .start
+                .add_exact(&self.speed.source_offset_for(offset)),
+            self.source_range.start.rate,
+        )
+    }
+
     /// Computes effective volume gain at a specific timeline timestamp
     pub fn effective_volume_at(&self, timeline_time: RationalTime) -> f32 {
         if self.muted {
@@ -277,23 +357,11 @@ impl TransitionPlan {
     }
 
     pub fn left_source_time_at(&self, time: RationalTime) -> RationalTime {
-        let target_rate = self.left_layer.timeline_range.start.rate;
-        let t = time.rescaled_to(target_rate);
-        let delta = t.value - self.left_layer.timeline_range.start.value;
-        RationalTime::new(
-            self.left_layer.source_range.start.value + delta,
-            self.left_layer.source_range.start.rate,
-        )
+        self.left_layer.source_time_at(time)
     }
 
     pub fn right_source_time_at(&self, time: RationalTime) -> RationalTime {
-        let target_rate = self.right_layer.timeline_range.start.rate;
-        let t = time.rescaled_to(target_rate);
-        let delta = t.value - self.right_layer.timeline_range.start.value;
-        RationalTime::new(
-            self.right_layer.source_range.start.value + delta,
-            self.right_layer.source_range.start.rate,
-        )
+        self.right_layer.source_time_at(time)
     }
 
     pub fn left_effective_clip_offset(&self, time: RationalTime) -> RationalTime {
@@ -317,7 +385,10 @@ impl TransitionPlan {
         let base_op = self
             .left_layer
             .effective_opacity_at(self.left_effective_clip_offset(time));
-        (1.0 - p) * base_op
+        match self.kind {
+            TransitionKind::DipToBlack => (1.0 - (2.0 * p)).max(0.0) * base_op,
+            _ => (1.0 - p) * base_op,
+        }
     }
 
     pub fn right_opacity_at(&self, time: RationalTime) -> f32 {
@@ -325,7 +396,10 @@ impl TransitionPlan {
         let base_op = self
             .right_layer
             .effective_opacity_at(self.right_effective_clip_offset(time));
-        p * base_op
+        match self.kind {
+            TransitionKind::DipToBlack => ((2.0 * p) - 1.0).max(0.0) * base_op,
+            _ => p * base_op,
+        }
     }
 }
 
@@ -334,12 +408,27 @@ fn default_composition_sample_rate() -> u32 {
     48000
 }
 
+fn default_composition_background_color() -> String {
+    "#000000".to_string()
+}
+
+fn ffmpeg_visual_effect_filter(effect: VisualEffectPreset) -> &'static str {
+    match effect {
+        VisualEffectPreset::None => "",
+        VisualEffectPreset::Mono => ",eq=saturation=0",
+        VisualEffectPreset::Vivid => ",eq=contrast=1.12:saturation=1.25",
+        VisualEffectPreset::Muted => ",eq=contrast=0.96:saturation=0.70",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompositionPlan {
     pub project_id: String,
     pub revision: u64,
     pub width: u32,
     pub height: u32,
+    #[serde(default = "default_composition_background_color")]
+    pub canvas_background_color: String,
     pub frame_rate: FrameRate,
     pub duration: RationalTime,
     pub visual_layers: Vec<CompositionVisualLayer>,
@@ -370,7 +459,7 @@ impl CompositionPlan {
             }
         }
         let start = audio.timeline_range.start - RationalTime::new(preroll, rate);
-        let source_start = audio.source_range.start - RationalTime::new(preroll, rate);
+        let source_start = audio.source_time_at(start);
         let duration = audio.timeline_range.duration + RationalTime::new(preroll + postroll, rate);
         (start, source_start, duration)
     }
@@ -417,10 +506,15 @@ impl CompositionPlan {
         let mut audio_crossfades = Vec::new();
         let mut transitions = Vec::new();
 
-        let asset_map: HashMap<String, PathBuf> = project
+        let asset_map: HashMap<String, (PathBuf, Option<AssetDimensions>)> = project
             .assets
             .iter()
-            .map(|a| (a.asset_id.clone(), PathBuf::from(&a.path)))
+            .map(|a| {
+                (
+                    a.asset_id.clone(),
+                    (PathBuf::from(&a.path), a.dimensions.clone()),
+                )
+            })
             .collect();
 
         let mut max_time_val = 0i64;
@@ -434,10 +528,13 @@ impl CompositionPlan {
 
             for item in &track.items {
                 if let Some(ref t) = item.transition {
-                    if t.kind == TransitionKind::CrossDissolve {
+                    if matches!(
+                        t.kind,
+                        TransitionKind::CrossDissolve | TransitionKind::DipToBlack
+                    ) {
                         return Err(CompositionError::UnsupportedTransition {
                             item_id: item.item_id.clone(),
-                            transition: "CrossDissolve".to_string(),
+                            transition: format!("{:?}", t.kind),
                         });
                     }
                 }
@@ -451,15 +548,14 @@ impl CompositionPlan {
                     max_time_val = item_end;
                 }
 
-                let asset_path = if let Some(ref aid) = item.asset_id {
-                    Some(
-                        asset_map
-                            .get(aid)
-                            .cloned()
-                            .ok_or_else(|| CompositionError::MissingAsset(aid.clone()))?,
-                    )
+                let (asset_path, source_dimensions) = if let Some(ref aid) = item.asset_id {
+                    let (path, dimensions) = asset_map
+                        .get(aid)
+                        .cloned()
+                        .ok_or_else(|| CompositionError::MissingAsset(aid.clone()))?;
+                    (Some(path), dimensions)
                 } else {
-                    None
+                    (None, None)
                 };
 
                 match item.kind {
@@ -473,15 +569,23 @@ impl CompositionPlan {
                             kind: item.kind,
                             asset_id: item.asset_id.clone(),
                             asset_path: asset_path.clone(),
+                            source_dimensions,
                             timeline_range: item.timeline_range,
                             source_range: item.source_range,
+                            speed: item.speed,
                             transform: item.transform.clone(),
                             crop: item.crop.clone(),
+                            placement_mode: item.placement_mode,
+                            visual_effect: item.visual_effect,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
-                            font_family: Some("Inter".to_string()),
-                            font_size: Some(48.0),
-                            font_color: Some("#FFFFFF".to_string()),
+                            font_family: None,
+                            font_size: None,
+                            font_color: None,
+                            text_style: None,
+                            text_template: None,
+                            text_rich: None,
+                            text_animation: None,
                             keyframes: item.keyframes.clone(),
                             transition: item.transition.clone(),
                         });
@@ -497,6 +601,7 @@ impl CompositionPlan {
                                 asset_path,
                                 timeline_range: item.timeline_range,
                                 source_range: item.source_range,
+                                speed: item.speed,
                                 volume: item.volume,
                                 muted: track.muted,
                                 fade_in: item.fade_in,
@@ -515,15 +620,40 @@ impl CompositionPlan {
                             kind: ItemKind::Text,
                             asset_id: None,
                             asset_path: None,
+                            source_dimensions: None,
                             timeline_range: item.timeline_range,
                             source_range: item.source_range,
+                            speed: ClipSpeed::Normal,
                             transform: item.transform.clone(),
                             crop: item.crop.clone(),
+                            placement_mode: item.placement_mode,
+                            visual_effect: VisualEffectPreset::None,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
-                            font_family: Some("Inter".to_string()),
-                            font_size: Some(48.0),
-                            font_color: Some("#FFFFFF".to_string()),
+                            font_family: Some(
+                                item.text_style
+                                    .as_ref()
+                                    .map(|style| style.font_family.clone())
+                                    .unwrap_or_else(|| "Inter".to_string()),
+                            ),
+                            font_size: Some(
+                                item.text_style
+                                    .as_ref()
+                                    .map(|style| style.font_size)
+                                    .unwrap_or(48.0),
+                            ),
+                            font_color: Some(
+                                item.text_style
+                                    .as_ref()
+                                    .map(|style| style.font_color.clone())
+                                    .unwrap_or_else(|| "#FFFFFF".to_string()),
+                            ),
+                            text_style: Some(
+                                item.text_style.clone().unwrap_or_else(TextStyle::default),
+                            ),
+                            text_template: item.text_template.clone(),
+                            text_rich: item.text_rich.clone(),
+                            text_animation: item.text_animation.clone(),
                             keyframes: item.keyframes.clone(),
                             transition: item.transition.clone(),
                         });
@@ -538,6 +668,7 @@ impl CompositionPlan {
                             asset_path,
                             timeline_range: item.timeline_range,
                             source_range: item.source_range,
+                            speed: item.speed,
                             volume: item.volume,
                             muted: track.muted,
                             fade_in: item.fade_in,
@@ -623,6 +754,7 @@ impl CompositionPlan {
             revision: project.revision,
             width: project.settings.width,
             height: project.settings.height,
+            canvas_background_color: project.settings.canvas_background_color.clone(),
             frame_rate: project.settings.frame_rate,
             duration,
             visual_layers,
@@ -649,11 +781,7 @@ fn sample_visual_layer_at(
     let scale_y = layer.evaluate_property(KeyframeProperty::ScaleY, clip_offset);
     let rotation = layer.evaluate_property(KeyframeProperty::Rotation, clip_offset);
 
-    let cropped_w = base_w * (1.0 - layer.crop.left - layer.crop.right);
-    let cropped_h = base_h * (1.0 - layer.crop.top - layer.crop.bottom);
-
-    let render_w = cropped_w * scale_x;
-    let render_h = cropped_h * scale_y;
+    let (render_w, render_h) = layer.rendered_size(base_w, base_h, scale_x, scale_y);
     let center_x = (base_w / 2.0) + pos_x;
     let center_y = (base_h / 2.0) + pos_y;
 
@@ -681,16 +809,106 @@ fn sample_visual_layer_at(
         asset_path: asset_path_str,
         is_missing_media,
         source_time,
+        playback_rate: layer.speed.as_f64(),
         position: (pos_x, pos_y),
         scale: (scale_x, scale_y),
+        content_size: (render_w, render_h),
         rotation,
         crop: layer.crop.clone(),
+        visual_effect: layer.visual_effect,
         opacity,
         text: layer.text_content.clone(),
         font_family: layer.font_family.clone(),
         font_size: layer.font_size,
+        text_style: layer.text_style.clone(),
+        text_template: layer.text_template.clone(),
+        text_rich: layer.text_rich.clone(),
+        text_animation: layer.text_animation.clone(),
         computed_bounds: bounds,
     }
+}
+
+fn ffmpeg_canvas_color(value: &str) -> String {
+    if value == "#000000" {
+        "black".to_string()
+    } else {
+        ffmpeg_text_color(value, "0x000000")
+    }
+}
+
+fn ffmpeg_text_color(value: &str, fallback: &str) -> String {
+    let candidate = if value.len() == 9 { &value[..7] } else { value };
+    if candidate.starts_with('#') && candidate.len() == 7 {
+        format!("0x{}", &candidate[1..])
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn text_filter_options(
+    layer: &CompositionVisualLayer,
+    pos_x: f32,
+    pos_y: f32,
+    y_offset: f32,
+) -> (f32, String, String, String, String) {
+    let mut style = layer.text_style.clone().unwrap_or_default();
+    if layer.text_style.is_none() {
+        if let Some(font_size) = layer.font_size {
+            style.font_size = font_size;
+        }
+        if let Some(font_color) = &layer.font_color {
+            style.font_color = font_color.clone();
+        }
+    }
+
+    let (x, y) = match style.anchor {
+        crate::modules::domain::TextAnchor::TopLeft => {
+            (format!("{:.1}", pos_x), format!("{:.1}", pos_y + y_offset))
+        }
+        crate::modules::domain::TextAnchor::TopCenter => (
+            format!("(w-tw)/2+{:.1}", pos_x),
+            format!("{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::TopRight => (
+            format!("w-tw+{:.1}", pos_x),
+            format!("{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::MiddleLeft => (
+            format!("{:.1}", pos_x),
+            format!("(h-th)/2+{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::Center => (
+            format!("(w-tw)/2+{:.1}", pos_x),
+            format!("(h-th)/2+{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::MiddleRight => (
+            format!("w-tw+{:.1}", pos_x),
+            format!("(h-th)/2+{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::BottomLeft => (
+            format!("{:.1}", pos_x),
+            format!("h-th+{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::BottomCenter => (
+            format!("(w-tw)/2+{:.1}", pos_x),
+            format!("h-th+{:.1}", pos_y + y_offset),
+        ),
+        crate::modules::domain::TextAnchor::BottomRight => (
+            format!("w-tw+{:.1}", pos_x),
+            format!("h-th+{:.1}", pos_y + y_offset),
+        ),
+    };
+    let font_color = ffmpeg_text_color(&style.font_color, "0xFFFFFF");
+    let box_args = match style.background_color.as_deref() {
+        Some(background) if style.background_opacity > 0.0 => format!(
+            ":box=1:boxcolor={}@{:.3}:boxborderw={}",
+            ffmpeg_text_color(background, "0x000000"),
+            style.background_opacity,
+            style.padding_x.max(style.padding_y).round() as u32
+        ),
+        _ => String::new(),
+    };
+    (style.font_size, font_color, box_args, x, y)
 }
 
 impl CompositionPlan {
@@ -778,8 +996,8 @@ impl CompositionPlan {
                 active_audio.push(PreviewSampledAudio {
                     item_id: audio.item_id.clone(),
                     effective_volume: gain,
-                    source_time: audio.source_range.start
-                        + (timestamp - audio.timeline_range.start),
+                    source_time: audio.source_time_at(timestamp),
+                    playback_rate: audio.speed.as_f64(),
                     asset_path: audio
                         .asset_path
                         .as_ref()
@@ -817,7 +1035,8 @@ impl CompositionPlan {
         let mut filter_complex = String::new();
 
         filter_complex.push_str(&format!(
-            "color=c=black:s={}x{}:r={}:d={:.3}[base];",
+            "color=c={}:s={}x{}:r={}:d={:.3}[base];",
+            ffmpeg_canvas_color(&self.canvas_background_color),
             self.width,
             self.height,
             self.frame_rate.as_f64(),
@@ -905,18 +1124,23 @@ impl CompositionPlan {
 
                     match layer.kind {
                         ItemKind::Video | ItemKind::Image => {
-                            let offset_from_start = ord_start_sec - layer_start_sec;
-                            let ord_src_start =
-                                layer.source_range.start.to_seconds() + offset_from_start;
+                            let ord_src_start = layer
+                                .source_time_at(RationalTime::new(
+                                    (ord_start_sec * self.frame_rate.as_f64()).round() as i64,
+                                    self.frame_rate,
+                                ))
+                                .to_seconds();
                             let ord_duration = ord_end_sec - ord_start_sec;
+                            let source_duration = ord_duration * layer.speed.as_f64();
 
-                            let base_w = self.width as f32;
-                            let base_h = self.height as f32;
-                            let cropped_w = base_w * (1.0 - layer.crop.left - layer.crop.right);
-                            let cropped_h = base_h * (1.0 - layer.crop.top - layer.crop.bottom);
-
-                            let mut render_w = (cropped_w * scale_x).round().max(2.0) as u32;
-                            let mut render_h = (cropped_h * scale_y).round().max(2.0) as u32;
+                            let (render_width, render_height) = layer.rendered_size(
+                                self.width as f32,
+                                self.height as f32,
+                                scale_x,
+                                scale_y,
+                            );
+                            let mut render_w = render_width.round().max(2.0) as u32;
+                            let mut render_h = render_height.round().max(2.0) as u32;
                             if !render_w.is_multiple_of(2) {
                                 render_w += 1;
                             }
@@ -935,13 +1159,13 @@ impl CompositionPlan {
 
                                 if ord_start_sec.abs() < 1e-5 {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS",
-                                        input_idx, ord_src_start, ord_duration
+                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=(PTS-STARTPTS)/{:.6}",
+                                        input_idx, ord_src_start, source_duration, layer.speed.as_f64()
                                     ));
                                 } else {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS+{:.3}/TB",
-                                        input_idx, ord_src_start, ord_duration, ord_start_sec
+                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=(PTS-STARTPTS)/{:.6}+{:.3}/TB",
+                                        input_idx, ord_src_start, source_duration, layer.speed.as_f64(), ord_start_sec
                                     ));
                                 }
                             } else {
@@ -964,6 +1188,7 @@ impl CompositionPlan {
                                     layer.crop.left, layer.crop.right, layer.crop.top, layer.crop.bottom, layer.crop.left, layer.crop.top
                                 ));
                             }
+                            filter_chain.push_str(ffmpeg_visual_effect_filter(layer.visual_effect));
 
                             let layer_idx = self
                                 .visual_layers
@@ -1014,7 +1239,8 @@ impl CompositionPlan {
                                                 dur_sec
                                             ));
                                         }
-                                        TransitionKind::CrossDissolve => {}
+                                        TransitionKind::CrossDissolve
+                                        | TransitionKind::DipToBlack => {}
                                     }
                                 }
 
@@ -1045,7 +1271,8 @@ impl CompositionPlan {
                                         .replace('\\', "\\\\")
                                         .replace('\'', "'\\''")
                                         .replace(':', "\\:");
-                                    let font_size = layer.font_size.unwrap_or(48.0);
+                                    let (font_size, font_color, box_args, text_x, text_y) =
+                                        text_filter_options(layer, pos_x, pos_y, 100.0);
                                     let font_arg = if cfg!(windows)
                                         && Path::new("C:/Windows/Fonts/arial.ttf").exists()
                                     {
@@ -1054,8 +1281,10 @@ impl CompositionPlan {
                                         ""
                                     };
                                     filter_complex.push_str(&format!(
-                                        "[{}]drawtext=text='{}':fontsize={}{}:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6:x='(w-tw)/2+{:.1}':y='(h-th)/2+{:.1}+100':enable='between(t,{:.4},{:.4})'[{}];",
-                                        current_base, escaped_text, font_size, font_arg, pos_x, pos_y, start_bound, end_bound, text_base
+                                        "[{}]drawtext=text='{}':fontsize={}{}:fontcolor={}{}:x='{}':y='{}':enable='between(t,{:.4},{:.4})'[{}];",
+                                        current_base, escaped_text, font_size, font_arg, font_color,
+                                        box_args,
+                                        text_x, text_y, start_bound, end_bound, text_base
                                     ));
                                     current_base = text_base;
                                 }
@@ -1067,7 +1296,8 @@ impl CompositionPlan {
                                 .replace('\\', "\\\\")
                                 .replace('\'', "'\\''")
                                 .replace(':', "\\:");
-                            let font_size = layer.font_size.unwrap_or(48.0);
+                            let (font_size, font_color, box_args, text_x, text_y) =
+                                text_filter_options(layer, pos_x, pos_y, 0.0);
                             let font_arg = if cfg!(windows)
                                 && Path::new("C:/Windows/Fonts/arial.ttf").exists()
                             {
@@ -1079,8 +1309,10 @@ impl CompositionPlan {
                             let next_base = format!("v_over_{}", video_overlay_idx);
                             video_overlay_idx += 1;
                             filter_complex.push_str(&format!(
-                                "[{}]drawtext=text='{}':fontsize={}{}:fontcolor=white:x='(w-tw)/2+{:.1}':y='(h-th)/2+{:.1}':enable='between(t,{:.4},{:.4})'[{}];",
-                                current_base, escaped_text, font_size, font_arg, pos_x, pos_y, start_bound, end_bound, next_base
+                                "[{}]drawtext=text='{}':fontsize={}{}:fontcolor={}{}:x='{}':y='{}':enable='between(t,{:.4},{:.4})'[{}];",
+                                current_base, escaped_text, font_size, font_arg, font_color,
+                                box_args,
+                                text_x, text_y, start_bound, end_bound, next_base
                             ));
                             current_base = next_base;
                         }
@@ -1091,17 +1323,18 @@ impl CompositionPlan {
                     let dur_sec = trans.duration.to_seconds();
                     let t0_sec = trans.transition_range.start.to_seconds();
                     let t1_sec = trans.transition_range.end().to_seconds();
-                    let l_dur = trans.l_duration();
-
-                    let left_src_start = (trans.left_layer.source_range.end() - l_dur)
-                        .to_seconds()
-                        .max(0.0);
-                    let right_src_start = (trans.right_layer.source_range.start - l_dur)
-                        .to_seconds()
-                        .max(0.0);
-
                     let left_layer = &trans.left_layer;
                     let right_layer = &trans.right_layer;
+                    let left_src_start = trans
+                        .left_source_time_at(trans.transition_range.start)
+                        .to_seconds()
+                        .max(0.0);
+                    let right_src_start = trans
+                        .right_source_time_at(trans.transition_range.start)
+                        .to_seconds()
+                        .max(0.0);
+                    let left_source_duration = dur_sec * left_layer.speed.as_f64();
+                    let right_source_duration = dur_sec * right_layer.speed.as_f64();
 
                     let (
                         left_pos_x,
@@ -1161,16 +1394,15 @@ impl CompositionPlan {
                         ),
                     };
 
-                    let base_w = self.width as f32;
-                    let base_h = self.height as f32;
-
                     // Left participant render
-                    let left_cropped_w =
-                        base_w * (1.0 - left_layer.crop.left - left_layer.crop.right);
-                    let left_cropped_h =
-                        base_h * (1.0 - left_layer.crop.top - left_layer.crop.bottom);
-                    let mut left_render_w = (left_cropped_w * left_scale_x).round().max(2.0) as u32;
-                    let mut left_render_h = (left_cropped_h * left_scale_y).round().max(2.0) as u32;
+                    let (left_width, left_height) = left_layer.rendered_size(
+                        self.width as f32,
+                        self.height as f32,
+                        left_scale_x,
+                        left_scale_y,
+                    );
+                    let mut left_render_w = left_width.round().max(2.0) as u32;
+                    let mut left_render_h = left_height.round().max(2.0) as u32;
                     if !left_render_w.is_multiple_of(2) {
                         left_render_w += 1;
                     }
@@ -1183,8 +1415,11 @@ impl CompositionPlan {
                     if let Some(ref path) = left_layer.asset_path {
                         let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
                         left_clip_filter.push_str(&format!(
-                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=PTS-STARTPTS",
-                            input_idx, left_src_start, dur_sec
+                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
+                            input_idx,
+                            left_src_start,
+                            left_source_duration,
+                            left_layer.speed.as_f64()
                         ));
                     } else {
                         left_clip_filter.push_str(&format!(
@@ -1204,6 +1439,8 @@ impl CompositionPlan {
                             left_layer.crop.left, left_layer.crop.right, left_layer.crop.top, left_layer.crop.bottom, left_layer.crop.left, left_layer.crop.top
                         ));
                     }
+                    left_clip_filter
+                        .push_str(ffmpeg_visual_effect_filter(left_layer.visual_effect));
                     left_clip_filter
                         .push_str(&format!(",scale={}:{}", left_render_w, left_render_h));
                     if left_rotation.abs() > 0.01 {
@@ -1263,14 +1500,14 @@ impl CompositionPlan {
                     ));
 
                     // Right participant render
-                    let right_cropped_w =
-                        base_w * (1.0 - right_layer.crop.left - right_layer.crop.right);
-                    let right_cropped_h =
-                        base_h * (1.0 - right_layer.crop.top - right_layer.crop.bottom);
-                    let mut right_render_w =
-                        (right_cropped_w * right_scale_x).round().max(2.0) as u32;
-                    let mut right_render_h =
-                        (right_cropped_h * right_scale_y).round().max(2.0) as u32;
+                    let (right_width, right_height) = right_layer.rendered_size(
+                        self.width as f32,
+                        self.height as f32,
+                        right_scale_x,
+                        right_scale_y,
+                    );
+                    let mut right_render_w = right_width.round().max(2.0) as u32;
+                    let mut right_render_h = right_height.round().max(2.0) as u32;
                     if !right_render_w.is_multiple_of(2) {
                         right_render_w += 1;
                     }
@@ -1283,8 +1520,11 @@ impl CompositionPlan {
                     if let Some(ref path) = right_layer.asset_path {
                         let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
                         right_clip_filter.push_str(&format!(
-                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=PTS-STARTPTS",
-                            input_idx, right_src_start, dur_sec
+                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
+                            input_idx,
+                            right_src_start,
+                            right_source_duration,
+                            right_layer.speed.as_f64()
                         ));
                     } else {
                         right_clip_filter.push_str(&format!(
@@ -1304,6 +1544,8 @@ impl CompositionPlan {
                             right_layer.crop.left, right_layer.crop.right, right_layer.crop.top, right_layer.crop.bottom, right_layer.crop.left, right_layer.crop.top
                         ));
                     }
+                    right_clip_filter
+                        .push_str(ffmpeg_visual_effect_filter(right_layer.visual_effect));
                     right_clip_filter
                         .push_str(&format!(",scale={}:{}", right_render_w, right_render_h));
                     if right_rotation.abs() > 0.01 {
@@ -1352,7 +1594,7 @@ impl CompositionPlan {
                         right_canvas_tag, right_clip_tag, right_ov, right_pos_x, right_pos_y, right_branch_tag
                     ));
 
-                    // Crossfade
+                    // Cut transition
                     let xfade_tag = format!("tr_xfade_{}", trans_idx);
                     let next_base = format!("v_over_{}", video_overlay_idx);
                     video_overlay_idx += 1;
@@ -1360,9 +1602,18 @@ impl CompositionPlan {
 
                     let t0_val = trans.transition_range.start.value;
                     let t0_den = trans.transition_range.start.rate.numerator;
+                    let xfade_transition = match trans.kind {
+                        TransitionKind::CrossDissolve => "fade",
+                        TransitionKind::DipToBlack => "fadeblack",
+                        TransitionKind::FadeIn
+                        | TransitionKind::FadeOut
+                        | TransitionKind::FadeBlack => {
+                            unreachable!("item-only transition cannot enter a cut transition plan")
+                        }
+                    };
                     filter_complex.push_str(&format!(
-                        "[{}][{}]xfade=transition=fade:duration={:.6}:offset=0,unpremultiply=inplace=1,format=rgba,setpts=PTS-STARTPTS+({})/({}*TB)[{}];",
-                        left_branch_tag, right_branch_tag, dur_sec, t0_val, t0_den, xfade_tag
+                        "[{}][{}]xfade=transition={}:duration={:.6}:offset=0,unpremultiply=inplace=1,format=rgba,setpts=PTS-STARTPTS+({})/({}*TB)[{}];",
+                        left_branch_tag, right_branch_tag, xfade_transition, dur_sec, t0_val, t0_den, xfade_tag
                     ));
 
                     let t0_bound = (t0_sec - half_frame).max(0.0);
@@ -1456,7 +1707,8 @@ impl CompositionPlan {
                 audio_idx += 1;
 
                 let src_start = render_source_start.to_seconds();
-                let src_dur = render_duration.to_seconds();
+                let output_duration = render_duration.to_seconds();
+                let src_dur = output_duration * audio.speed.as_f64();
                 let timeline_start_ms = (render_start.to_seconds() * 1000.0) as u64;
 
                 let audio_auto =
@@ -1469,8 +1721,8 @@ impl CompositionPlan {
                         env_input_idx, i
                     ));
                     filter_complex.push_str(&format!(
-                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS[a_trimmed_{}];",
-                        input_idx, src_start, src_dur, i
+                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS,atempo={:.6}[a_trimmed_{}];",
+                        input_idx, src_start, src_dur, audio.speed.as_f64(), i
                     ));
                     filter_complex.push_str(&format!(
                         "[a_trimmed_{}][env_st_{}]amultiply,adelay={}|{}[{}];",
@@ -1478,8 +1730,8 @@ impl CompositionPlan {
                     ));
                 } else {
                     let mut filter_chain = format!(
-                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS,volume={:.3}",
-                        input_idx, src_start, src_dur, audio.volume
+                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS,atempo={:.6},volume={:.3}",
+                        input_idx, src_start, src_dur, audio.speed.as_f64(), audio.volume
                     );
 
                     if let Some(fade_in) = audio.fade_in {
@@ -1488,7 +1740,7 @@ impl CompositionPlan {
                     }
 
                     if let Some(fade_out) = audio.fade_out {
-                        let st = src_dur - fade_out.to_seconds();
+                        let st = output_duration - fade_out.to_seconds();
                         filter_chain.push_str(&format!(
                             ",afade=t=out:st={:.3}:d={:.3}",
                             st.max(0.0),
@@ -1651,14 +1903,23 @@ pub struct PreviewSampledLayer {
     pub asset_path: Option<String>,
     pub is_missing_media: bool,
     pub source_time: RationalTime,
+    pub playback_rate: f64,
     pub position: (f32, f32),
     pub scale: (f32, f32),
+    pub content_size: (f32, f32),
     pub rotation: f32,
     pub crop: Crop,
+    pub visual_effect: VisualEffectPreset,
     pub opacity: f32,
     pub text: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
+    pub text_style: Option<TextStyle>,
+    pub text_template: Option<TextTemplateReference>,
+    #[serde(default)]
+    pub text_rich: Option<TextRichStyle>,
+    #[serde(default)]
+    pub text_animation: Option<TextAnimation>,
     pub computed_bounds: Rect,
 }
 
@@ -1667,6 +1928,7 @@ pub struct PreviewSampledAudio {
     pub item_id: String,
     pub effective_volume: f32,
     pub source_time: RationalTime,
+    pub playback_rate: f64,
     pub asset_path: Option<String>,
 }
 
@@ -1675,10 +1937,26 @@ pub mod tests {
     use super::*;
     use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
     use crate::modules::domain::{
-        Asset, Crop, ItemKind, MediaKind, Project, ProjectSettings, TimelineItem, Track, TrackKind,
+        Asset, AssetDimensions, Crop, CutTransition, ItemKind, MediaKind, PlacementMode, Project,
+        ProjectSettings, TimelineItem, Track, TrackKind, TransitionKind, VisualEffectPreset,
     };
     use crate::modules::media::resolver::MediaBinaryResolver;
     use std::fs;
+
+    #[test]
+    fn canvas_background_is_carried_to_the_export_filtergraph() {
+        let mut project = Project::new("Canvas background".to_string());
+        project.settings.canvas_background_color = "#22C55E".to_string();
+
+        let plan = CompositionPlan::from_project(&project).expect("compile composition plan");
+        let (filtergraph, _) = plan.build_video_filtergraph(&[], 1.0, None);
+
+        assert_eq!(plan.canvas_background_color, "#22C55E");
+        assert!(
+            filtergraph.contains("color=c=0x22C55E:s=1920x1080"),
+            "filtergraph must use the project canvas background: {filtergraph}"
+        );
+    }
 
     fn get_fixture_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("tinixcut_test_fixtures_phase7");
@@ -1735,6 +2013,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(300, FrameRate::FPS_30)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let mut v_track = Track::new("Video Track 1".to_string(), TrackKind::Video);
@@ -1769,6 +2048,65 @@ pub mod tests {
         assert_eq!(plan.visual_layers[0].crop.top, 0.1);
         assert_eq!(plan.visual_layers[0].opacity, 0.85);
         assert_eq!(plan.duration.value, 90);
+        assert_eq!(plan.audio_layers.len(), 1);
+        assert_eq!(plan.audio_layers[0].item_id, plan.visual_layers[0].item_id);
+        let preview = plan.sample_preview_at(RationalTime::new(45, FrameRate::FPS_30));
+        assert_eq!(preview.active_audio.len(), 1);
+        assert_eq!(
+            preview.active_audio[0].item_id,
+            plan.visual_layers[0].item_id
+        );
+    }
+
+    #[test]
+    fn source_dimensions_drive_shared_fit_and_fill_geometry() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Vertical social composition".to_string());
+        project.settings.width = 1080;
+        project.settings.height = 1920;
+        project.assets.push(Asset {
+            asset_id: "asset_landscape".to_string(),
+            name: "landscape.mp4".to_string(),
+            path: "D:/media/landscape.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(120, rate)),
+            file_size: 1,
+            dimensions: Some(AssetDimensions {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+
+        let range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(120, rate),
+        );
+        let item = TimelineItem::new(
+            Some("asset_landscape".to_string()),
+            "Landscape clip".to_string(),
+            ItemKind::Video,
+            range,
+            range,
+        )
+        .unwrap();
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let fit_plan = CompositionPlan::from_project(&project).expect("fit plan should compile");
+        let fit_layer = &fit_plan.visual_layers[0];
+        assert_eq!(fit_layer.placement_mode, PlacementMode::Fit);
+        assert_eq!(fit_layer.source_dimensions.as_ref().unwrap().width, 1920);
+        let (fit_width, fit_height) = fit_layer.rendered_size(1080.0, 1920.0, 1.0, 1.0);
+        assert!((fit_width - 1080.0).abs() < 0.01);
+        assert!((fit_height - 607.5).abs() < 0.01);
+
+        project.tracks[0].items[0].placement_mode = PlacementMode::Fill;
+        let fill_plan = CompositionPlan::from_project(&project).expect("fill plan should compile");
+        let (fill_width, fill_height) =
+            fill_plan.visual_layers[0].rendered_size(1080.0, 1920.0, 1.0, 1.0);
+        assert!((fill_width - 3413.3333).abs() < 0.02);
+        assert!((fill_height - 1920.0).abs() < 0.01);
     }
 
     #[test]
@@ -1785,6 +2123,7 @@ pub mod tests {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::from_frames(70, rate)),
             file_size: 0,
+            dimensions: None,
         });
 
         let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
@@ -1932,6 +2271,7 @@ pub mod tests {
             media_kind: MediaKind::Audio,
             duration: Some(RationalTime::from_frames(120, left_rate)),
             file_size: 0,
+            dimensions: None,
         });
 
         let mut track = Track::new("Audio".to_string(), TrackKind::Audio);
@@ -2072,6 +2412,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 1920,
             height: 1080,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: FrameRate::FPS_30,
             sample_rate: 48000,
             channels: 2,
@@ -2085,6 +2426,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::new(150, FrameRate::FPS_30)),
             file_size: 5000,
+            dimensions: None,
         });
 
         // Track 0: Background video
@@ -2322,6 +2664,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(100, rate)),
             file_size: 1024,
+            dimensions: None,
         };
         let a2 = Asset {
             asset_id: "ast_2".to_string(),
@@ -2330,6 +2673,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(100, rate)),
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(a1);
         project.assets.push(a2);
@@ -2505,6 +2849,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(60, rate)),
             file_size: 1024,
+            dimensions: None,
         };
         let asset2 = Asset {
             asset_id: "ast_prev_2".to_string(),
@@ -2513,6 +2858,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(60, rate)),
             file_size: 1024,
+            dimensions: None,
         };
         let asset_bg = Asset {
             asset_id: "ast_prev_bg".to_string(),
@@ -2521,6 +2867,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(60, rate)),
             file_size: 1024,
+            dimensions: None,
         };
 
         let mut clip1 = TimelineItem::new(
@@ -2665,6 +3012,111 @@ pub mod tests {
     }
 
     #[test]
+    fn test_phase22_effect_and_dip_to_black_preview_export_semantics() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 22 Effects".to_string());
+        project.settings.frame_rate = rate;
+        project.assets.extend([
+            Asset {
+                asset_id: "ast_fx_left".to_string(),
+                name: "left.mp4".to_string(),
+                path: "D:/media/left.mp4".to_string(),
+                media_kind: MediaKind::Video,
+                duration: Some(RationalTime::from_frames(90, rate)),
+                file_size: 1,
+                dimensions: None,
+            },
+            Asset {
+                asset_id: "ast_fx_right".to_string(),
+                name: "right.mp4".to_string(),
+                path: "D:/media/right.mp4".to_string(),
+                media_kind: MediaKind::Video,
+                duration: Some(RationalTime::from_frames(90, rate)),
+                file_size: 1,
+                dimensions: None,
+            },
+        ]);
+
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.track_id = "trk_fx".to_string();
+        let mut left = TimelineItem::new(
+            Some("ast_fx_left".to_string()),
+            "Left".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(30, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(10, rate),
+                RationalTime::from_frames(30, rate),
+            ),
+        )
+        .unwrap();
+        left.item_id = "itm_fx_left".to_string();
+        left.visual_effect = VisualEffectPreset::Vivid;
+
+        let mut right = TimelineItem::new(
+            Some("ast_fx_right".to_string()),
+            "Right".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(30, rate),
+                RationalTime::from_frames(30, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(20, rate),
+                RationalTime::from_frames(30, rate),
+            ),
+        )
+        .unwrap();
+        right.item_id = "itm_fx_right".to_string();
+        right.visual_effect = VisualEffectPreset::Mono;
+
+        track.transitions.push(
+            CutTransition::new(
+                track.track_id.clone(),
+                left.item_id.clone(),
+                right.item_id.clone(),
+                TransitionKind::DipToBlack,
+                RationalTime::from_frames(10, rate),
+            )
+            .unwrap(),
+        );
+        track.items.extend([left, right]);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("compile phase 22 composition");
+        assert_eq!(plan.transitions[0].kind, TransitionKind::DipToBlack);
+        assert_eq!(
+            plan.visual_layers[0].visual_effect,
+            VisualEffectPreset::Vivid
+        );
+        assert_eq!(
+            plan.visual_layers[1].visual_effect,
+            VisualEffectPreset::Mono
+        );
+
+        let preview = plan.sample_preview_at(RationalTime::from_frames(30, rate));
+        let group = &preview.transition_groups[0];
+        assert_eq!(group.kind, TransitionKind::DipToBlack);
+        assert_eq!(group.left_layer.opacity, 0.0);
+        assert_eq!(group.right_layer.opacity, 0.0);
+
+        let (filtergraph, _) = plan.build_video_filtergraph(
+            &[
+                PathBuf::from("D:/media/left.mp4"),
+                PathBuf::from("D:/media/right.mp4"),
+            ],
+            2.0,
+            None,
+        );
+        assert!(filtergraph.contains("eq=contrast=1.12:saturation=1.25"));
+        assert!(filtergraph.contains("eq=saturation=0"));
+        assert!(filtergraph.contains("xfade=transition=fadeblack"));
+    }
+
+    #[test]
     fn test_phase13_real_media_crossdissolve_export() {
         let fixture_dir = get_fixture_dir();
         let vid1_path = fixture_dir.join("p13_vid1.mp4");
@@ -2677,6 +3129,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 640,
             height: 360,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: rate,
             sample_rate: 48000,
             channels: 2,
@@ -2689,6 +3142,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(120, rate)), // 4s
             file_size: 1024,
+            dimensions: None,
         };
         let ast2 = Asset {
             asset_id: "ast_export_2".to_string(),
@@ -2697,6 +3151,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(120, rate)), // 4s
             file_size: 1024,
+            dimensions: None,
         };
         project.assets.push(ast1);
         project.assets.push(ast2);

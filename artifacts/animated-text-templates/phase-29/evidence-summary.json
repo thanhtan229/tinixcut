@@ -1,0 +1,87 @@
+{
+  "phase": 29,
+  "title": "Rich Text Domain, Schema v10 Migration, Rich-Text Commands",
+  "gate": "Gate 29",
+  "status": "PASS",
+  "date_utc": "2026-10-25",
+  "schema_version": 10,
+  "baseline_commit": "e6462544b6956054ee50af40727d44e92121487b",
+  "candidate_state": "uncommitted working tree (no Phase 29 commit created)",
+  "candidate_fingerprint_sha256": "a4f00b9f4f481568d51085ee678eb986d209ce016a0aa11ec0539a83e2e00bc3",
+  "review": {
+    "qa": "PASS",
+    "qa_supplement_bf01_bf02": "PASS",
+    "code_reviewer_initial": "NOT LGTM (BF-01, BF-02)",
+    "code_reviewer_re_review": "LGTM",
+    "final_reviewer": "not invoked (not required for this slice)"
+  },
+  "acceptance": {
+    "P29-AC-01": {
+      "status": "PASS",
+      "evidence": "9 domain unit tests + phase29_qa_verification AC-01: 512/513 grapheme boundary, Vietnamese NFC/NFD, ZWJ emoji, span bounds/ordering/overlap, 4 strokes, 4 shadows, 8 gradient stops, Random-without-seed rejection"
+    },
+    "P29-AC-02": {
+      "status": "PASS",
+      "evidence": "migrate_v9_to_v10 version-bump only; BF-02 comprehensive fixture preserves text_style, text_template, item/track transitions, audio crossfade and command ledger; schema 11 rejected"
+    },
+    "P29-AC-03": {
+      "status": "PASS",
+      "evidence": "save_project_atomic/load_project round-trip unchanged; newer-schema failure leaves disk project intact (QA AC-02/03)"
+    },
+    "P29-AC-04": {
+      "status": "PASS",
+      "evidence": "all 7 new operations applied with undo/redo round trip; invalid operation in a transaction rolls back fully"
+    },
+    "P29-AC-05": {
+      "status": "PASS",
+      "evidence": "stale revision rejected; replay after save/reopen returns deduplicated_noop without duplicate mutation"
+    },
+    "P29-AC-06": {
+      "status": "PASS",
+      "evidence": "ClipTextSet rebind expands full span, clamps partial spans, prunes on empty string; text template untouched"
+    },
+    "P29-AC-07": {
+      "status": "PASS",
+      "evidence": "CompositionVisualLayer/PreviewSampledLayer carry rich text+animation for Text only; TS types mirror serde; CLI CapabilitiesReport and MCP payload+JsonSchema expose the 4 new capability lists"
+    },
+    "P29-AC-08": {
+      "status": "PASS",
+      "evidence": "fmt clean, build clean, lib 152 pass (1 documented POC5 skip), all Phase 14-18/export suites pass, typecheck/vitest 44/build pass, clippy only 3 pre-existing findings"
+    }
+  },
+  "verification": {
+    "cargo_fmt_check": "PASS",
+    "cargo_build": "PASS",
+    "cargo_clippy_lib": "3 pre-existing warnings (export/mod.rs derivable Default, media/mod.rs register_asset, lib.rs run_auto_caption_job); 0 in Phase 29 files",
+    "rust_lib_tests": "152 passed, 0 failed, 1 filtered (test_gate_f_poc5_matrix_execution, documented hang)",
+    "phase29_rich_text_domain": "13 passed",
+    "phase29_qa_verification": "12 passed",
+    "phase14_acceptance": "15 passed",
+    "phase15_mcp_acceptance": "27 passed",
+    "phase16_research_poc": "12 passed",
+    "phase16_timeline_productivity_acceptance": "30 passed",
+    "phase17_performance_benchmarks": "1 passed, 5 ignored",
+    "phase17_transport_recalibration_seed": "1 passed",
+    "phase18_audio_crossfade_acceptance": "1 passed",
+    "export_automation_poc": "8 passed",
+    "phase28_default_profile": "2 performance-only failures retained as FAIL evidence in phase29/phase28-benchmark-current-default-profile.csv",
+    "phase28_optimized_profile": "6/6 passed; AC03 IPC 6.70 ms; W1 p95 6.83 ms; canonical CSV unchanged"
+  },
+  "known_limits": [
+    "Rich-text rendering/rasterization integration is Phase 30; animation evaluation is Phase 31.",
+    "ClipSplit of an animated text clip can fail under DurationConflictPolicy::Reject when each half cannot fit in+out; deterministic split partitioning is deferred to Phase 31.",
+    "Plain text without text_rich is not capped at 512 graphemes (legacy tolerance); the cap applies when rich text exists.",
+    "TypeScript represents the u64 random seed as number (precision beyond 2^53 not representable).",
+    "Phase 28 benchmarks only meet budgets under the documented optimized test profile.",
+    "Known non-terminating POC5 matrix test remains skipped by policy.",
+    "Phase 26 native-desktop qualification and clean-VM/hardware-encoder evidence remain open."
+  ],
+  "artifacts": [
+    "artifacts/animated-text-templates/phase-29/implementation-brief.md",
+    "artifacts/animated-text-templates/phase-29/backend-implementation-evidence.md",
+    "artifacts/animated-text-templates/phase-29/p29-delta-scope.md",
+    "artifacts/animated-text-templates/phase-29/verification-log.md",
+    "artifacts/animated-text-templates/phase-29/phase28-benchmark-current-default-profile.csv",
+    "artifacts/animated-text-templates/phase-29/phase28-benchmark-current-opt3-profile.csv"
+  ]
+}

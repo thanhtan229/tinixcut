@@ -152,6 +152,14 @@ pub struct ProjectInspectReport {
     pub supported_keyframe_easings: Vec<String>,
     #[serde(default = "default_custom_cubic_bounds")]
     pub custom_cubic_bounds: (f32, f32),
+    #[serde(default)]
+    pub supported_animation_units: Vec<String>,
+    #[serde(default)]
+    pub supported_stagger_orders: Vec<String>,
+    #[serde(default)]
+    pub supported_loop_modes: Vec<String>,
+    #[serde(default)]
+    pub supported_duration_conflict_policies: Vec<String>,
 }
 
 fn default_schema_version_3() -> u32 {
@@ -177,6 +185,14 @@ pub struct CapabilitiesReport {
     pub supported_keyframe_easings: Vec<String>,
     #[serde(default = "default_custom_cubic_bounds")]
     pub custom_cubic_bounds: (f32, f32),
+    #[serde(default)]
+    pub supported_animation_units: Vec<String>,
+    #[serde(default)]
+    pub supported_stagger_orders: Vec<String>,
+    #[serde(default)]
+    pub supported_loop_modes: Vec<String>,
+    #[serde(default)]
+    pub supported_duration_conflict_policies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -317,6 +333,11 @@ impl AutomationSession {
             supported_keyframe_properties: AutomationAdapter::supported_keyframe_properties(),
             supported_keyframe_easings: AutomationAdapter::supported_keyframe_easings(),
             custom_cubic_bounds: (0.0, 1.0),
+            supported_animation_units: AutomationAdapter::supported_animation_units(),
+            supported_stagger_orders: AutomationAdapter::supported_stagger_orders(),
+            supported_loop_modes: AutomationAdapter::supported_loop_modes(),
+            supported_duration_conflict_policies:
+                AutomationAdapter::supported_duration_conflict_policies(),
         })
     }
 
@@ -678,9 +699,13 @@ impl AutomationAdapter {
             "ClipDuplicate".to_string(),
             "ClipTransformSet".to_string(),
             "ClipCropSet".to_string(),
+            "ClipPlacementModeSet".to_string(),
             "ClipOpacitySet".to_string(),
             "ClipVolumeSet".to_string(),
             "ClipTextSet".to_string(),
+            "ClipTextStyleSet".to_string(),
+            "TextTemplateApply".to_string(),
+            "ClipTextTemplateReset".to_string(),
             "ClipAudioFadeSet".to_string(),
             "ClipTransitionSet".to_string(),
             "ClipKeyframeAdd".to_string(),
@@ -688,6 +713,8 @@ impl AutomationAdapter {
             "ClipKeyframeMove".to_string(),
             "ClipKeyframeEasingSet".to_string(),
             "AssetImport".to_string(),
+            "ProjectSettingsSet".to_string(),
+            "CanvasBackgroundSet".to_string(),
             "CutTransitionCreate".to_string(),
             "CutTransitionUpdateDuration".to_string(),
             "CutTransitionRemove".to_string(),
@@ -696,6 +723,13 @@ impl AutomationAdapter {
             "AudioCrossfadeRemove".to_string(),
             "ClipGroupMove".to_string(),
             "ClipRippleDelete".to_string(),
+            "ClipTextRichSet".to_string(),
+            "ClipTextSpansSet".to_string(),
+            "ClipTextLayoutSet".to_string(),
+            "ClipTextAppearanceSet".to_string(),
+            "ClipTextFontSet".to_string(),
+            "ClipTextAnimationSet".to_string(),
+            "ClipTextRichReset".to_string(),
         ]
     }
 
@@ -727,6 +761,40 @@ impl AutomationAdapter {
             "EaseOut".to_string(),
             "EaseInOut".to_string(),
             "CubicBezier".to_string(),
+        ]
+    }
+
+    pub fn supported_animation_units() -> Vec<String> {
+        vec![
+            "All".to_string(),
+            "Grapheme".to_string(),
+            "Word".to_string(),
+            "Line".to_string(),
+        ]
+    }
+
+    pub fn supported_stagger_orders() -> Vec<String> {
+        vec![
+            "Forward".to_string(),
+            "Backward".to_string(),
+            "CenterOut".to_string(),
+            "Random".to_string(),
+        ]
+    }
+
+    pub fn supported_loop_modes() -> Vec<String> {
+        vec![
+            "None".to_string(),
+            "Repeat".to_string(),
+            "PingPong".to_string(),
+        ]
+    }
+
+    pub fn supported_duration_conflict_policies() -> Vec<String> {
+        vec![
+            "Reject".to_string(),
+            "ProportionalScale".to_string(),
+            "ClampOut".to_string(),
         ]
     }
 
@@ -793,6 +861,10 @@ impl AutomationAdapter {
             supported_keyframe_properties: Self::supported_keyframe_properties(),
             supported_keyframe_easings: Self::supported_keyframe_easings(),
             custom_cubic_bounds: (0.0, 1.0),
+            supported_animation_units: Self::supported_animation_units(),
+            supported_stagger_orders: Self::supported_stagger_orders(),
+            supported_loop_modes: Self::supported_loop_modes(),
+            supported_duration_conflict_policies: Self::supported_duration_conflict_policies(),
         }
     }
 
@@ -999,6 +1071,7 @@ pub mod tests {
         initial_project.settings = ProjectSettings {
             width: 640,
             height: 360,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: rate,
             sample_rate: 48000,
             channels: 2,
@@ -1010,6 +1083,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(120, rate)),
             file_size: 2048,
+            dimensions: None,
         });
 
         save_project_atomic(&initial_project, &project_path).unwrap();
@@ -1023,6 +1097,18 @@ pub mod tests {
         assert!(inspect_report
             .supported_operations
             .contains(&"ClipCreate".to_string()));
+        for operation in [
+            "ClipTextStyleSet",
+            "TextTemplateApply",
+            "ClipTextTemplateReset",
+        ] {
+            assert!(
+                inspect_report
+                    .supported_operations
+                    .contains(&operation.to_string()),
+                "Automation capability missing {operation}"
+            );
+        }
 
         // Prepare an automation plan: Create video track and place a clip
         let plan_envelope = CommandEnvelope {
@@ -1255,6 +1341,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(60, rate)),
             file_size: 1024,
+            dimensions: None,
         });
         let mut track = Track::new("V1".to_string(), TrackKind::Video);
         let time_range = TimeRange::new(
@@ -1314,6 +1401,7 @@ pub mod tests {
             media_kind: MediaKind::Video,
             duration: Some(RationalTime::from_frames(120, rate)),
             file_size: 1024,
+            dimensions: None,
         });
 
         let mut track = Track::new("V1".to_string(), TrackKind::Video);

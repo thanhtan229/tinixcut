@@ -149,7 +149,11 @@ impl JsonSchema for ProjectInspectReport {
                 "schemaVersion": { "type": "integer" },
                 "supportedKeyframeProperties": { "type": "array", "items": { "type": "string" } },
                 "supportedKeyframeEasings": { "type": "array", "items": { "type": "string" } },
-                "customCubicBounds": { "type": "array", "items": { "type": "number" } }
+                "customCubicBounds": { "type": "array", "items": { "type": "number" } },
+                "supportedAnimationUnits": { "type": "array", "items": { "type": "string" } },
+                "supportedStaggerOrders": { "type": "array", "items": { "type": "string" } },
+                "supportedLoopModes": { "type": "array", "items": { "type": "string" } },
+                "supportedDurationConflictPolicies": { "type": "array", "items": { "type": "string" } }
             }
         })
     }
@@ -177,7 +181,11 @@ impl JsonSchema for CapabilitiesReport {
                 "schemaVersion": { "type": "integer" },
                 "supportedKeyframeProperties": { "type": "array", "items": { "type": "string" } },
                 "supportedKeyframeEasings": { "type": "array", "items": { "type": "string" } },
-                "customCubicBounds": { "type": "array", "items": { "type": "number" } }
+                "customCubicBounds": { "type": "array", "items": { "type": "number" } },
+                "supportedAnimationUnits": { "type": "array", "items": { "type": "string" } },
+                "supportedStaggerOrders": { "type": "array", "items": { "type": "string" } },
+                "supportedLoopModes": { "type": "array", "items": { "type": "string" } },
+                "supportedDurationConflictPolicies": { "type": "array", "items": { "type": "string" } }
             }
         })
     }
@@ -601,6 +609,11 @@ impl TinixCutMcpServer {
             supported_keyframe_properties: AutomationAdapter::supported_keyframe_properties(),
             supported_keyframe_easings: AutomationAdapter::supported_keyframe_easings(),
             custom_cubic_bounds: (0.0, 1.0),
+            supported_animation_units: AutomationAdapter::supported_animation_units(),
+            supported_stagger_orders: AutomationAdapter::supported_stagger_orders(),
+            supported_loop_modes: AutomationAdapter::supported_loop_modes(),
+            supported_duration_conflict_policies:
+                AutomationAdapter::supported_duration_conflict_policies(),
         };
         Ok(tool_ok(&report))
     }

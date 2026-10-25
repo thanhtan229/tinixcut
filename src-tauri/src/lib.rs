@@ -7,13 +7,21 @@ use crate::modules::command::{
     OperationEnvelope,
 };
 use crate::modules::composition::{CompositionPlan, PreviewFrameState};
-use crate::modules::domain::time::RationalTime;
-use crate::modules::domain::{Asset, MediaKind, Project, CURRENT_SCHEMA_VERSION};
-use crate::modules::export::{ExportEngine, ExportProfile, ExportReport};
+use crate::modules::domain::id::{generate_item_id, generate_operation_id, generate_track_id};
+use crate::modules::domain::time::{FrameRate, RationalTime};
+use crate::modules::domain::{
+    Asset, AssetDimensions, ItemKind, MediaKind, Project, TrackKind, CURRENT_SCHEMA_VERSION,
+};
+use crate::modules::export::{ExportEngine, ExportPreset, ExportProfile, ExportReport};
 use crate::modules::history::{HistoryEntry, HistoryManager};
 use crate::modules::job::{JobKind, JobManager, JobStatus};
 use crate::modules::media::cache::CacheManager;
+use crate::modules::media::captions::{
+    parse_caption_bytes, serialize_captions, CaptionCue, CaptionFormat, MAX_CAPTION_FILE_BYTES,
+};
 use crate::modules::media::ffmpeg::FFmpegService;
+use crate::modules::media::resolver::MediaBinaryResolver;
+use crate::modules::media::transcription::{TranscriptionBoundary, TranscriptionResult};
 use crate::modules::media::waveform::WaveformStatus;
 use crate::modules::persistence::{
     check_recovery_status, load_project, save_project_atomic, RecoveryStatus,
@@ -22,9 +30,14 @@ use crate::modules::preview::{
     BenchmarkReport, NativeDecodedPreviewBackend, PreviewBackend, WebViewProxyPreviewBackend,
 };
 use serde::{Deserialize, Serialize};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,6 +62,7 @@ pub struct EditorEngine {
     pub history: HistoryManager,
     pub cache: CacheManager,
     pub jobs: JobManager,
+    caption_reports: std::collections::HashMap<String, AutoCaptionReport>,
     pub current_file_path: Option<PathBuf>,
 }
 
@@ -60,12 +74,50 @@ impl EditorEngine {
             history: HistoryManager::new(100),
             cache: CacheManager::new(cache_dir),
             jobs: JobManager::new(4),
+            caption_reports: std::collections::HashMap::new(),
             current_file_path: None,
         }
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoCaptionRequest {
+    item_id: String,
+    whisper_cli_path: String,
+    model_path: String,
+    language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoCaptionReport {
+    job_id: String,
+    state: String,
+    progress: f32,
+    message: String,
+    caption_count: Option<usize>,
+    track_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AutoCaptionTarget {
+    item: crate::modules::domain::TimelineItem,
+    asset_id: String,
+    asset_path: String,
+}
+
 pub struct AppState(pub Arc<Mutex<EditorEngine>>);
+
+const PREVIEW_PROXY_HEIGHT: u32 = 720;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", content = "payload")]
+enum PreviewVideoSourceStatus {
+    Ready { path: String, is_proxy: bool },
+    Pending,
+    Unavailable { reason: String },
+}
 
 #[tauri::command]
 fn app_health_check() -> HealthStatus {
@@ -78,6 +130,7 @@ fn project_new(state: State<'_, AppState>, name: String) -> Result<Project, Stri
     let proj = Project::new(name);
     engine.service = CommandService::new(proj.clone());
     engine.history = HistoryManager::new(100);
+    engine.caption_reports.clear();
     engine.current_file_path = None;
     Ok(proj)
 }
@@ -167,6 +220,7 @@ fn project_open(state: State<'_, AppState>, path: String) -> Result<Project, Str
     let proj = load_project(&pbuf).map_err(|e| e.to_string())?;
     engine.service = CommandService::new(proj.clone());
     engine.history = HistoryManager::new(100);
+    engine.caption_reports.clear();
     engine.current_file_path = Some(pbuf);
     Ok(proj)
 }
@@ -205,11 +259,22 @@ fn project_export(
     state: State<'_, AppState>,
     output_path: String,
     profile: Option<ExportProfile>,
+    preset: Option<ExportPreset>,
 ) -> Result<ExportReport, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
     let snapshot = engine.service.project();
     let target = PathBuf::from(&output_path);
-    let prof = profile.unwrap_or_default();
+    if profile.is_some() && preset.is_some() {
+        return Err("Provide either an export profile or an export preset, not both".to_string());
+    }
+    let prof = match (profile, preset) {
+        (Some(profile), None) => profile,
+        (None, Some(preset)) => preset.profile_for(&snapshot.settings),
+        (None, None) => ExportProfile::from_project_settings(&snapshot.settings),
+        (Some(_), Some(_)) => unreachable!("validated above"),
+    };
+    prof.validate_for_project(&snapshot.settings)
+        .map_err(|error| error.to_string())?;
     ExportEngine::render_snapshot(snapshot, &target, &prof, None).map_err(|e| e.to_string())
 }
 
@@ -233,25 +298,34 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
 
-    let media_kind = match ext.as_str() {
-        "mp3" | "wav" | "aac" | "flac" | "ogg" | "m4a" => MediaKind::Audio,
-        "png" | "jpg" | "jpeg" | "webp" | "bmp" => MediaKind::Image,
-        _ => {
-            // Default to probing via ffprobe
-            match FFmpegService::probe_file(path) {
-                Ok(meta) => {
-                    if meta.video_codec.is_some() {
-                        MediaKind::Video
-                    } else if meta.audio_codec.is_some() {
-                        MediaKind::Audio
-                    } else {
-                        MediaKind::Video
-                    }
-                }
-                Err(_) => MediaKind::Video,
-            }
+    let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp");
+    let probed = (!is_image)
+        .then(|| FFmpegService::probe_file(path).ok())
+        .flatten();
+    let media_kind = if is_image {
+        MediaKind::Image
+    } else if matches!(ext.as_str(), "mp3" | "wav" | "aac" | "flac" | "ogg" | "m4a") {
+        MediaKind::Audio
+    } else {
+        match probed.as_ref() {
+            Some(meta) if meta.video_codec.is_some() => MediaKind::Video,
+            Some(meta) if meta.audio_codec.is_some() => MediaKind::Audio,
+            _ => MediaKind::Video,
         }
     };
+    let duration = probed
+        .as_ref()
+        .and_then(|metadata| media_duration_from_seconds(metadata.duration_seconds));
+    let dimensions = (media_kind == MediaKind::Video)
+        .then(|| {
+            probed.as_ref().and_then(|metadata| {
+                (metadata.width > 0 && metadata.height > 0).then_some(AssetDimensions {
+                    width: metadata.width,
+                    height: metadata.height,
+                })
+            })
+        })
+        .flatten();
 
     let mut engine = state.0.lock().map_err(|e| e.to_string())?;
     let asset_id = format!("ast_{}", uuid::Uuid::new_v4().simple());
@@ -260,7 +334,9 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
         name: file_name,
         path: file_path.clone(),
         media_kind,
+        duration,
         file_size,
+        dimensions,
     };
 
     let cur_epoch = engine.service.project().client_registry.current_epoch;
@@ -311,6 +387,652 @@ fn media_import(state: State<'_, AppState>, file_path: String) -> Result<Asset, 
     Ok(asset)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CaptionImportReport {
+    format: CaptionFormat,
+    track_id: String,
+    cue_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CaptionExportReport {
+    output_path: String,
+    format: CaptionFormat,
+    cue_count: usize,
+}
+
+#[tauri::command]
+fn captions_import(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<CaptionImportReport, String> {
+    let path = Path::new(&file_path);
+    if !path.exists() || !path.is_file() {
+        return Err(format!("Caption file not found at path: {}", file_path));
+    }
+    let format = CaptionFormat::from_path(path)?;
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("Could not inspect caption file: {error}"))?;
+    if metadata.len() > MAX_CAPTION_FILE_BYTES as u64 {
+        return Err(format!(
+            "Caption file is too large ({} bytes; limit is {} bytes)",
+            metadata.len(),
+            MAX_CAPTION_FILE_BYTES
+        ));
+    }
+    let bytes = fs::read(path).map_err(|error| format!("Could not read caption file: {error}"))?;
+
+    let mut engine = state.0.lock().map_err(|error| error.to_string())?;
+    let frame_rate = engine.service.project().settings.frame_rate;
+    let cues = parse_caption_bytes(&bytes, format, frame_rate)?;
+    let track_id = generate_track_id();
+    let transaction_id = format!("tx_import_captions_{}", uuid::Uuid::new_v4().simple());
+    let mut operations = Vec::with_capacity(1 + cues.len() * 2);
+    operations.push(OperationEnvelope {
+        operation_id: generate_operation_id(),
+        operation: CommandOperation::TrackCreate {
+            track_id: Some(track_id.clone()),
+            name: "Captions".to_string(),
+            kind: TrackKind::Video,
+        },
+    });
+
+    for (index, cue) in cues.iter().enumerate() {
+        let item_id = generate_item_id();
+        operations.push(OperationEnvelope {
+            operation_id: generate_operation_id(),
+            operation: CommandOperation::ClipCreate {
+                track_id: track_id.clone(),
+                item_id: Some(item_id.clone()),
+                name: format!("Caption {}", index + 1),
+                kind: ItemKind::Text,
+                asset_id: None,
+                timeline_start: cue.start,
+                duration: cue.duration,
+                source_start: Some(RationalTime::zero(frame_rate)),
+            },
+        });
+        operations.push(OperationEnvelope {
+            operation_id: generate_operation_id(),
+            operation: CommandOperation::ClipTextSet {
+                item_id,
+                text: cue.text.clone(),
+            },
+        });
+    }
+
+    let cur_epoch = engine.service.project().client_registry.current_epoch;
+    let next_seq = engine
+        .service
+        .project()
+        .client_registry
+        .clients
+        .get("gui")
+        .map(|client| client.highest_sequence + 1)
+        .unwrap_or(1);
+    let envelope = CommandEnvelope {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project_id: engine.service.project().project_id.clone(),
+        base_revision: engine.service.project().revision,
+        client_id: Some("gui".to_string()),
+        client_epoch: Some(cur_epoch),
+        sequence_number: Some(next_seq),
+        dry_run: false,
+        transaction_id: Some(transaction_id.clone()),
+        operations,
+    };
+    let prior_snapshot = engine.service.project().clone();
+    engine
+        .service
+        .execute(envelope)
+        .map_err(|error| format!("Caption import command failed: {error}"))?;
+    let resulting_snapshot = engine.service.project().clone();
+    engine.history.record_edit(HistoryEntry {
+        description: format!("Import captions {}", file_path),
+        transaction_id: Some(transaction_id),
+        prior_snapshot,
+        resulting_snapshot,
+    });
+
+    Ok(CaptionImportReport {
+        format,
+        track_id,
+        cue_count: cues.len(),
+    })
+}
+
+#[tauri::command]
+fn captions_auto_start(
+    state: State<'_, AppState>,
+    request: AutoCaptionRequest,
+) -> Result<AutoCaptionReport, String> {
+    let whisper_cli_path = PathBuf::from(request.whisper_cli_path.trim());
+    let model_path = PathBuf::from(request.model_path.trim());
+    if !whisper_cli_path.is_file() {
+        return Err(format!(
+            "Whisper CLI executable was not found: {}",
+            whisper_cli_path.display()
+        ));
+    }
+    if !model_path.is_file() {
+        return Err(format!(
+            "Whisper model was not found: {}",
+            model_path.display()
+        ));
+    }
+
+    let language = request
+        .language
+        .as_deref()
+        .filter(|value| !value.trim().is_empty() && *value != "auto")
+        .map(str::to_owned);
+    let (job_id, target, audio_path, cancel_flag) = {
+        let mut engine = state.0.lock().map_err(|error| error.to_string())?;
+        if engine.jobs.has_active_kind(JobKind::Transcription) {
+            return Err("Another automatic-caption job is already running. Cancel it or wait for it to finish.".to_string());
+        }
+        let item = engine
+            .service
+            .project()
+            .tracks
+            .iter()
+            .flat_map(|track| track.items.iter())
+            .find(|item| item.item_id == request.item_id)
+            .cloned()
+            .ok_or_else(|| format!("Selected clip '{}' no longer exists", request.item_id))?;
+        if !matches!(item.kind, ItemKind::Video | ItemKind::Audio) {
+            return Err("Select a video or audio clip before generating captions.".to_string());
+        }
+        let asset_id = item
+            .asset_id
+            .clone()
+            .ok_or_else(|| "The selected clip has no source media.".to_string())?;
+        let asset = engine
+            .service
+            .project()
+            .assets
+            .iter()
+            .find(|asset| asset.asset_id == asset_id)
+            .cloned()
+            .ok_or_else(|| {
+                "The selected clip's source media is missing from this project.".to_string()
+            })?;
+        if !matches!(asset.media_kind, MediaKind::Video | MediaKind::Audio) {
+            return Err("The selected clip does not reference audio-capable media.".to_string());
+        }
+        if !Path::new(&asset.path).is_file() {
+            return Err(format!("Source media is unavailable: {}", asset.path));
+        }
+        let job_id = format!("job_caption_{}", uuid::Uuid::new_v4().simple());
+        let key = format!(
+            "caption:{}:{}:{}:{}:{}",
+            item.item_id,
+            item.timeline_range.start,
+            item.source_range.start,
+            item.speed.as_f64(),
+            language.as_deref().unwrap_or("auto")
+        );
+        let (job_id, deduped) = engine
+            .jobs
+            .submit_job(job_id, JobKind::Transcription, key, 100);
+        if deduped {
+            return Ok(auto_caption_status_for(&engine, &job_id));
+        }
+        let cancel_flag = engine.jobs.start_job(&job_id)?;
+        engine.caption_reports.insert(
+            job_id.clone(),
+            AutoCaptionReport {
+                job_id: job_id.clone(),
+                state: "running".to_string(),
+                progress: 0.05,
+                message: "Preparing audio for local transcription…".to_string(),
+                caption_count: None,
+                track_id: None,
+            },
+        );
+        (
+            job_id.clone(),
+            AutoCaptionTarget {
+                item,
+                asset_id,
+                asset_path: asset.path.clone(),
+            },
+            engine.cache.transcription_audio_path(&job_id),
+            cancel_flag,
+        )
+    };
+
+    let app_state = Arc::clone(&state.0);
+    let worker_job_id = job_id.clone();
+    thread::spawn(move || {
+        run_auto_caption_job(
+            app_state,
+            worker_job_id,
+            target,
+            audio_path,
+            whisper_cli_path,
+            model_path,
+            language,
+            cancel_flag,
+        )
+    });
+
+    Ok(AutoCaptionReport {
+        job_id,
+        state: "running".to_string(),
+        progress: 0.05,
+        message: "Preparing audio for local transcription…".to_string(),
+        caption_count: None,
+        track_id: None,
+    })
+}
+
+#[tauri::command]
+fn captions_auto_status(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<AutoCaptionReport, String> {
+    let engine = state.0.lock().map_err(|error| error.to_string())?;
+    if engine.jobs.get_job(&job_id).is_none() {
+        return Err(format!("Caption job '{job_id}' was not found"));
+    }
+    Ok(auto_caption_status_for(&engine, &job_id))
+}
+
+#[tauri::command]
+fn captions_auto_cancel(state: State<'_, AppState>, job_id: String) -> Result<(), String> {
+    let mut engine = state.0.lock().map_err(|error| error.to_string())?;
+    if !engine.jobs.cancel_job(&job_id) {
+        return Err(format!("Caption job '{job_id}' was not found"));
+    }
+    engine.caption_reports.insert(
+        job_id.clone(),
+        AutoCaptionReport {
+            job_id,
+            state: "cancelled".to_string(),
+            progress: 0.0,
+            message: "Automatic-caption job cancelled.".to_string(),
+            caption_count: None,
+            track_id: None,
+        },
+    );
+    Ok(())
+}
+
+fn auto_caption_status_for(engine: &EditorEngine, job_id: &str) -> AutoCaptionReport {
+    if let Some(report) = engine.caption_reports.get(job_id) {
+        return report.clone();
+    }
+    let job = engine.jobs.get_job(job_id).expect("checked by caller");
+    let (state, message) = match &job.status {
+        JobStatus::Queued => ("queued", "Waiting for an available worker."),
+        JobStatus::Running => ("running", "Generating captions locally…"),
+        JobStatus::Completed => ("completed", "Captions generated."),
+        JobStatus::Failed(reason) => ("failed", reason.as_str()),
+        JobStatus::Cancelled => ("cancelled", "Automatic-caption job cancelled."),
+    };
+    AutoCaptionReport {
+        job_id: job_id.to_string(),
+        state: state.to_string(),
+        progress: job.progress,
+        message: message.to_string(),
+        caption_count: None,
+        track_id: None,
+    }
+}
+
+fn run_auto_caption_job(
+    state: Arc<Mutex<EditorEngine>>,
+    job_id: String,
+    target: AutoCaptionTarget,
+    wav_path: PathBuf,
+    whisper_cli_path: PathBuf,
+    model_path: PathBuf,
+    language: Option<String>,
+    cancel_flag: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let output_json_path = wav_path.with_extension("whisper.json");
+    let result = (|| -> Result<(usize, String), String> {
+        update_auto_caption_progress(&state, &job_id, 0.15, "Extracting mono audio…");
+        let mut ffmpeg = MediaBinaryResolver::command("ffmpeg")
+            .map_err(|error| format!("FFmpeg is unavailable for captions: {error}"))?;
+        ffmpeg
+            .arg("-v")
+            .arg("error")
+            .arg("-i")
+            .arg(&target.asset_path)
+            .arg("-vn")
+            .arg("-ar")
+            .arg("16000")
+            .arg("-ac")
+            .arg("1")
+            .arg("-c:a")
+            .arg("pcm_s16le")
+            .arg("-y")
+            .arg(&wav_path);
+        run_child_cancellable(ffmpeg, &cancel_flag, "Audio extraction")?;
+
+        update_auto_caption_progress(&state, &job_id, 0.5, "Transcribing with local Whisper…");
+        let output_base = wav_path.with_extension("whisper");
+        let _ = fs::remove_file(&output_json_path);
+        let mut whisper = Command::new(&whisper_cli_path);
+        whisper
+            .arg("-m")
+            .arg(&model_path)
+            .arg("-f")
+            .arg(&wav_path)
+            .arg("-oj")
+            .arg("-of")
+            .arg(&output_base);
+        if let Some(language) = &language {
+            whisper.arg("-l").arg(language);
+        }
+        run_child_cancellable(whisper, &cancel_flag, "Whisper transcription")?;
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err("Automatic-caption job cancelled.".to_string());
+        }
+
+        update_auto_caption_progress(
+            &state,
+            &job_id,
+            0.78,
+            "Converting transcript to project captions…",
+        );
+        let json = fs::read(&output_json_path)
+            .map_err(|error| format!("Whisper did not produce JSON output: {error}"))?;
+        let result = TranscriptionBoundary::parse_whisper_json(
+            &json,
+            language.clone().unwrap_or_else(|| "auto".to_string()),
+        )?;
+        let (count, track_id) = commit_generated_captions(&state, &target, result)?;
+        Ok((count, track_id))
+    })();
+    let _ = fs::remove_file(&output_json_path);
+    let _ = fs::remove_file(&wav_path);
+
+    let mut engine = match state.lock() {
+        Ok(engine) => engine,
+        Err(_) => return,
+    };
+    if cancel_flag.load(Ordering::SeqCst)
+        || matches!(
+            engine.jobs.get_job(&job_id).map(|job| &job.status),
+            Some(JobStatus::Cancelled)
+        )
+    {
+        return;
+    }
+    match result {
+        Ok((caption_count, track_id)) => {
+            engine.jobs.mark_completed(&job_id);
+            engine.caption_reports.insert(
+                job_id.clone(),
+                AutoCaptionReport {
+                    job_id,
+                    state: "completed".to_string(),
+                    progress: 1.0,
+                    message: format!("Generated {caption_count} captions on a new track."),
+                    caption_count: Some(caption_count),
+                    track_id: Some(track_id),
+                },
+            );
+        }
+        Err(error) => {
+            engine.jobs.mark_failed(&job_id, error.clone());
+            engine.caption_reports.insert(
+                job_id.clone(),
+                AutoCaptionReport {
+                    job_id,
+                    state: "failed".to_string(),
+                    progress: 0.0,
+                    message: error,
+                    caption_count: None,
+                    track_id: None,
+                },
+            );
+        }
+    }
+}
+
+fn update_auto_caption_progress(
+    state: &Arc<Mutex<EditorEngine>>,
+    job_id: &str,
+    progress: f32,
+    message: &str,
+) {
+    if let Ok(mut engine) = state.lock() {
+        if matches!(
+            engine.jobs.get_job(job_id).map(|job| &job.status),
+            Some(JobStatus::Cancelled)
+        ) {
+            return;
+        }
+        engine.jobs.update_progress(job_id, progress);
+        engine.caption_reports.insert(
+            job_id.to_string(),
+            AutoCaptionReport {
+                job_id: job_id.to_string(),
+                state: "running".to_string(),
+                progress,
+                message: message.to_string(),
+                caption_count: None,
+                track_id: None,
+            },
+        );
+    }
+}
+
+fn run_child_cancellable(
+    mut command: Command,
+    cancel_flag: &std::sync::atomic::AtomicBool,
+    label: &str,
+) -> Result<(), String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("{label} could not start: {error}"))?;
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Automatic-caption job cancelled.".to_string());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("{label} could not be monitored: {error}"))?
+        {
+            if status.success() {
+                return Ok(());
+            }
+            return Err(format!(
+                "{label} failed with exit code {}.",
+                status.code().unwrap_or(-1)
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn commit_generated_captions(
+    state: &Arc<Mutex<EditorEngine>>,
+    target: &AutoCaptionTarget,
+    transcription: TranscriptionResult,
+) -> Result<(usize, String), String> {
+    let mut engine = state.lock().map_err(|error| error.to_string())?;
+    let current_item = engine
+        .service
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| track.items.iter())
+        .find(|item| item.item_id == target.item.item_id)
+        .ok_or_else(|| {
+            "The selected clip changed or was deleted while transcription ran.".to_string()
+        })?;
+    if current_item != &target.item
+        || engine
+            .service
+            .project()
+            .assets
+            .iter()
+            .find(|asset| asset.asset_id == target.asset_id)
+            .map(|asset| asset.path.as_str())
+            != Some(target.asset_path.as_str())
+    {
+        return Err("The selected clip or its media changed while transcription ran; no captions were added.".to_string());
+    }
+
+    let mapped = TranscriptionBoundary::map_to_timeline(
+        &transcription,
+        current_item,
+        engine.service.project().settings.frame_rate,
+    );
+    if mapped.segments.is_empty() {
+        return Err("Whisper returned no caption segments within the selected clip.".to_string());
+    }
+    let track_id = generate_track_id();
+    let transaction_id = format!("tx_auto_captions_{}", uuid::Uuid::new_v4().simple());
+    let mut operations = vec![OperationEnvelope {
+        operation_id: generate_operation_id(),
+        operation: CommandOperation::TrackCreate {
+            track_id: Some(track_id.clone()),
+            name: "Auto Captions".to_string(),
+            kind: TrackKind::Video,
+        },
+    }];
+    operations.extend(TranscriptionBoundary::create_caption_commands(
+        &track_id, &mapped,
+    ));
+    let cur_epoch = engine.service.project().client_registry.current_epoch;
+    let next_seq = engine
+        .service
+        .project()
+        .client_registry
+        .clients
+        .get("gui")
+        .map(|client| client.highest_sequence + 1)
+        .unwrap_or(1);
+    let envelope = CommandEnvelope {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project_id: engine.service.project().project_id.clone(),
+        base_revision: engine.service.project().revision,
+        client_id: Some("gui".to_string()),
+        client_epoch: Some(cur_epoch),
+        sequence_number: Some(next_seq),
+        dry_run: false,
+        transaction_id: Some(transaction_id.clone()),
+        operations,
+    };
+    let prior_snapshot = engine.service.project().clone();
+    engine
+        .service
+        .execute(envelope)
+        .map_err(|error| format!("Automatic-caption command failed: {error}"))?;
+    let resulting_snapshot = engine.service.project().clone();
+    engine.history.record_edit(HistoryEntry {
+        description: "Generate automatic captions".to_string(),
+        transaction_id: Some(transaction_id),
+        prior_snapshot,
+        resulting_snapshot,
+    });
+    Ok((mapped.segments.len(), track_id))
+}
+
+#[tauri::command]
+fn captions_export(
+    state: State<'_, AppState>,
+    output_path: String,
+) -> Result<CaptionExportReport, String> {
+    let target = PathBuf::from(&output_path);
+    let format = CaptionFormat::from_path(&target)?;
+    let engine = state.0.lock().map_err(|error| error.to_string())?;
+    let frame_rate = engine.service.project().settings.frame_rate;
+    let cues = engine
+        .service
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| track.items.iter())
+        .filter(|item| item.kind == ItemKind::Text)
+        .filter_map(|item| {
+            item.text_content
+                .as_ref()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| CaptionCue {
+                    start: item.timeline_range.start.rescaled_to(frame_rate),
+                    duration: item.timeline_range.duration.rescaled_to(frame_rate),
+                    text: text.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let cue_count = cues.len();
+    let contents = serialize_captions(&cues, format)?;
+    write_caption_file_atomic(&target, &contents)?;
+
+    Ok(CaptionExportReport {
+        output_path,
+        format,
+        cue_count,
+    })
+}
+
+fn write_caption_file_atomic(target: &Path, contents: &str) -> Result<(), String> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Caption output path has no valid file name".to_string())?;
+    let temporary = parent.join(format!(".{name}.tinixcut.tmp"));
+    let backup = parent.join(format!(".{name}.tinixcut.bak"));
+
+    let _ = fs::remove_file(&temporary);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| format!("Could not create temporary caption file: {error}"))?;
+    file.write_all(contents.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("Could not flush temporary caption file: {error}"))?;
+    drop(file);
+
+    let had_target = target.exists();
+    if had_target {
+        let _ = fs::remove_file(&backup);
+        fs::rename(target, &backup)
+            .map_err(|error| format!("Could not stage existing caption file: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary, target) {
+        if had_target {
+            let _ = fs::rename(&backup, target);
+        }
+        return Err(format!("Could not replace caption file: {error}"));
+    }
+    if had_target {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(())
+}
+
+fn media_duration_from_seconds(seconds: f64) -> Option<RationalTime> {
+    const NANOSECONDS_PER_SECOND: u32 = 1_000_000_000;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return None;
+    }
+    let ticks = (seconds * f64::from(NANOSECONDS_PER_SECOND)).floor();
+    if ticks > i64::MAX as f64 {
+        return None;
+    }
+    Some(RationalTime::new(
+        ticks as i64,
+        FrameRate::new(NANOSECONDS_PER_SECOND, 1),
+    ))
+}
+
 #[tauri::command]
 fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFrameState, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
@@ -318,6 +1040,126 @@ fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFr
     let plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
     let timestamp = RationalTime::new(frame, project.settings.frame_rate);
     Ok(plan.sample_preview_at(timestamp))
+}
+
+/// Returns an H.264/AAC preview proxy after the WebView cannot decode an original video.
+/// The proxy is derived cache only: the project and export pipeline keep using the original asset.
+#[tauri::command]
+fn media_get_compatible_preview_video(
+    state: State<'_, AppState>,
+    asset_id: String,
+) -> Result<PreviewVideoSourceStatus, String> {
+    let mut engine = state.0.lock().map_err(|e| e.to_string())?;
+    let asset = match engine
+        .service
+        .project()
+        .assets
+        .iter()
+        .find(|asset| asset.asset_id == asset_id)
+    {
+        Some(asset) => asset.clone(),
+        None => {
+            return Ok(PreviewVideoSourceStatus::Unavailable {
+                reason: format!("Asset '{}' not found in project", asset_id),
+            });
+        }
+    };
+
+    if asset.media_kind != MediaKind::Video {
+        return Ok(PreviewVideoSourceStatus::Unavailable {
+            reason: format!("Asset '{}' is not a video", asset_id),
+        });
+    }
+
+    let source_path = PathBuf::from(&asset.path);
+    if !source_path.exists() {
+        return Ok(PreviewVideoSourceStatus::Unavailable {
+            reason: format!("Media file not found at path '{}'", asset.path),
+        });
+    }
+
+    let proxy_path = engine.cache.proxy_path(&asset_id, PREVIEW_PROXY_HEIGHT);
+    if engine.cache.has_proxy(&asset_id, PREVIEW_PROXY_HEIGHT) {
+        return Ok(PreviewVideoSourceStatus::Ready {
+            path: proxy_path.to_string_lossy().to_string(),
+            is_proxy: true,
+        });
+    }
+
+    let dedupe_key = format!("preview-proxy:{}:{}", asset_id, PREVIEW_PROXY_HEIGHT);
+    let job_id_candidate = format!(
+        "preview_proxy_{}_{}",
+        asset_id,
+        uuid::Uuid::new_v4().simple()
+    );
+    let (job_id, is_deduped) =
+        engine
+            .jobs
+            .submit_job(job_id_candidate, JobKind::Proxy, dedupe_key, 10);
+
+    if let Some(job) = engine.jobs.get_job(&job_id) {
+        match &job.status {
+            JobStatus::Completed => {
+                if engine.cache.has_proxy(&asset_id, PREVIEW_PROXY_HEIGHT) {
+                    return Ok(PreviewVideoSourceStatus::Ready {
+                        path: proxy_path.to_string_lossy().to_string(),
+                        is_proxy: true,
+                    });
+                }
+                return Ok(PreviewVideoSourceStatus::Unavailable {
+                    reason: "Compatible preview generation completed without a usable file"
+                        .to_string(),
+                });
+            }
+            JobStatus::Failed(reason) => {
+                return Ok(PreviewVideoSourceStatus::Unavailable {
+                    reason: reason.clone(),
+                });
+            }
+            JobStatus::Cancelled => {
+                return Ok(PreviewVideoSourceStatus::Unavailable {
+                    reason: "Compatible preview generation was cancelled".to_string(),
+                });
+            }
+            JobStatus::Running => return Ok(PreviewVideoSourceStatus::Pending),
+            JobStatus::Queued if !is_deduped && engine.jobs.can_start() => {
+                let cancel_flag = engine.jobs.start_job(&job_id).map_err(|e| e.to_string())?;
+                let state_arc = Arc::clone(&state.0);
+                let job_id = job_id.clone();
+                let output_path = proxy_path.clone();
+
+                std::thread::spawn(move || {
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        if let Ok(mut engine) = state_arc.lock() {
+                            engine.jobs.cancel_job(&job_id);
+                        }
+                        return;
+                    }
+
+                    let result = FFmpegService::generate_proxy(
+                        &source_path,
+                        &output_path,
+                        PREVIEW_PROXY_HEIGHT,
+                    );
+
+                    if let Ok(mut engine) = state_arc.lock() {
+                        if cancel_flag.load(Ordering::SeqCst) {
+                            engine.jobs.cancel_job(&job_id);
+                        } else {
+                            match result {
+                                Ok(()) => engine.jobs.mark_completed(&job_id),
+                                Err(error) => engine.jobs.mark_failed(&job_id, error.to_string()),
+                            }
+                        }
+                    }
+                });
+                return Ok(PreviewVideoSourceStatus::Pending);
+            }
+            JobStatus::Queued => return Ok(PreviewVideoSourceStatus::Pending),
+        }
+    }
+
+    Ok(PreviewVideoSourceStatus::Pending)
 }
 
 #[tauri::command]
@@ -345,6 +1187,14 @@ fn preview_run_benchmark(
 #[tauri::command]
 fn parity_run_suite() -> Result<crate::modules::composition::parity::ParitySuiteReport, String> {
     Ok(crate::modules::composition::parity::run_all_parity_fixtures())
+}
+
+#[tauri::command]
+fn render_text_template_poc_preview(
+    text: String,
+    progress: f32,
+) -> Result<crate::modules::media::text_renderer_poc::PreviewOverlayIpcResponse, String> {
+    Ok(crate::modules::media::text_renderer_poc::invoke_poc_preview_ipc(&text, progress))
 }
 
 #[tauri::command]
@@ -469,10 +1319,17 @@ pub fn run() {
             project_redo,
             project_export,
             media_import,
+            captions_import,
+            captions_export,
+            captions_auto_start,
+            captions_auto_status,
+            captions_auto_cancel,
             media_get_waveform,
+            media_get_compatible_preview_video,
             preview_sample_at,
             preview_run_benchmark,
-            parity_run_suite
+            parity_run_suite,
+            render_text_template_poc_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -480,7 +1337,8 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::get_health_status;
+    use super::{get_health_status, media_duration_from_seconds};
+    use crate::modules::domain::time::FrameRate;
 
     #[test]
     fn test_app_health_status() {
@@ -489,5 +1347,16 @@ mod tests {
         assert_eq!(health.schema_version, 1);
         assert!(!health.version.is_empty());
         assert!(!health.platform.is_empty());
+    }
+
+    #[test]
+    fn media_probe_duration_keeps_subframe_precision_and_rejects_invalid_values() {
+        let duration = media_duration_from_seconds(12.345_678_901).unwrap();
+        assert_eq!(duration.rate, FrameRate::new(1_000_000_000, 1));
+        assert_eq!(duration.value, 12_345_678_901);
+
+        assert!(media_duration_from_seconds(0.0).is_none());
+        assert!(media_duration_from_seconds(f64::NAN).is_none());
+        assert!(media_duration_from_seconds(f64::INFINITY).is_none());
     }
 }

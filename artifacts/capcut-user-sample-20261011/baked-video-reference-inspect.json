@@ -1,0 +1,109 @@
+{
+  "projectId": "proj_563e31a2b6d94aab878a8dc90905bb20",
+  "name": "CapCut sample - baked animation, text not editable",
+  "revision": 1,
+  "durationFrames": 150,
+  "durationSeconds": 5.0,
+  "frameRate": {
+    "numerator": 30,
+    "denominator": 1
+  },
+  "resolution": [
+    1920,
+    1080
+  ],
+  "tracksCount": 1,
+  "clipsCount": 1,
+  "assetsCount": 1,
+  "transitionsCount": 0,
+  "tracks": [
+    {
+      "trackId": "trk_baked",
+      "name": "Baked CapCut animation",
+      "kind": "Video",
+      "muted": false,
+      "itemsCount": 1,
+      "transitionsCount": 0
+    }
+  ],
+  "assets": [
+    {
+      "assetId": "asset_capcut_reference",
+      "name": "1011.mp4 - baked CapCut title",
+      "path": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+      "mediaKind": "Video",
+      "duration": {
+        "value": 5000000,
+        "rate": {
+          "numerator": 1000000,
+          "denominator": 1
+        }
+      }
+    }
+  ],
+  "supportedOperations": [
+    "TrackCreate",
+    "TrackDelete",
+    "TrackReorder",
+    "TrackMuteSet",
+    "ClipCreate",
+    "ClipMove",
+    "ClipTrim",
+    "ClipSplit",
+    "ClipDelete",
+    "ClipDuplicate",
+    "ClipTransformSet",
+    "ClipCropSet",
+    "ClipPlacementModeSet",
+    "ClipOpacitySet",
+    "ClipVolumeSet",
+    "ClipTextSet",
+    "ClipTextStyleSet",
+    "TextTemplateApply",
+    "ClipTextTemplateReset",
+    "ClipAudioFadeSet",
+    "ClipTransitionSet",
+    "ClipKeyframeAdd",
+    "ClipKeyframeRemove",
+    "ClipKeyframeMove",
+    "ClipKeyframeEasingSet",
+    "AssetImport",
+    "ProjectSettingsSet",
+    "CanvasBackgroundSet",
+    "CutTransitionCreate",
+    "CutTransitionUpdateDuration",
+    "CutTransitionRemove",
+    "AudioCrossfadeCreate",
+    "AudioCrossfadeUpdateDuration",
+    "AudioCrossfadeRemove",
+    "ClipGroupMove",
+    "ClipRippleDelete"
+  ],
+  "supportedTransitions": [
+    "FadeIn",
+    "FadeOut",
+    "FadeBlack",
+    "CrossDissolve"
+  ],
+  "schemaVersion": 9,
+  "supportedKeyframeProperties": [
+    "Opacity",
+    "PositionX",
+    "PositionY",
+    "ScaleX",
+    "ScaleY",
+    "Rotation",
+    "Volume"
+  ],
+  "supportedKeyframeEasings": [
+    "Linear",
+    "EaseIn",
+    "EaseOut",
+    "EaseInOut",
+    "CubicBezier"
+  ],
+  "customCubicBounds": [
+    0.0,
+    1.0
+  ]
+}

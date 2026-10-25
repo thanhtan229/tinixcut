@@ -20,6 +20,7 @@ fn create_test_project_with_asset(fps: u32) -> (Project, String) {
         path: "C:/test.mp4".to_string(),
         media_kind: MediaKind::Video,
         file_size: 1024 * 1024,
+        dimensions: None,
         duration: Some(RationalTime::new(3600, FrameRate::new(fps, 1))),
     };
     project.assets.push(asset);

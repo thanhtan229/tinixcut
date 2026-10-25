@@ -10,34 +10,168 @@
 
 ## 0. Status Metadata
 
-**Project:** Automation-First Desktop Video Editor  
-**Overall Status:** PHASES 0–15 COMPLETE; PHASES 16–18 COMPLETE WITH DEFERRED ITEMS
-**Current Selected Milestone:** Phase 18 — Audio Crossfade Semantics & Preview/Export Parity
-**Current Active Implementation Phase:** None; Phase 18 implementation checkpoint prepared
-**Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS  
-**Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred  
-**Implementation:** Phases 0–15 COMPLETE; Phases 16–18 COMPLETE WITH DEFERRED ITEMS
-**ADR:** ADR-006 accepted for Phase 18 implementation
-**Plan Status:** Phase 17 qualification reconciled against locked criteria in `Plans/plan_phase17.md`
-**Project Schema:** Schema v4 active; lossless v1–v3 migration verified
-**Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit `28f94c6`; durable reconciliation recorded
-**Baseline Commit:** `95a9f16` (`docs: reconcile phase 16 completion with deferred GUI QA`)  
-**Phase 18:** COMPLETE WITH DEFERRED ITEMS; automated acceptance passed, interactive Windows audio/UI and typed IPC qualification deferred.
-**Next Action:** Complete the deferred interactive Windows GUI and typed `app_health_check` qualification.
-**Last Updated:** 2026-10-07
+**Project:** Automation-First Desktop Video Editor
+**Overall Status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–29 COMPLETE; PHASES 30–36 PLANNED
+**Current Selected Milestone:** Rich Animated Text Templates — Phase 29 Rich-Text Domain Model COMPLETE; Phase 30 Rich-Text Rendering next
+**Current Active Implementation Phase:** Phase 30 — Rich-Text Rendering & Parity (Ready)
+**Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS
+**Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred
+**Implementation:** Phases 0–25 implemented with automated validation; Phases 27–29 complete; native-desktop qualification is consolidated in Phase 26
+**ADR:** ADR-006 accepted for Phase 18; ADR-007 accepted for Phase 28 (Shared Text Renderer & Deterministic Overlay Seam — see `ADR_007_SHARED_TEXT_RENDERER_AND_OVERLAY_PIPELINE.md`)
+**Plan Status:** Phase 27, Phase 28 and Phase 29 complete; Phase 29 evidence is in `artifacts/animated-text-templates/phase-29/`; status tracked across PROJECT_STATUS.md and phase_status.md
+**Project Schema:** Schema v10 active; lossless v1–v3 migration, v4→v5 text-style migration, v5→v6 media-dimension/placement migration, v6→v7 canvas-background migration, v7→v8 visual-effect defaults, v8→v9 default clip-speed migration, and v9→v10 rich-text/animation defaults (all new fields default None) verified
+**Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit 28f94c6; durable reconciliation recorded
+**Baseline Commit:** e6462544b6956054ee50af40727d44e92121487b — Phase 29 is an uncommitted working-tree candidate (fingerprint a4f00b9f…)
+**Phase 18:** COMPLETE WITH DEFERRED ITEMS. User passed the documented video/audio transport and crossfade scenarios; direct native `app_health_check` observation and independent preview-media cleanup observation remain deferred.
+**Phase 27 Status:** COMPLETE (Gate 27 PASS). Baseline inventory, CapCut user sample index (exact 29 graphemes / 24 non-space letters = 21-char vertical slide + 3-char bounce/rotation, plus Apache-2.0 `Roboto-Bold.ttf` SHA-256), option compatibility matrix, canonical contract semantics, 14-fixture corpus, and reference workload budgets locked in `artifacts/animated-text-templates/phase-27/`.
+**Phase 28 Status:** COMPLETE (Gate 28 PASS). Pure Rust typography and rasterizer engine implemented (`src-tauri/src/modules/media/text_renderer_poc.rs` via `ab_glyph 0.2.32` + `unicode-normalization 0.1.25` + `unicode-segmentation 1.13.3`), true OpenType glyph rasterization with horizontal kerning and unified cluster masks, static-bounds-anchored 118° linear gradient, 2 outer strokes, 2 blurred drop shadows, `BoundedGlyphCache`, Tauri IPC command `render_text_template_poc_preview`, 6 integration tests passing, W1–W4 benchmarks satisfying Phase 27 budgets without relaxation (W1 Warm p95 = 5.21 ms, W2 = 14.87 ms, W3 16:9 = 17.23 ms, W3 9:16 = 16.92 ms, W4 = 5.18x RTF), lossless parity (ROI SSIM = 1.000000, MP4 ROI SSIM = 0.9978), 4-background alpha integrity, real FFmpeg stream export and cancellation verified, ADR-007 locked. Benchmarks must be run with the documented optimized test profile (`CARGO_PROFILE_TEST_OPT_LEVEL=3`); see phase-29/verification-log.md.
+**Phase 29 Status:** COMPLETE (Gate 29 PASS; QA PASS, Code Reviewer LGTM). Rich-text/animation domain model, schema v10 lossless migration, 7 Command Service operations with grapheme-span rebinding, composition/preview carry-through, TS types and CLI/MCP capability parity implemented. Evidence in `artifacts/animated-text-templates/phase-29/evidence-summary.json`; 13 Phase 29 + 12 QA tests pass.
+**Next Action:** Proceed to Phase 30 (Rich-Text Rendering & Parity) using Plans/plan_phase30_rich_text_rendering.md. Preserve Phase 26 native-desktop qualification, automatic-caption smoke, clean-VM and hardware-encoder evidence gaps.
+**Last Updated:** 2026-10-25
 
 ---
 
 ## 1. Current Objective
 
-Phase 18 audio crossfade implementation is complete with deferred interactive qualification:
-- **Phase 18 Implementation Status**: `COMPLETE WITH DEFERRED ITEMS`; see `Plans/plan_phase18.md` for the criterion-by-criterion evidence.
-- **Schema**: v4 is active; migrations from v1, v2, and v3 initialize empty audio-transition collections and preserve existing project data.
-- **Automated Verification**: PASS (209 Rust tests; 37 frontend tests; typecheck, fmt, Clippy, frontend/native builds all pass).
-- **Deferred Gates**: Interactive Windows audio transport/UI qualification and direct typed `app_health_check` verification.
-- **Runtime**: The exact `pnpm tauri dev` process tree was restarted after the final code/build and the new TinixCut process/window was observed; typed IPC remains unverified.
-- **Architecture Reconciliation**: Reviewed against ADR-006; no durable deviation, so `ARCHITECTURE.md` requires no change.
-- **Checkpoint**: Phase completion commit is prepared after runtime verification.
+The user approved implementation of the Animated Text Templates program per Plans/plan_animated_text_templates.md. Phases 27 (Template Contract, Fixtures and Baseline), 28 (Shared Text Renderer POC & Architecture Gate) and 29 (Rich-text & Animation Domain Model) are COMPLETE. Phase 30 (Rich-Text Rendering & Parity) is ready to begin.
+
+Phase tracking across the entire program is maintained in both PROJECT_STATUS.md and phase_status.md.
+
+### Phase 29 implementation checkpoint — 2026-10-25
+
+- **Domain (`src-tauri/src/modules/domain/text.rs`)**: `FontReference`, `TextLayout`, `TextFill` (internally tagged gradient/solid), ordered strokes/shadows, background box, grapheme-indexed `RichTextSpan`, `TextRichStyle`, and animation storage (`AnimationUnit`, `StaggerOrder`, `LoopMode`, `DurationConflictPolicy`, `AnimationTransform`, in/loop/out segments, pivot, seed). Hard limits 512 graphemes / 4 strokes / 4 shadows / 8 gradient stops.
+- **Schema v10**: additive `TimelineItem.text_rich` and `text_animation` (`#[serde(default)]`, default None); `migrate_v9_to_v10` bumps the version only and preserves legacy text/style/template/keyframes/transitions/ledger.
+- **Commands**: `ClipTextRichSet`, `ClipTextSpansSet`, `ClipTextLayoutSet`, `ClipTextAppearanceSet`, `ClipTextFontSet`, `ClipTextAnimationSet`, `ClipTextRichReset`; `ClipTextSet` expands full-length spans, clamps partial spans, prunes empty spans and validates before commit. Revision/idempotency/undo-redo behavior is unchanged.
+- **Consumers**: normalized composition and sampled preview layers carry `text_rich`/`text_animation`; TypeScript types mirror Rust; CLI `CapabilitiesReport` and MCP payload/schema expose the four new capability lists.
+- **Verification**: fmt/build clean; 152 lib tests pass (POC5 matrix filtered); 13 Phase 29 tests; 12 independent QA tests; Phase 14–18 and export suites pass; typecheck + 44 frontend tests + web build pass; clippy shows only the 3 pre-existing findings. Phase 28 optimized-profile invocation passes 6/6 with AC03 IPC 6.70 ms and no canonical-evidence overwrite.
+- **Review**: QA PASS (including BF-01/BF-02 supplement); Code Reviewer LGTM after two closed findings.
+- **Deferred**: rich-text rasterization integration is Phase 30; animation evaluation and deterministic split partitioning are Phase 31.
+
+### Phase 28 implementation checkpoint — 2026-10-25
+
+- **Shared Text Renderer POC Engine (`src-tauri/src/modules/media/text_renderer_poc.rs`)**:
+  - Implemented high-performance, deterministic software rasterizer in pure Rust using `ab_glyph 0.2.32`, `unicode-normalization 0.1.25`, and `unicode-segmentation 1.13.3`.
+  - Built-in static-bounds-anchored multi-stop linear gradient color sampling (118° angle), multi-layer circular outline stroke dilation (sorted widest-to-narrowest: 7.0 px `#4A2000` + 4.0 px `#AD5100`), separable box blur shadows (`#AD5100` + `#FFA758`), rounded background boxes, and decorative shape layers.
+  - Implemented character-level Extended Grapheme Cluster segmentation (Unicode UAX #29) with NFC precomposition, OpenType horizontal kerning, and unified cluster mask rasterization before 2D rotation, preserving Vietnamese diacritics (`ử`, `ệ`, `ế`) as single atomic units.
+  - Implemented Lua virtual timeline mapping (`totalFrame = 156`), cubic Bézier evaluation (`[0.166667, 0.166667, 0.14, 1.0]`, etc.), character stagger cascade, 21-char vertical slide (`1..21`), and 3-char bounce + Z-axis rotation (`22..24` `'i'`, `'ệ'`, `'t'`).
+  - Implemented straight-alpha frame rasterizer with Porter-Duff $(A \text{ over } B)$ blending, `BoundedGlyphCache` ($\le 256\text{ MiB}$ ceiling), store-mode PNG encoder/decoder, tight dirty ROI cropping (`roi_png_bytes`), Tauri IPC command `render_text_template_poc_preview`, and bounded FFmpeg streaming export.
+- **Integration Test Suite (`src-tauri/tests/phase28_text_renderer_poc.rs`)**:
+  - All 6 acceptance tests pass (`test_p28_ac01` through `test_p28_ac06`).
+  - Proves 100% bit-for-bit deterministic overlay output between Preview and Headless Export pathways ($\Delta \text{PSNR} = \infty$, $\text{ROI SSIM} = 1.000000$, $\text{ROI MAE} = 0.000000$, encoded MP4 $\text{ROI SSIM} = 0.9978$).
+  - Proves alpha channel integrity across 4 backgrounds (`poc_alpha_white.png`, `poc_alpha_black.png`, `poc_alpha_color.png`, `poc_alpha_video.png`) with zero dark halo or double-premultiplication.
+  - Proves child FFmpeg process cancellation and cleanup.
+- **Benchmark & Delivery Results (`artifacts/animated-text-templates/phase-28/benchmark-report.md` & `benchmark-metrics.csv`)**:
+  - Measured on Windows 11 reference host (i5-13400F, 64GB, RTX 3090): W1 Cold = 11.03 ms / Warm p95 = 5.21 ms (budget $\le 16.0\text{ ms}$), W2 Cold = 12.92 ms / Warm p95 = 14.87 ms (budget $\le 33.3\text{ ms}$), W3 16:9 Cold = 19.67 ms / Warm p95 = 17.23 ms (budget $\le 50.0\text{ ms}$), W3 9:16 Cold = 19.60 ms / Warm p95 = 16.92 ms (budget $\le 50.0\text{ ms}$), W4 continuous FFmpeg export stream = 5.18× RTF (`0.386 s` for 60 frames, budget $\ge 1.0\times$ RTF).
+  - Bounded Glyph Cache footprint: `176,499 bytes` (`0.17 MiB` / `256.00 MiB` max ceiling; `35` entries, `4,165` hits, `35` misses).
+- **Architecture Gate 28 & ADR-007 Locked**:
+  - Candidate B (Pure Rust Native Typography & Rasterization Stack) selected over Candidate A (`skia-safe`) due to toolchain portability (zero C++/LLVM requirement on Windows) and binary efficiency (< 850 KB overhead vs +42 MB for Skia).
+  - Locked in `ARCHITECTURE.md` (ADR-007) and documented in `RESEARCH.md` and `artifacts/animated-text-templates/phase-28/candidate-evaluation.md`.
+
+### Phase 27 implementation checkpoint — 2026-10-25
+
+- **Specification & Baseline Artifacts**: All deliverables completed and locked under `artifacts/animated-text-templates/phase-27/`:
+  - `baseline-inventory.json`: Current Git HEAD e6462544b6956054ee50af40727d44e92121487b, schema v9 baseline, 44 frontend tests passing, 222 total Rust tests passing (141 library + 81 integration suites, skipping non-terminating POC5 test per policy), clean format check, production build pass, baseline binary sizes, and 3 pre-existing uncommitted Clippy warnings tracked.
+  - `capcut-sample-index.json`: User sample TINIX_CAPCUT_IMPORT_TEST fully indexed with draft/video/style/script/font SHA256 hashes (plus Apache-2.0 `Roboto-Bold.ttf` SHA256 `61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334`), exact 29 graphemes / 24 non-space letters, scale factors (0.31 / 1.903216), 118° gradient style, brown stroke #AD5100 width 0.03808219, double shadow (#AD5100 & #FFA758), exact Lua animation sequence (21-char slide + 3-char bounce/rotation), font licensing constraints, and Lua engine exclusion.
+  - `compatibility-matrix.json`: 19 features partitioned into Core, Extended, and Unsupported tiers with owner phases (P29–P35), explicit test scenarios, .tinixtpl template pack format, and hard validation bounds (max 16 layers, 8 text slots, 512 graphemes/slot, 4 strokes, 4 shadows, 8 gradient stops).
+  - `contract-semantics.md`: Unambiguous definitions for canonical RationalTime { value: i64, rate: FrameRate }, graphics pipeline 2D transform multiplication order, character as Extended Grapheme Cluster (Unicode UAX #29), grapheme-offset rich text span indexing across Rust and TypeScript, rejection-by-default duration collision resolution with explicit proportional/clamp policies, and .tinixtpl template packaging.
+  - `fixture-corpus.json`: 14 standard fixtures (F01–F14) covering exact CapCut sample recreation, Vietnamese NFC/NFD diacritics, ZWJ emoji, multiline wrapping, edge cases, Latin ligatures, CJK/RTL diagnostic boundaries, appearance stress, duration collision policies, and responsive canvas anchors across 4 aspect ratios and 5 frame rates. Strict text ROI + alpha tolerance evaluation policy established.
+  - `workload-budgets.md`: Windows reference host specified (Windows 11 Pro 24H2, i5-13400F, 64GB, RTX 3090, 990 PRO NVMe); baseline binary sizes documented; workloads W1–W4 standardized; performance budgets proposed for Phase 28 validation (W1 p95 <= 16ms, W2 p95 <= 33.3ms, overlay cache <= 256MiB).
+  - `milestone-verification-checklist.md`: Comprehensive checklists for Milestones T1 (Motion Prototype), T2 (Native Authoring), T3 (CapCut Parity Gate), T4 (Headless Automation), and T5 (Hardening & Release).
+  - `evidence-summary.json`: Detailed machine-readable verification evidence confirming P27-AC-01 through P27-AC-07 all PASS.
+- **P26 Qualification Continuity**: All open Phase 26 items (interactive GUI qualification, clean Windows VM, hardware encoder) remain documented and open.
+- **Application Code Invariant**: Phase 27 modified specification and documentation only; application source and existing uncommitted working tree were strictly preserved.
+
+### Previous implementation checkpoints — retained evidence
+
+Phases 18–24 are implemented while preserving their deferred native qualification for the consolidated Phase 26 pass:
+- **Phase 18 Implementation Status**: COMPLETE WITH DEFERRED ITEMS; interactive transport and crossfade qualification pass per user; typed health IPC and preview cleanup remain deferred. See `Plans/plan_phase18.md` for criterion-by-criterion evidence.
+- **Schema**: v6 is active; v5→v6 preserves existing media items while adding optional source dimensions and defaulting all existing clips to `Fit` placement.
+- **Automated Verification**: `pnpm run test:all` passes with 44 frontend tests and 214 Rust tests passed (5 benchmark tests intentionally ignored); frontend typecheck/build, `cargo fmt --check`, native build, and library Clippy pass. All-target Clippy remains blocked by existing warnings across acceptance tests and Rust unit tests.
+- **Reported Failures**: Crossfade create/duration/remove/undo-redo; play/pause/seek/start/end without audio; imported video freezes after a few seconds. Follow-up testing isolated video silence to the preview's unconditional `muted` attribute and likely freeze behavior to seeking the video decoder on each sampled playhead update.
+- **Remediation**: Import persists probed media duration; adding an audio crossfade chooses a duration supported by the source handles; duration edits commit on blur/Enter; audio context unlock is initiated by the play gesture and media playback errors are shown. Active video audio now uses the video element's sampled gain and clock; ordinary playback drift no longer triggers repeated seeks, while paused scrubbing remains precise.
+- **Inspector Selection Smoke Retest**: User reports PASS: selecting a clip leaves the preview visible and the Inspector present. The user subsequently passed the crossfade editing scenarios as well.
+- **User interactive acceptance**: PASS for P18 transport (play past 10 seconds, pause, seek, project end, mute/unmute) and crossfade (create, audible transition, duration, remove, undo/redo, clear missing-handle failure).
+- **Deferred Gates**: Direct typed `app_health_check` observation and independent preview media-resource cleanup observation.
+- **Runtime**: The project-owned `pnpm tauri dev` runtime was restarted and verified current in the latest implementation checkpoint. Its Vite endpoint responds HTTP 200 and the native TinixCut process/window is responsive. The computer-use surface in this session exposes only a normal browser, not the native window, so typed IPC and selection-dependent UI behavior could not be observed here.
+- **Phase 19 Checkpoint**: Schema v5 domain values, migration, six-template registry, template/style/reset commands, normalized composition propagation, preview/export consumption, Inspector controls, command-backed `+ Text` creation, and automation capability exposure are implemented. The user reports PASS for template insertion, picker/style/reset, undo/redo, save/reopen, preview, and export. The deterministic FFmpeg font fallback is accepted for personal-use v1; font weight and line-height are not fully represented by the current drawtext fallback.
+- **Architecture Reconciliation**: Reviewed against the approved architecture; Phase 19 keeps text style and template identity in the canonical Project Domain Model and routes mutations through the Command Service, so `ARCHITECTURE.md` requires no change.
+- **Checkpoint**: Automated remediation checks and runtime restart passed. The user passed the native audible playback, crossfade, and Phase 19 text-template scenarios. Native Computer Use still exposes no app window in this session, so typed IPC and independent cleanup observation remain unqualified.
+
+### Phase 24 implementation checkpoint — 2026-10-09
+
+- Captions remain ordinary Phase 20 Text items; no new caption schema or migration was introduced.
+- Added atomic `TextTrackStyleSet` and `TextTrackTemplateApply` Command Service operations. Each validates its input, changes every Text item on exactly one track, returns that track as the affected scope, and rejects an empty target track without advancing the revision.
+- Inspector text-template and style controls expose track-wide batch actions only for tracks with more than one text clip. Batch template selection is one-shot, so a later template choice returns to the selected clip unless the user explicitly opts in again.
+- Focused regression evidence confirms both operations are track-scoped and atomic, preserve other text tracks, record the versioned template reference, and reject an empty track.
+- Verification passed: TypeScript typecheck, 44 frontend tests, production frontend build, Rust formatting, the focused Phase 24 test, 139 other library tests with the known non-terminating POC5 matrix excluded, native Rust build, and diff check.
+
+### Phase 25 implementation checkpoint — 2026-10-09
+
+- Added an opt-in Auto captions dialog for one selected audio or video clip. The user supplies a local `whisper-cli.exe` and compatible model `.bin`; their paths and language preference stay in local UI storage and are not written to the project.
+- The backend submits one cancellable, bounded transcription job. It creates a disposable 16 kHz mono WAV using the existing FFmpeg boundary, invokes Whisper JSON output, then removes temporary WAV and JSON artifacts after every terminal outcome.
+- Provider offsets are parsed as integer milliseconds, limited to the clip's source trim, mapped through its fixed speed into canonical project time, and committed as normal Text clips on an `Auto Captions` track through one Command Service transaction. The result is therefore editable and uses the normal undo/redo flow.
+- Explicit errors cover unavailable local tools, unsupported selection, cancellation, provider failure, and stale selected-media results. A completed job may be requested again; only active work is deduplicated.
+- Verification passed: TypeScript typecheck and production build; focused transcription and job tests; 141 Rust library tests plus all integration/acceptance suites with the known non-terminating POC5 matrix test excluded; native Rust build; and `git diff --check`.
+- Remaining evidence is intentionally batched in Phase 26: native end-to-end generation using a compatible local Whisper CLI/model, inspection of generated text/timing, and undo/redo. No transcription executable or model is bundled with the project.
+
+### Phase 26 preparation — 2026-10-09
+
+- Consolidated all remaining native-desktop acceptance into `Plans/phase26_manual_qualification.md`, including canvas/template, manual and automatic captions, transport/mute, transitions/crossfades/speed, export, save/reopen, and missing-media relink checks.
+- The current restarted development runtime is ready for this one-pass qualification. The automatic-caption case is `BLOCKED` only when a compatible user-provided local Whisper CLI/model is unavailable; an invalid supplied path must instead produce the documented clear failure.
+
+### Phase 23 implementation checkpoint — 2026-10-09
+
+- Added canonical `Half`, `Normal`, and `Double` `ClipSpeed` values with schema v9 migration that defaults existing clips to `Normal`.
+- Timeline/source mapping, handle validation, normalized composition, preview, and FFmpeg export share the same bounded speed semantics. Preview/export preserve pitch through `preservesPitch` and deterministic `atempo` mappings.
+- Targeted regression, frontend typecheck/tests/build, native build, and runtime restart completed. The full library test command remains excluded because the existing POC5 matrix harness has no timeout and can hang after reporting its completed tests.
+
+### Phase 22 implementation checkpoint — 2026-10-09
+
+- Added canonical `VisualEffectPreset` values (`None`, `Mono`, `Vivid`, and `Muted`) for video and image clips, with schema v8 migration that safely defaults existing clips to `None`.
+- Added command-backed visual effect selection and cut-owned `DipToBlack` transitions. Both route through the existing Command Service, preserve revision/history behavior, and remain distinct from item-owned fade transitions.
+- Normalized composition carries the effect values into preview and FFmpeg export. Preview uses matching CSS filters; export maps the bounded presets to deterministic `eq` filters and maps `DipToBlack` to FFmpeg's `xfade=fadeblack`.
+- Inspector controls expose clip effects and distinct Cross Dissolve / Dip to Black seam actions without accepting cut transitions as item transitions.
+- Targeted effects, command-history, migration, composition, and filtergraph tests pass. Full verification passes: 44 frontend tests, 137 Rust unit tests, all existing integration/acceptance tests, production frontend build, native Rust build, format, and diff checks.
+- The project-owned runtime restart and health verification follow this checkpoint's final code change. Native manual qualification remains batched in Phase 26.
+
+### Phase 21 implementation checkpoint — 2026-10-09
+
+- Added the canonical `ProjectSettingsSet` command for revision-checked canvas changes. The command validates H.264-compatible dimensions and round-trips through undo/redo.
+- Added 16:9, 9:16, 1:1, and 4:5 toolbar presets. The preview viewport derives from the project canvas instead of a fixed 16:9 display.
+- The default export profile now inherits the project’s canvas, frame rate, and audio sample rate, so changing a project ratio is carried into default export semantics.
+- Media import now persists probed source dimensions in the canonical project model. `Fit` and `Fill` placement are Command Service mutations and are represented in the shared Composition Plan, so preview and FFmpeg export calculate the same content geometry.
+- Schema v6 migrates existing assets without dimensions and existing clips without a placement mode safely to `Fit`; schema v7 adds a black canonical canvas background to prior projects.
+- `CanvasBackgroundSet` persists normalized solid background color through the Command Service, normalized composition, preview, and FFmpeg export. Preview-only title/action safe-zone overlays are non-persistent and do not alter export timing or media semantics.
+- The Output menu supplies balanced, high-quality, and smaller-file export quality presets. Every preset inherits the canonical canvas and frame rate; the backend rejects contradictory direct output geometry or requests that specify both profile and preset.
+- Targeted command, migration, export, and composition regressions pass. Full project verification passes: 44 frontend tests, 134 Rust unit tests, the existing acceptance/integration suites, production frontend build, native Rust build, `cargo fmt --check`, and `git diff --check`.
+- Native manual verification remains batched in Phase 26. The project-owned runtime restart and health verification follow this checkpoint's final code change.
+
+### Current Phase 20 implementation checkpoint — 2026-10-09
+
+- Added bounded SRT and WebVTT parsing with UTF-8/BOM/CRLF normalization, integer frame-rate conversion, overlap rejection, and input limits.
+- Added `captions_import` and `captions_export` Tauri commands. Import creates a dedicated Text caption track through one Command Service transaction; export uses an atomic sibling-file replacement.
+- Added desktop Import captions and Export captions actions.
+- Parser regression tests pass: SRT multiline/CRLF, VTT identifiers/settings, malformed/empty/zero/overlapping cues, 29.97fps rounding, and case-insensitive extensions.
+- Full validation passes: `pnpm run test:all`, `pnpm run typecheck`, `pnpm run build`, Rust format check, library Clippy, and Rust build.
+- The project-owned `pnpm tauri dev` runtime was restarted after the final change. Vite responds HTTP 200 on port 1420 and the current `tinixcut.exe` is running from `src-tauri/target/debug`.
+- Remaining evidence: interactive import/export/undo/redo smoke in the native window. Native Computer Use is unavailable in the current session, so this is left open for manual verification.
+
+### Latest Phase 19 qualification checkpoint — 2026-10-09
+
+- User-reported native smoke is PASS for `+ Text`, template picker/style/reset, undo/redo, save/reopen, preview, and export.
+- `pnpm run test:all` is PASS: 44 frontend tests, 214 Rust tests, and 5 intentionally ignored benchmark tests.
+- Typecheck, Rust format, library Clippy, Rust build, and frontend build are PASS.
+- Fixed an FFmpeg export deadlock: stderr is now drained concurrently while the child process runs, so a full OS pipe cannot block export completion.
+- The deterministic FFmpeg font fallback is explicitly accepted for personal-use v1. Weight and line-height parity remain bounded limitations.
+- Native typed `app_health_check`, independent preview cleanup observation, P16 GUI qualification, clean-VM qualification, and hardware encoder qualification remain deferred.
+
+### Product expansion discovery checkpoint
+
+- Targeted R2 research is complete enough to plan a bounded first creator feature.
+- The model now persists editable text style and template identity as schema v5 domain values.
+- Preview and export consume the resolved style carried by normalized composition; remaining qualification must confirm parity across the supported aspect ratios and fallback behavior.
+- `Plans/plan_phase19_text_templates.md` is in implementation. Domain/migration, registry, commands, composition, and initial Inspector controls are implemented; full qualification is pending.
+- The proposed phase keeps six built-in declarative templates in scope and defers automatic captions, SRT/VTT, karaoke, AI, marketplace, Lottie, and broad effect parity.
 
 ### Historical Phase 17 Checkpoint
 
@@ -88,7 +222,7 @@ Phase 17 performance requalification and release foundation was reconciled as CO
 - Phase 14 Advanced Keyframe Interpolation: **COMPLETE** (Schema v3 current, ADR-004 implemented, canonical 32-iteration bisection evaluator, Linear/EaseIn/EaseOut/EaseInOut/CubicBezier, split/trim lifecycle semantics, ExportAutomationSchedule sendcmd video runtime commands, sample-accurate audio gain envelope, CrossDissolve coexistence, P14-PREREQ-01 resolved; accepted by ChatGPT and ratified by user post-implementation).
 - Phase 15 MCP Automation Adapter: **COMPLETE** (ADR-005 implemented, `rmcp` 3.x local stdio transport, MCP `2026-07-28` primary protocol, exact 8-tool surface, explicit `projectPath` addressing, caller-supplied ADR-001 structured identity, atomic apply persistence, process-local write serialization, `JobManager` export lifecycle, structured domain error preservation, spawned subprocess stdout purity verified on Windows; accepted by ChatGPT after implementation and remediation).
 - Phase 16 Timeline Editing Productivity: **COMPLETE WITH DEFERRED ITEMS** (Ephemeral Ctrl multi-select & primary selection, exact 8px snapping, atomic ClipGroupMove, single-track bounded ClipRippleDelete, centralized shortcut framework, non-ripple trim, multi-delete, primary-only duplicate, generic CLI/JSONL/MCP transport inheritance, canonical RationalTime semantic helpers; automated test suite 100% green; P16-AC-56 real interactive Windows GUI QA deferred).
-- Automated Tests (Phase 18 checkpoint): 246 passed (209 Rust tests + 37 frontend tests; 5 benchmark tests intentionally ignored); fmt, Clippy, typecheck, frontend build, and Rust build pass.
+- Automated Tests (current remediation): `pnpm run test:all`, typecheck, and frontend build pass; the suite includes the new video-audio composition and decoder-seek regression checks. Native desktop playback remains unqualified until interactive Windows GUI access is available.
 
 ---
 
@@ -123,28 +257,33 @@ Phase 17 performance requalification and release foundation was reconciled as CO
 
 ## 4. Current Checkpoint
 
-Phase 17 implementation, qualification, self-review, and durable reconciliation are complete with deferred items. The next phase has not yet been selected.
+Phase 18 implementation checks pass, and the user has passed the documented interactive transport and crossfade scenarios. Phase 19 is complete: the user reports PASS for the native template workflow, automated qualification is green, the export stderr deadlock is fixed, and the deterministic renderer fallback is accepted for personal-use v1. Direct typed `app_health_check` observation, independent preview-media cleanup observation, Phase 16 GUI qualification, clean-VM qualification, and hardware-encoder qualification remain deferred.
 
 ---
 
 ## 5. Blockers / Known Issues
 
 ### Active Technical Blockers / Technical Debt
-- **Active Technical Blockers**: None. All 235 automated tests pass cleanly (198 Rust, 37 Vitest).
-- **Known Code Defects**: Zero known Phase-16 code defects remain from automated verification.
+- **Inspector selection smoke retest**: User reports PASS: the preview and right Inspector remain visible after selecting a timeline clip. This closes the reported symptom for the tested flow.
+- **Phase 18 acceptance status**: P18-AC-11 is PASS. The interactive transport portion of P18-AC-07 is PASS; only its independent preview-media cleanup observation and P18-AC-14 typed `app_health_check` remain deferred.
+- **Automated evidence**: Fresh verification passed `pnpm run test:all` (214 Rust tests passed, 5 intentionally ignored; 44 frontend tests passed), typecheck, frontend build, fmt, Clippy, and Rust build.
 - **RationalTime Semantics**: Zero known RationalTime semantic contract violations; representation `Ord`/`Eq` preserved ($a.\text{cmp}(b) == \text{Equal} \iff a == b$), explicit 128-bit cross-multiplication semantic helpers used for all domain timeline decisions.
-- **Schema & Parity**: Zero schema regressions (Schema v3 intact); zero preview/export semantic regressions.
+- **Schema & Parity**: Schema v4 is active; recorded v1–v3 migrations and Phase 18 preview/export parity checks pass.
 - **Active Deferred Acceptance Qualification**:
   ```text
-  1. P16-AC-56:
-     Manual Windows interactive GUI QA deferred.
-     Automated coverage is green, but real desktop interaction has not been qualified.
-     Both Codex and ChatGPT Work environments reported BLOCKED — GUI interaction capability unavailable.
-     The user elected not to perform the 23-item manual checklist personally. This is an environment constraint, not a product defect.
+  1. P18-AC-07 and P18-AC-14:
+     The user passed interactive transport and all documented crossfade scenarios. Direct typed app_health_check
+     verification and independent preview-media cleanup observation remain deferred; automated tests/builds do not substitute for those runtime checks.
 
-  2. True Clean Windows 10/11 VM Qualification:
+  2. P16-AC-56:
+     Manual Windows interactive GUI QA remains deferred and is not marked PASS.
+
+  3. True Clean Windows 10/11 VM Qualification:
      Provisioning a sanitized clean virtual machine without dev tools, Visual C++ runtimes, or local state
      remains an external release gate prior to general distribution.
+
+  4. Hardware encoder qualification:
+     NVENC/QSV/AMF qualification remains deferred; the recorded host evidence does not qualify those backends.
   ```
 
 ### Phase 15 Technical Status (RESOLVED by ADR-005 & Phase 15 Implementation)
@@ -278,31 +417,14 @@ These do not block the current phase unless the user changes scope:
 ## 7. Verification State
 
 ```text
-Full cargo test: PASS (198 passed, 0 failed)
-- Rust unit tests: 107 passed
-- Export POC tests: 8 passed
-- Phase 14 acceptance tests: 15 passed
-- Phase 15 acceptance tests: 26 passed
-- Phase 16 research POC tests: 12 passed
-- Phase 16 timeline productivity acceptance tests: 30 passed
-Frontend tests: PASS (37 vitest passed across 4 test suites, 0 failed)
-- timelineSelection.test.ts: 6 passed
-- App.test.ts: 14 passed
-- timelineSnapping.test.ts: 12 passed
-- timelineShortcuts.test.ts: 5 passed
-Typecheck: PASS (tsc --noEmit, 0 errors)
-Lint: PASS (cargo clippy -- -D warnings, 0 warnings)
-Formatting: PASS (cargo fmt --check)
-Build: PASS (pnpm run build, cargo build)
-FFmpeg: PASS (app-owned bundled FFmpeg 9.0.2 verified via MediaBinaryResolver)
-P14-PREREQ-01: RESOLVED (dynamic keyframes affect full video/audio export)
-Phase 15 Qualification: PASS (Windows real spawned MCP subprocess, stdout purity, EOF cleanup)
-Automation Acceptance: PASS (10-step E2E scenario passed, transition & easing automation verified)
-Preview/Export Parity: PASS (Gate E / POC 2 within <0.1px tolerance, Phase 13/14 fixtures verified)
-ADR-001 Idempotency / Replay: PASS (ClipGroupMove and ClipRippleDelete deduplication and collision verified)
-CLI / JSONL / MCP Generic Transport: PASS (Generic CommandEnvelope dry-run/apply verified without custom transport logic)
-P16-AC-56 (Manual Windows GUI QA): DEFERRED (Desktop GUI automation unavailable in agent environments; manual checklist not executed; not marked PASS)
-Known pre-existing failures: None
+Latest fresh Phase 18 verification: PASS (210 Rust tests + 44 frontend tests; 5 benchmark tests intentionally ignored)
+Typecheck, cargo fmt, Clippy, frontend build, and Rust build: PASS at Phase 18 checkpoint
+Earlier phase evidence remains recorded in the phase plans and qualification artifacts.
+Phase 18 P18-AC-07 (interactive transport): PASS per user; independent preview-media cleanup observation: DEFERRED
+Phase 18 P18-AC-11 (interactive/accessibility crossfade editing flow): PASS per user
+Phase 18 P18-AC-14 (typed app_health_check runtime invocation): DEFERRED
+P16-AC-56 (manual Windows GUI QA): DEFERRED
+True clean Windows VM and hardware encoder qualification: DEFERRED
 ```
 
 ---
@@ -317,7 +439,7 @@ Media sidecars: Bundled FFmpeg / FFprobe 9.0.2 Essentials (App-owned packaged re
 Local services: Controlled Command Service, Job Manager (bounded concurrency & backpressure), MCP Stdio Server (rmcp 3.x)
 Database: Versioned Project Domain JSON files (Schema v4 active; migrated losslessly from v1–v3) + atomic safe promotion + recovery journals
 Packaging: NSIS standalone installer (currentUser, downloadBootstrapper)
-Current development mode: Phases 0–15 COMPLETE; Phases 16–18 COMPLETE WITH DEFERRED ITEMS. Phase 18 automated acceptance is complete; interactive Windows qualification remains open.
+Current development mode: Phases 0–18 implemented; Phases 16–18 have deferred qualifications. Phase 18 automated acceptance is complete; user interactive transport and crossfade acceptance has passed. Direct typed health IPC and independent preview-media cleanup observation remain open.
 Phase 17 approved planning checkpoint: `c35b4e3138d653c132355b07a8ce6464fdec4169`; transport research amendment: `36e19af`; qualification commit: `28f94c6`. Release benchmark suite passed 5/5, CM-01..CM-07 host-isolated harness passed 7/7, package built, and required functional/build checks passed. P17-AC-03 PASS: the approved planning checkpoint contains the plan only; the later calibration harness/seed/evidence are research artifacts in a distinct amendment commit.
 Deferred: true clean Windows 10/11 VM qualification, P16-AC-56 interactive GUI QA, and hardware encoder qualification. CM-05 harness is a simulation only; implementation-level atomic persistence/recovery is covered by Rust storage tests.
 Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evidence/phase17_transport_recalibration_2026-10-07.json`, `tests/evidence/clean_machine_qualification_report.json`. Installer SHA-256: `59a3bd697713e2ab50081175155926a18f8e3b1d65fae23f6ec6a966debb841f`.
@@ -327,8 +449,10 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ## 9. Next Actions
 
-1. Complete deferred interactive Windows audio/UI qualification and directly verify typed `app_health_check`.
-2. Preserve Phase 16/17 external qualification deferrals; do not imply those gates passed.
+1. On a Windows session with native interactive desktop access, invoke the typed `app_health_check` command for P18-AC-14 and independently observe preview media-resource cleanup for the remaining portion of P18-AC-07.
+2. Keep P16-AC-56, true clean-VM, and hardware-encoder gates marked deferred until their required environments are available.
+3. Prepare and review a bounded Phase 20 plan for manual captions and SRT/VTT import/export.
+4. `Plans/research_creator_expansion.md` records the research basis and `Plans/plan_phase19_text_templates.md` records the completed Phase 19 implementation and qualification state.
 
 ---
 
@@ -341,15 +465,20 @@ Current implementation checkpoint:
 - Phase 17: COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 in-scope acceptance passed; true VM, interactive GUI, and hardware encoder gates deferred).
 - Phase 17 reconciliation commits: 28f94c6 and 988b7cf; transport research amendment 36e19af.
 - Phase 18 research gate: COMPLETE and committed as `61f2122`; Phase 18 plan is self-reviewed and locked in the planning checkpoint.
-- Active implementation: Phase 18 is implemented; completion is qualified with deferred interactive GUI/IPC gates.
+- Active implementation: Phase 18 code and automated checks are complete. User passed the documented video/audio transport and crossfade scenarios, in addition to the clip-selection/preview/Inspector smoke retest. Only direct typed health IPC and independent preview-media cleanup observation remain unqualified.
 - Objective: Schema v4 persistent equal-power crossfades between adjacent standalone Audio items, canonical preview/export gain parity, and audible standalone audio preview.
 - Durable decision: ADR-006 accepted for implementation. Handle automation offsets clamp to editorial endpoints; existing endpoint keyframe/fade evaluation is preserved in preview and export.
-- Current project schema is v4; v1–v3 migrations and v4 round-trip are verified.
-- Phase 18 verification: 209 Rust tests + 37 frontend tests pass, along with typecheck, fmt, Clippy, frontend build, and Rust build.
-- Next action: complete deferred interactive Windows audio/UI and typed IPC qualification.
+- Current project schema is v5; v1–v3 migrations, v4→v5 migration, and current-schema text-style round trip are verified by targeted tests.
+- Phase 18 verification: latest fresh run passes 210 Rust tests and 44 frontend tests (5 benchmark tests intentionally ignored), along with typecheck, fmt, Clippy, frontend build, and Rust build.
+- Phase 19: COMPLETE WITH DEFERRED ITEMS. Domain/migration, six-template registry, template/style/reset commands, normalized composition propagation, preview/export style consumption, Inspector template/style controls, command-backed `+ Text` creation, and automation capability exposure are implemented. The user reports native smoke PASS; the deterministic FFmpeg fallback is accepted for personal-use v1. Native typed health IPC and independent cleanup observation remain deferred.
+- Latest remediation checkpoint: Preview transport RAF keeps its clock alive across playhead renders through refs; video audio follows sampled composition gain on the video element; decoder seeks are suppressed during ordinary playback drift and active seeks. On decoder error, preview requests a deduplicated 720p H.264/AAC cache proxy while preserving the original asset for project semantics and export. Standalone Audio uses native WebView media output instead of createMediaElementSource routing, and importing Audio into a video-only project atomically creates an Audio track. The waveform loader now polls pending extraction work every 400 ms instead of performing a one-shot request. Preview sampling now coalesces high-frequency playhead updates into one in-flight IPC request, so old playback samples cannot queue ahead of a user seek. A video layer that produces no decoded frame or dimensions within two seconds triggers the same compatible-preview proxy path, covering audio-only WebView decoder failures that do not emit a media error.
+- Track mute checkpoint: Rust already had the canonical undoable `TrackMuteSet` command and composition semantics, but the frontend had omitted its typed operation and any user control. Each timeline track header now has a persisted Mute/Unmute button that sends that command through the shared Command Service.
+- Selection/preview investigation: user confirmed the prior selection-outline change did not fix the black preview. Timeline selection does not seek, mutate the project, or resample composition. The selection rerender did recreate the inline video ref callback and render an overlay above the accelerated video surface. Current remediation memoizes the video layer so selection-only renders leave its DOM/ref untouched, and omits preview overlays for video layers to avoid WebView2 surface occlusion. Native reproduction/verification remains open because computer-use exposes no native app window.
+- Runtime checkpoint: the project-owned `pnpm tauri dev` process tree was replaced after the current media remediation passed frontend typecheck, tests, build, and the full Rust suite. The replacement Vite process listens on `::1:1420`, `localhost:1420` responds with HTTP 200, and a newly started `tinixcut.exe` process is present. Computer-use currently exposes no native application window (`apps: []`), so it cannot independently observe typed health IPC or preview cleanup.
+- Next action: prepare a bounded Phase 20 plan for manual captions and SRT/VTT import/export; also invoke `app_health_check` and observe preview cleanup when a native-window control surface is available. Retain the user-reported transport, crossfade, Inspector, and text-template smoke PASS results.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 COMPLETE WITH DEFERRED ITEMS (Schema v4; automated acceptance passed; interactive Windows audio/UI and typed IPC qualification open).
+Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 COMPLETE WITH DEFERRED ITEMS (Schema v4; automated acceptance passed; user transport, crossfade, and clip-selection/Inspector smoke scenarios PASS; typed IPC and independent preview cleanup deferred) -> Phase 19 COMPLETE WITH DEFERRED ITEMS (Schema v5; core domain/registry/commands/composition/UI implemented; automated qualification passed; user-reported native smoke PASS; deterministic fallback accepted; typed IPC and independent preview cleanup deferred).
 ```
 
 ---
@@ -370,6 +499,7 @@ ADR_003_ADJACENT_CUT_CROSSDISSOLVE_AND_TRANSITION_COMPOSITING_SEMANTICS.md
 ADR_004_CANONICAL_KEYFRAME_EASING_CLIP_LOCAL_LIFECYCLE_AND_SAMPLED_EXPORT_AUTOMATION_SEMANTICS.md
 ADR_005_MCP_LOCAL_STDIO_TOOLS_ADAPTER_EXPLICIT_PROJECT_ADDRESSING_AND_DURABLE_IDENTITY.md
 ADR_006_AUDIO_CROSSFADE_SEMANTICS_AND_SAMPLE_GRID_GAIN.md
+ADR_007_SHARED_TEXT_RENDERER_AND_OVERLAY_PIPELINE.md
 Plans/plan_phase18.md
 ```
 

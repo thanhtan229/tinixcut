@@ -1,0 +1,25 @@
+{
+  "projectId": "proj_563e31a2b6d94aab878a8dc90905bb20",
+  "baseRevision": 0,
+  "operationsEvaluated": 3,
+  "changes": [
+    {
+      "trackCreated": {
+        "track_id": "trk_baked",
+        "name": "Baked CapCut animation"
+      }
+    },
+    {
+      "assetImported": {
+        "asset_id": "asset_capcut_reference"
+      }
+    },
+    {
+      "clipCreated": {
+        "item_id": "clip_baked",
+        "track_id": "trk_baked"
+      }
+    }
+  ],
+  "warnings": []
+}

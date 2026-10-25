@@ -1,0 +1,56 @@
+{
+  "phase": "Phase 27",
+  "title": "Template Contract, Fixtures and Baseline",
+  "status": "PASS",
+  "completed_at": "2026-10-25T10:35:00+07:00",
+  "git_revision": "e6462544b6956054ee50af40727d44e92121487b",
+  "acceptance_criteria": {
+    "P27-AC-01": {
+      "criterion": "Source inventory và baseline có revision, hashes, checks và phân biệt pre-existing failures",
+      "status": "PASS",
+      "evidence_file": "baseline-inventory.json",
+      "details": "TypeScript typecheck (0 errors), Vitest (44/44 pass), production frontend build (pass), cargo fmt check (pass), cargo test lib (141 pass, 1 non-terminating POC5 skipped per documented policy), integration suites (Phase 14: 15 pass, Phase 15 MCP: 27 pass, Phase 16: 30 pass, Phase 18 audio: 1 pass, Export automation POC: 8 pass, totaling 222 passing Rust tests), cargo clippy (clean with 3 pre-existing warnings in uncommitted code), binary size snapshot recorded (debug 24,498,688 B, release 7,381,504 B, installer 59,085,922 B), git diff whitespace check (0 errors)."
+    },
+    "P27-AC-02": {
+      "criterion": "Mẫu người dùng được index đủ style/font/motion/reference; resource thiếu được nêu chính xác",
+      "status": "PASS",
+      "evidence_file": "capcut-sample-index.json",
+      "details": "Sample TINIX_CAPCUT_IMPORT_TEST fully indexed with exact SHA256 hashes (draft, video 1011.mp4, effectStyle.json, AnimScript.lua, MPLUS1p-ExtraBold.ttf, artistEffect content.json). Exact 29 graphemes / 24 non-space characters recorded. Layer geometry and scales (0.31 segment scale, 1.903216 template scale, combined 0.589997) recorded. Exact gradient (118°, #ffe35f to #ffffff), stroke (#AD5100, normalized width 0.03808219), 2 shadows (#AD5100 and #FFA758), and exact Lua animation sequence (virtual frame formula, group A 21-char slide, group B 3-char 2-segment bounce + Z rotation, no scale change) documented. Resource presence and proprietary font license limits documented."
+    },
+    "P27-AC-03": {
+      "criterion": "Core/extended/unsupported options có owner phase và test scenario",
+      "status": "PASS",
+      "evidence_file": "compatibility-matrix.json",
+      "details": "19 feature options mapped to Core, Extended, and Unsupported tiers with designated owner phases (P29-P35) and explicit test scenarios. Validation bounds and .tinixtpl template pack format locked."
+    },
+    "P27-AC-04": {
+      "criterion": "Units, grapheme/span indexing, layout và duration/lifecycle semantics không còn mơ hồ",
+      "status": "PASS",
+      "evidence_file": "contract-semantics.md",
+      "details": "Canonical RationalTime { value: i64, rate: FrameRate } locked; three-tier transform hierarchy (Item -> Layer -> Unit) and 2D matrix multiplication order locked; painter's order (background -> shadows/glows -> outer strokes -> glyph fill -> inner strokes) and units defined; character defined strictly as Unicode UAX #29 extended grapheme cluster; rich text span indexing defined by grapheme offsets with deterministic rebinding on ClipTextSet; duration collision resolution defined with rejection by default and explicit ProportionalScale/ClampOut options; editorial Move/Trim/Split/Stretch rules, parameter whitelist, and .tinixtpl archive safety limits locked."
+    },
+    "P27-AC-05": {
+      "criterion": "Fixture corpus và comparison policy kiểm tra được tiếng Việt/alpha/timing/overrides",
+      "status": "PASS",
+      "evidence_file": "fixture-corpus.json",
+      "details": "14 fixtures (F01-F14) defined covering exact CapCut recreation with text variants ('Tinix', 'Hi'), Vietnamese NFC/NFD diacritics, ZWJ emoji, multiline, edge cases, Latin ligatures, CJK/RTL boundaries, multi-stroke/shadow stress, gradients, duration collision policies (reject vs proportional), responsive canvas anchors across 4 aspect ratios and 5 frame rates, rich spans + background box/glow, multilayer density stress (16 layers), and full in/loop/out lifecycle with 8 standard sampling checkpoints."
+    },
+    "P27-AC-06": {
+      "criterion": "Workload/budgets/reference host được ghi; không có claim performance chưa đo",
+      "status": "PASS",
+      "evidence_file": "workload-budgets.md",
+      "details": "Windows reference host documented (Windows 11 Pro 24H2, i5-13400F, 64GB RAM, RTX 3090, Samsung 990 PRO NVMe). Pre-Phase 27 baseline binary sizes (24,498,688 / 7,381,504 / 59,085,922 B) and Phase 17 transport/export baselines documented. Workloads W1-W4 defined with exact parameters. Latency targets (W1 <= 16ms, W2 <= 33.3ms, cache <= 256MB) documented as targets for Phase 28 empirical validation. Manual verification checklist documented in milestone-verification-checklist.md."
+    },
+    "P27-AC-07": {
+      "criterion": "P26 gaps vẫn hiện hữu; không có app code/source CapCut bị sửa trong slice contract",
+      "status": "PASS",
+      "evidence_file": "baseline-inventory.json",
+      "details": "All deferred Phase 26 qualification items (GUI QA, clean VM, hardware encoder) retained without fake pass. Zero application code modified; zero CapCut source modified. Contract phase executed cleanly as specification and baseline."
+    }
+  },
+  "gate_outcome": {
+    "gate_name": "Gate 27 — Template Contract Specification & Baseline Lock",
+    "status": "PASS",
+    "ready_for_phase_28": true
+  }
+}

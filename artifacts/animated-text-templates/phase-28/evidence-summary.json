@@ -1,0 +1,63 @@
+{
+  "phase": "Phase 28",
+  "title": "Shared Text Renderer POC and Architecture Gate",
+  "status": "PASS",
+  "completed_at": "2026-10-25T15:37:34+07:00",
+  "git_revision": "e6462544b6956054ee50af40727d44e92121487b",
+  "acceptance_criteria": {
+    "P28-AC-01": {
+      "criterion": "Sample typography và style primitives vẽ được từ fixture, với shaping/cluster mapping có thể dùng cho animation",
+      "status": "PASS",
+      "evidence_file": "src-tauri/tests/phase28_text_renderer_poc.rs::test_p28_ac01_shaping_and_cluster_mapping_with_rotation",
+      "details": "True OpenType font parsing, horizontal kerning, NFC normalization (unicode-normalization 0.1.25), and unified cluster mask rasterization via ab_glyph 0.2.32 and unicode-segmentation 1.13.3. Verified using Apache-2.0 open-source Roboto-Bold.ttf (SHA-256 61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334, 0 missing glyphs). 29 extended grapheme clusters (24 non-space letters) correctly preserved; NFC and NFD inputs produce identical layouts; Vietnamese diacritics ('ử', 'ệ', 'ế') remain combined with base vowels across 21-char vertical slide and 3-char bounce with Z-rotation."
+    },
+    "P28-AC-02": {
+      "criterion": "Preview và headless export dùng cùng font/layout/evaluation/renderer; cùng input lossless overlay phải cho kết quả deterministic",
+      "status": "PASS",
+      "evidence_file": "src-tauri/tests/phase28_text_renderer_poc.rs::test_p28_ac02_deterministic_overlay_generation",
+      "details": "Identical inputs yield bit-for-bit identical RGBA buffers across repeated evaluations and consumer pathways. Delta PSNR is infinite; 0 mismatch bytes across 8,294,400 bytes per 1080p frame."
+    },
+    "P28-AC-03": {
+      "criterion": "Captured preview vs lossless export ở cùng resolution/time đạt tolerance P27; encoded MP4 được kiểm tra riêng, không dùng codec artifact để nới renderer tolerance",
+      "status": "PASS",
+      "evidence_file": "src-tauri/tests/phase28_text_renderer_poc.rs::test_p28_ac03_png_export_preview_ipc_and_parity_ssim",
+      "details": "Consumer 1 Tauri IPC command render_text_template_poc_preview delivers PreviewOverlayIpcResponse with tight dirty ROI [667, 471, 1087, 570] and tight ROI PNG (166,497 bytes, 436 KB JSON). Decoded Preview ROI vs Lossless Export RGBA buffer achieves ROI SSIM = 1.000000 (>= 0.995) and ROI MAE = 0.000000 (<= 0.005). End-to-end delivery latency p95 = 13.83 ms (<= 16.0 ms). Encoded H.264 MP4 frame extracted via FFmpeg achieves ROI SSIM = 0.9977 (>= 0.985)."
+    },
+    "P28-AC-04": {
+      "criterion": "Alpha tests không nền đen/halo/clipping; geometry/bounds đúng qua scale và rotation",
+      "status": "PASS",
+      "evidence_file": "src-tauri/tests/phase28_text_renderer_poc.rs::test_p28_ac04_alpha_channel_integrity_four_backgrounds",
+      "details": "Straight-alpha storage and Porter-Duff Over compositing verified across 4 backgrounds: pure white (poc_alpha_white.png), pure black (poc_alpha_black.png), solid green (poc_alpha_color.png), and decoded video frame (poc_alpha_video.png). Every semi-transparent fringe pixel satisfies exact convex combination C_out = alpha * C_fg + (1 - alpha) * C_bg with zero dark halo. Perimeter boundary transparency check verifies zero clipping of outer stroke and blurred shadow. Geometry scaling (0.59x, 1.208x) and rotation (-21 deg, +6 deg) confirmed."
+    },
+    "P28-AC-05": {
+      "criterion": "Native + actual delivery performance đáp ứng budget đã lock. Nếu workload phải hạ, report rõ và sửa scope trước gate; không tự gắn PASS cho workload cũ",
+      "status": "PASS",
+      "evidence_file": "artifacts/animated-text-templates/phase-28/benchmark-metrics.csv",
+      "details": "All measured latencies on Windows 11 reference host satisfy Phase 27 locked budgets with 100% characters visible at completion: W1 Cold = 11.31 ms, Warm p50 = 5.60 ms, Warm p95 = 7.10 ms (budget <= 16.0 ms); W2 Cold = 13.64 ms, Warm p50 = 11.07 ms, Warm p95 = 12.21 ms (budget <= 33.3 ms); W3 16:9 Cold = 20.72 ms, Warm p50 = 18.51 ms, Warm p95 = 20.32 ms (budget <= 50.0 ms); W3 9:16 Cold = 26.86 ms, Warm p50 = 17.74 ms, Warm p95 = 19.78 ms (budget <= 50.0 ms); W1 Preview IPC delivery p95 = 13.83 ms (budget <= 16.0 ms); Seek latency p95 = 8.25 ms (budget <= 16.0 ms); Edit latency p95 = 2.96 ms (budget <= 25.0 ms); W4 throughput = 5.15x RTF (0.388s for 60 frames, budget >= 1.0x RTF). BoundedGlyphCache uses 402,683 bytes (0.38 MiB / 256.00 MiB max)."
+    },
+    "P28-AC-06": {
+      "criterion": "Bounded memory/backpressure/cancel/worker failure không leak, không để output final giả thành công",
+      "status": "PASS",
+      "evidence_file": "src-tauri/tests/phase28_text_renderer_poc.rs::test_p28_ac06_ffmpeg_export_stream_and_cancellation",
+      "details": "Consumer 2 streams 60 frames directly into FFmpeg stdin pipe (rawvideo rgba) with background stderr reader preventing pipe deadlock. Verified real video export poc_export_sample.mp4 and decoded frame parity (ROI SSIM = 0.9977). Cancellation token immediately terminates child FFmpeg process and deletes incomplete output files cleanly."
+    },
+    "P28-AC-07": {
+      "criterion": "Windows build/package smoke đủ kiểm chứng dependency; unresolved clean-VM evidence được giữ riêng",
+      "status": "PASS",
+      "evidence_file": "artifacts/animated-text-templates/phase-28/candidate-evaluation.md",
+      "details": "Pure Rust typography dependencies (ab_glyph 0.2.32, unicode-normalization 0.1.25, unicode-segmentation 1.13.3) compile cleanly via standard cargo build with zero external C++/LLVM/Python prerequisites. Measured binary size increase is +1.18 MB in release (8.56 MB vs 7.38 MB baseline, vs +42 MB for Skia). Phase 26 clean-VM qualification remains explicitly deferred."
+    },
+    "P28-AC-08": {
+      "criterion": "ADR, composition boundary và workflow được reconcile; chỉ một shipping backend được chọn",
+      "status": "PASS",
+      "evidence_file": "ADR_007_SHARED_TEXT_RENDERER_AND_OVERLAY_PIPELINE.md",
+      "details": "Candidate B (Pure Rust Native Typography & Rasterizer Stack) selected and locked via ADR-007. Candidate A (skia-safe) rejected due to toolchain build fragility and installer size bloat. ARCHITECTURE.md, RESEARCH.md, and ADR_007 root file reconciled."
+    }
+  },
+  "gate_outcome": {
+    "gate_name": "Gate 28 — Shared Text Renderer Architecture & POC Gate",
+    "status": "PASS",
+    "selected_renderer": "Candidate B: Pure Rust Native Typography & Rasterizer Stack (ab_glyph + unicode-normalization + unicode-segmentation)",
+    "ready_for_phase_29": true
+  }
+}

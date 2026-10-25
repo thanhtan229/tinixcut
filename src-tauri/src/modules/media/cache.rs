@@ -13,6 +13,7 @@ impl CacheManager {
         let _ = fs::create_dir_all(root_dir.join("thumbnails"));
         let _ = fs::create_dir_all(root_dir.join("proxies"));
         let _ = fs::create_dir_all(root_dir.join("waveforms"));
+        let _ = fs::create_dir_all(root_dir.join("transcriptions"));
         Self { root_dir }
     }
 
@@ -33,6 +34,12 @@ impl CacheManager {
         self.root_dir
             .join("waveforms")
             .join(format!("{}_waveform.json", asset_id))
+    }
+
+    pub fn transcription_audio_path(&self, job_id: &str) -> PathBuf {
+        self.root_dir
+            .join("transcriptions")
+            .join(format!("{job_id}.wav"))
     }
 
     pub fn has_thumbnail(&self, asset_id: &str, timestamp_secs: f64) -> bool {
@@ -65,6 +72,7 @@ impl CacheManager {
             fs::create_dir_all(self.root_dir.join("thumbnails"))?;
             fs::create_dir_all(self.root_dir.join("proxies"))?;
             fs::create_dir_all(self.root_dir.join("waveforms"))?;
+            fs::create_dir_all(self.root_dir.join("transcriptions"))?;
         }
         Ok(())
     }

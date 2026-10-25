@@ -119,6 +119,7 @@ pub mod tests {
         project.settings = ProjectSettings {
             width: 1920,
             height: 1080,
+            canvas_background_color: "#000000".to_string(),
             frame_rate: rate,
             sample_rate: 48000,
             channels: 2,

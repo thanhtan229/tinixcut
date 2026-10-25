@@ -9,3 +9,4 @@ pub mod job;
 pub mod media;
 pub mod persistence;
 pub mod preview;
+pub mod text_templates;

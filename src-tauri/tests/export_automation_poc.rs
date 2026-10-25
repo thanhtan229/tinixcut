@@ -632,6 +632,7 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
     project.settings = ProjectSettings {
         width: width as u32,
         height: height as u32,
+        canvas_background_color: "#000000".to_string(),
         frame_rate: rate,
         sample_rate: 48000,
         channels: 2,
@@ -644,6 +645,7 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::from_frames(240, rate)), // 4.0s
         file_size: 1024,
+        dimensions: None,
     };
     let ast_b = Asset {
         asset_id: "ast_b".to_string(),
@@ -652,6 +654,7 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
         media_kind: MediaKind::Video,
         duration: Some(RationalTime::from_frames(240, rate)), // 4.0s
         file_size: 1024,
+        dimensions: None,
     };
     project.assets.push(ast_a);
     project.assets.push(ast_b);

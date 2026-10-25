@@ -1,0 +1,192 @@
+{
+  "sample_id": "TINIX_CAPCUT_SAMPLE_01",
+  "name": "Variety show sense JP - いざ本番！",
+  "project_source": "TINIX_CAPCUT_IMPORT_TEST",
+  "resource_id": "7522343677012774197",
+  "referenced_resources": {
+    "template_wrapper": {
+      "resource_id": "7522343677012774197",
+      "panel": "artistEffect",
+      "path": "C:/Users/Admin/AppData/Local/CapCut/User Data/Cache/artistEffect/7522343677012774197/c68726c2c9d87e211d2de16de5ce731e",
+      "content_json_sha256": "8D88FCED218E93BBF0F2BC0C42BB9645B75987EF4D4197C580289209B2553665",
+      "exists_locally": true
+    },
+    "font": {
+      "resource_id": "6841481374243754510",
+      "panel": "fonts",
+      "path": "C:/Users/Admin/AppData/Local/CapCut/User Data/Cache/effect/6841481374243754510/e523f252c437fb3b707044a3a4492899/MPLUS1p-ExtraBold.ttf",
+      "sha256": "24993BA194D186848534DDF5A9A9B1D9CFEFB67B212270BCCE42A1F3F6794ABB",
+      "exists_locally": true
+    },
+    "animation": {
+      "resource_id": "7498202895196736769",
+      "panel": "text",
+      "path": "C:/Users/Admin/AppData/Local/CapCut/User Data/Cache/effect/7498202895196736769/c8eba3355159059f8465d0cadbf0c1d2/lua/AnimScript.lua",
+      "sha256": "C9C796C46A4258B129DFA28484E2A1382FE1710BA787023E8B1B4DC51822F518",
+      "exists_locally": true
+    },
+    "effect_style": {
+      "resource_id": "7522343356509261109",
+      "panel": "flower",
+      "path": "C:/Users/Admin/AppData/Local/CapCut/User Data/Cache/effect/7522343356509261109/19be74d8a940c573f07e4846fab516b5/effectStyle.json",
+      "sha256": "E12FF67EE6A83B5D2B452441941B67CBDBE66DE5FE88E1778A15FA8717894D74",
+      "exists_locally": true
+    },
+    "reference_video": {
+      "path": "C:/Users/Admin/AppData/Local/CapCut/Videos/1011.mp4",
+      "sha256": "95489CC32CBB56F6F9E7424FE9C9611FEB927D5C0E4EBD08841FA68A726A4DE1",
+      "exists_locally": true
+    },
+    "draft_content": {
+      "path": "C:/Users/Admin/Downloads/__CAPCUT/CapCut Drafts/TINIX_CAPCUT_IMPORT_TEST/draft_content.json",
+      "sha256": "FE7CFEA3E68C698B89B3BF910EAFEAF6B3BDBE03394C291EDDD55A38010883B3",
+      "exists_locally": true
+    }
+  },
+  "content": {
+    "text": "Tinix — Thử nghiệm tiếng Việt",
+    "grapheme_count": 29,
+    "non_space_character_count": 24,
+    "character_range": [0, 29],
+    "has_multibyte_diacritics": true,
+    "canvas": {
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_us": 5000000,
+      "duration_frames": 150
+    }
+  },
+  "layer_geometry": {
+    "original_size_width": 1008.4375,
+    "original_size_height": 93.125,
+    "segment_clip_scale": [0.31, 0.31],
+    "template_attach_scale": [1.9032162844198424, 1.9032162844198424],
+    "effective_combined_scale": 0.5899970481701511,
+    "transform": [0.0, 0.0],
+    "rotation": 0.0,
+    "alignment": 1,
+    "alignment_description": "Center alignment within layout container",
+    "line_spacing": 0.02,
+    "letter_spacing": 0.0,
+    "line_max_width": 0.82,
+    "capcut_font_size": 15.0,
+    "capcut_text_size": 30
+  },
+  "effective_style": {
+    "font": {
+      "family": "M PLUS 1p ExtraBold",
+      "postscript_name": "MPLUS1p-ExtraBold",
+      "weight": 800,
+      "distributable": false,
+      "local_path": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\User Data\\Cache\\effect\\6841481374243754510\\e523f252c437fb3b707044a3a4492899\\MPLUS1p-ExtraBold.ttf",
+      "scale_factors": {
+        "text_scale": 0.31,
+        "style_scale": 1.903216
+      }
+    },
+    "fill": {
+      "type": "linear_gradient",
+      "angle_deg": 118.0,
+      "mode": "all",
+      "stops": [
+        { "offset": 0.05088495463132858, "color_rgba": [1.0, 0.8901960849761963, 0.37254902720451355, 1.0], "hex": "#ffe35f" },
+        { "offset": 0.9491150379180908, "color_rgba": [1.0, 1.0, 1.0, 1.0], "hex": "#ffffff" }
+      ]
+    },
+    "strokes": [
+      {
+        "index": 0,
+        "color_rgba": [0.6784313917160034, 0.3176470696926117, 0.0, 1.0],
+        "hex": "#AD5100",
+        "normalized_width": 0.03808219178082186,
+        "join": "round"
+      }
+    ],
+    "shadows": [
+      {
+        "index": 0,
+        "color_rgba": [0.6784313917160034, 0.3176470696926117, 0.0, 0.9],
+        "hex": "#AD5100",
+        "angle_deg": -45.0,
+        "distance": 5.0,
+        "diffuse": 0.0
+      },
+      {
+        "index": 1,
+        "color_rgba": [1.0, 0.6549019813537598, 0.3450980484485626, 0.9],
+        "hex": "#FFA758",
+        "angle_deg": -45.0,
+        "distance": 2.068493150684919,
+        "diffuse": 0.03413242009132418
+      }
+    ],
+    "outer_text_override_note": "Outer texts[0] in draft has border_width=0.0 and has_shadow=false; actual effective style is supplied by effectStyle resource 7522343356509261109 (satisfying P34-AC-02)"
+  },
+  "motion": {
+    "type": "amaz_lua_stagger_in",
+    "duration_us": 1033333,
+    "duration_frames": 31,
+    "script_runtime": "Amaz SDFText Lua (proprietary CapCut engine, non-executable in Tinix)",
+    "scale_change": "none (scale is constant during motion)",
+    "stagger_step_virtual_frames": 5,
+    "virtual_timeline_formula": "totalFrame = (validCount - 1) * 5 + 41 (mapped across duration_us=1033333 via progress = clamp(0, 1, t / D))",
+    "spring_num_rule": "spring_num = (validCount <= 3) ? 1 : 3",
+    "group_a_characters": {
+      "indices_rule": "validCount <= (totalValid - spring_num) (characters 1..21 for 24 non-space characters)",
+      "virtual_frame_start": "(validIndex - 1) * 5 + 1",
+      "virtual_frame_end": "(validIndex - 1) * 5 + 20",
+      "translate_y": {
+        "from": "-avgSize",
+        "to": 0.0,
+        "bezier": [0.166667, 0.166667, 0.14, 1.0]
+      },
+      "opacity": {
+        "from": 0.0,
+        "to": 1.0,
+        "virtual_frames": 1,
+        "bezier": [0.166666667, 0.166666667, 0.833333333, 0.833333333]
+      }
+    },
+    "group_b_characters": {
+      "indices_rule": "validCount > (totalValid - spring_num) (characters 22..24 for 24 non-space characters)",
+      "virtual_frame_start": "(validIndex - 1) * 5 + 1",
+      "virtual_frame_bounce": "(validIndex - 1) * 5 + 21",
+      "virtual_frame_settle": "(validIndex - 1) * 5 + 41",
+      "translate_y_bounce": {
+        "segment_1": {
+          "range": ["-avgSize", "+avgSize"],
+          "virtual_duration": 20,
+          "bezier": [0.166667, 0.166667, 0.0, 1.0]
+        },
+        "segment_2": {
+          "range": ["+avgSize", 0.0],
+          "virtual_duration": 20,
+          "bezier": [1.0, 0.0, 0.833333, 0.833333]
+        }
+      },
+      "rotation_z_deg": {
+        "range": [-180.0, -360.0],
+        "virtual_duration": 20,
+        "bezier": [0.015, 0.213203433, 0.09, 1.0]
+      },
+      "opacity": {
+        "from": 0.0,
+        "to": 1.0,
+        "virtual_frames": 1,
+        "bezier": [0.166666667, 0.166666667, 0.833333333, 0.833333333]
+      }
+    }
+  },
+  "reference_timestamps": {
+    "t0_start_us": 0,
+    "t_stagger_mid_us": 500000,
+    "t_in_complete_us": 1033333,
+    "t_hold_us": 3000000,
+    "t_end_us": 5000000
+  },
+  "distribution_policy": {
+    "proprietary_assets": "Local machine reference only; MUST NOT be checked into version control or bundled into the installer",
+    "tinix_recreation_font": "Roboto Bold (src-tauri/fixtures/fonts/Roboto-Bold.ttf, Apache-2.0 open redistributable license, SHA-256 61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334, with full Vietnamese Latin diacritics support)"
+  }
+}

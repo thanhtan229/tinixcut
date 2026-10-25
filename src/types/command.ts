@@ -4,12 +4,26 @@ import {
   Keyframe,
   KeyframeEasing,
   KeyframeProperty,
+  AssetDimensions,
+  PlacementMode,
   RationalTime,
   TimeRange,
   TrackKind,
+  TextStyle,
   Transform,
   Transition,
   TransitionKind,
+  VisualEffectPreset,
+  ClipSpeed,
+  FontReference,
+  RichTextSpan,
+  TextAnimation,
+  TextBackgroundBox,
+  TextFill,
+  TextLayout,
+  TextRichStyle,
+  TextShadow,
+  TextStroke,
 } from "./project";
 
 export type CommandOperation =
@@ -68,6 +82,20 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipVisualEffectSet";
+      payload: {
+        item_id: string;
+        visual_effect: VisualEffectPreset;
+      };
+    }
+  | {
+      type: "ClipSpeedSet";
+      payload: {
+        item_id: string;
+        speed: ClipSpeed;
+      };
+    }
+  | {
       type: "TrackCreate";
       payload: {
         track_id?: string;
@@ -79,6 +107,26 @@ export type CommandOperation =
       type: "TrackDelete";
       payload: {
         track_id: string;
+      };
+    }
+  | {
+      type: "TrackMuteSet";
+      payload: {
+        track_id: string;
+        muted: boolean;
+      };
+    }
+  | {
+      type: "ProjectSettingsSet";
+      payload: {
+        width: number;
+        height: number;
+      };
+    }
+  | {
+      type: "CanvasBackgroundSet";
+      payload: {
+        color: string;
       };
     }
   | {
@@ -182,6 +230,94 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipTextStyleSet";
+      payload: {
+        item_id: string;
+        style: TextStyle;
+      };
+    }
+  | {
+      type: "TextTrackStyleSet";
+      payload: {
+        track_id: string;
+        style: TextStyle;
+      };
+    }
+  | {
+      type: "TextTemplateApply";
+      payload: {
+        item_id: string;
+        template_id: string;
+        template_version: number;
+      };
+    }
+  | {
+      type: "TextTrackTemplateApply";
+      payload: {
+        track_id: string;
+        template_id: string;
+        template_version: number;
+      };
+    }
+  | {
+      type: "ClipTextTemplateReset";
+      payload: {
+        item_id: string;
+      };
+    }
+  | {
+      type: "ClipTextRichSet";
+      payload: {
+        item_id: string;
+        rich: TextRichStyle;
+      };
+    }
+  | {
+      type: "ClipTextSpansSet";
+      payload: {
+        item_id: string;
+        spans: RichTextSpan[];
+      };
+    }
+  | {
+      type: "ClipTextLayoutSet";
+      payload: {
+        item_id: string;
+        layout: TextLayout;
+      };
+    }
+  | {
+      type: "ClipTextAppearanceSet";
+      payload: {
+        item_id: string;
+        fill: TextFill;
+        strokes: TextStroke[];
+        shadows: TextShadow[];
+        background?: TextBackgroundBox | null;
+      };
+    }
+  | {
+      type: "ClipTextFontSet";
+      payload: {
+        item_id: string;
+        font: FontReference;
+        font_size?: number | null;
+      };
+    }
+  | {
+      type: "ClipTextAnimationSet";
+      payload: {
+        item_id: string;
+        animation?: TextAnimation | null;
+      };
+    }
+  | {
+      type: "ClipTextRichReset";
+      payload: {
+        item_id: string;
+      };
+    }
+  | {
       type: "ClipAudioFadeSet";
       payload: {
         item_id: string;
@@ -196,7 +332,16 @@ export type CommandOperation =
         name: string;
         path: string;
         media_kind: "Video" | "Audio" | "Image";
+        duration?: RationalTime | null;
         file_size: number;
+        dimensions?: AssetDimensions | null;
+      };
+    }
+  | {
+      type: "ClipPlacementModeSet";
+      payload: {
+        item_id: string;
+        placement_mode: PlacementMode;
       };
     }
   | {

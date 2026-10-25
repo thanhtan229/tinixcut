@@ -1,0 +1,26 @@
+{
+  "projectId": "proj_563e31a2b6d94aab878a8dc90905bb20",
+  "priorRevision": 0,
+  "newRevision": 1,
+  "transactionId": "tx_baked_video_reference",
+  "operationsApplied": 3,
+  "receipts": [
+    {
+      "operationId": "op_baked_track",
+      "status": "applied",
+      "affectedTrackId": "trk_baked"
+    },
+    {
+      "operationId": "op_baked_asset",
+      "status": "applied",
+      "affectedItemId": "asset_capcut_reference"
+    },
+    {
+      "operationId": "op_baked_clip",
+      "status": "applied",
+      "affectedItemId": "clip_baked",
+      "affectedTrackId": "trk_baked"
+    }
+  ],
+  "idempotencyScope": "structured"
+}

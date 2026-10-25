@@ -1,0 +1,152 @@
+{
+  "phase": "Phase 27 — Template Contract, Fixtures and Baseline",
+  "generated_at": "2026-10-25T10:10:00+07:00",
+  "git_revision": "e6462544b6956054ee50af40727d44e92121487b",
+  "working_tree": "dirty (preserves uncommitted Phase 18-25 implementation and documentation)",
+  "validation_results": {
+    "frontend_typecheck": {
+      "command": "pnpm run typecheck",
+      "exit_code": 0,
+      "status": "PASS",
+      "details": "tsc --noEmit with 0 errors"
+    },
+    "frontend_tests": {
+      "command": "pnpm test",
+      "exit_code": 0,
+      "status": "PASS",
+      "passed_tests": 44,
+      "total_tests": 44,
+      "duration_ms": 697
+    },
+    "frontend_build": {
+      "command": "pnpm run build",
+      "exit_code": 0,
+      "status": "PASS",
+      "details": "Vite production build bundled successfully (328.60 kB JS, 7.41 kB CSS)"
+    },
+    "rust_formatting": {
+      "command": "cargo fmt --check --manifest-path src-tauri/Cargo.toml",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    "rust_library_tests": {
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml --lib -- --skip test_gate_f_poc5_matrix_execution",
+      "exit_code": 0,
+      "status": "PASS",
+      "passed_tests": 141,
+      "failed_tests": 0,
+      "filtered_out": 1,
+      "duration_seconds": 7.28,
+      "notes": "1 test filtered out: test_gate_f_poc5_matrix_execution per established non-terminating POC5 harness policy in PROJECT_STATUS.md"
+    },
+    "rust_integration_suites": {
+      "phase14_acceptance": {
+        "command": "cargo test --manifest-path src-tauri/Cargo.toml --test phase14_acceptance",
+        "passed": 15,
+        "failed": 0,
+        "status": "PASS"
+      },
+      "phase15_mcp_acceptance": {
+        "command": "cargo test --manifest-path src-tauri/Cargo.toml --test phase15_mcp_acceptance",
+        "passed": 27,
+        "failed": 0,
+        "status": "PASS"
+      },
+      "phase16_timeline_productivity_acceptance": {
+        "command": "cargo test --manifest-path src-tauri/Cargo.toml --test phase16_timeline_productivity_acceptance",
+        "passed": 30,
+        "failed": 0,
+        "status": "PASS"
+      },
+      "phase18_audio_crossfade_acceptance": {
+        "command": "cargo test --manifest-path src-tauri/Cargo.toml --test phase18_audio_crossfade_acceptance",
+        "passed": 1,
+        "failed": 0,
+        "status": "PASS"
+      },
+      "export_automation_poc": {
+        "command": "cargo test --manifest-path src-tauri/Cargo.toml --test export_automation_poc",
+        "passed": 8,
+        "failed": 0,
+        "status": "PASS"
+      },
+      "total_rust_tests_verified": 222
+    },
+    "rust_library_clippy": {
+      "command": "cargo clippy --manifest-path src-tauri/Cargo.toml --lib",
+      "exit_code": 0,
+      "status": "PASS_WITH_PRE_EXISTING_WARNINGS",
+      "warnings": [
+        "ExportPreset derivable_impls in src\\modules\\export\\mod.rs:61",
+        "register_asset too_many_arguments (8/7) in src\\modules\\media\\mod.rs:65",
+        "run_auto_caption_job too_many_arguments (8/7) in src\\lib.rs:686"
+      ],
+      "notes": "Warnings are pre-existing in uncommitted Phase 21/25 workspace code and left unedited to avoid out-of-scope modifications"
+    },
+    "rust_build": {
+      "command": "cargo build --manifest-path src-tauri/Cargo.toml",
+      "exit_code": 0,
+      "status": "PASS",
+      "binary_size_debug_bytes": 24498688,
+      "binary_size_release_bytes": 7381504,
+      "installer_size_release_bytes": 59085922
+    },
+    "git_diff_whitespace": {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "status": "PASS"
+    }
+  },
+  "source_inventory": {
+    "current_schema_version": 9,
+    "domain_primitives": {
+      "item_kind": "ItemKind::Text",
+      "text_style": "TextStyle { font_family: String, font_size: f32, font_weight: u16, font_color: String, accent_color: Option<String>, background_color: Option<String>, background_opacity: f32, padding_x: f32, padding_y: f32, alignment: TextAlignment, line_height: f32, anchor: TextAnchor }",
+      "text_template_reference": "TextTemplateReference { template_id: String, template_version: u32 }",
+      "timeline_item_slot": "TimelineItem { item_id, text_content: Option<String>, text_style: Option<TextStyle>, text_template: Option<TextTemplateReference>, ... }",
+      "canonical_time": "RationalTime { value: i64, rate: FrameRate { numerator: u32, denominator: u32 } }"
+    },
+    "command_service_text_operations": [
+      "ClipTextSet",
+      "ClipTextStyleSet",
+      "TextTrackStyleSet",
+      "TextTemplateApply",
+      "TextTrackTemplateApply",
+      "ClipTextTemplateReset"
+    ],
+    "text_template_registry": {
+      "count": 6,
+      "template_ids": [
+        "clean-lower-third",
+        "bold-headline",
+        "center-pop",
+        "subtitle-card",
+        "quote-card",
+        "call-to-action"
+      ],
+      "nature": "Static declarative style presets defined in src-tauri/src/modules/text_templates.rs; no character animation, no stagger, no gradient, no multi-shadow"
+    },
+    "rendering_seams": {
+      "preview": "DOM text element rendering in PreviewCanvas.tsx using CSS inline properties",
+      "export": "FFmpeg drawtext filtergraph compiled in src-tauri/src/modules/composition/mod.rs (text_filter_options)",
+      "parity_gaps": [
+        "textShadow: PreviewCanvas hardcodes text-shadow: '0 2px 6px rgba(0,0,0,0.9)', whereas FFmpeg drawtext has no shadow",
+        "background_opacity: PreviewCanvas applies backgroundColor directly without opacity when hex is #RRGGBB, whereas FFmpeg uses boxcolor@opacity",
+        "padding: PreviewCanvas sets padding_x and padding_y independently, whereas FFmpeg merges them into uniform boxborderw = max(padding_x, padding_y)",
+        "accent_color: Defined in domain TextStyle, but omitted in both PreviewCanvas and FFmpeg filtergraph",
+        "typography_fallback: FFmpeg export hardcodes C:/Windows/Fonts/arial.ttf, completely ignoring font_family, font_weight, line_height, and text alignment"
+      ]
+    },
+    "automation_cli_mcp": {
+      "module": "src-tauri/src/modules/automation",
+      "protocol": "JSON-RPC / stdio protocol with explicit command execution",
+      "capabilities": "Project inspect, command apply, dry-run, export trigger"
+    }
+  },
+  "deferred_p26_qualifications": [
+    "P16-AC-56: Real interactive Windows GUI qualification deferred (environment constraint)",
+    "True Clean Windows 10/11 VM Qualification deferred",
+    "Hardware-accelerated encoder qualification deferred",
+    "Native Whisper speech-to-text binary & model smoke qualification deferred"
+  ]
+}

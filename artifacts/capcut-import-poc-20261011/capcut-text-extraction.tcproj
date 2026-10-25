@@ -1,0 +1,160 @@
+{
+  "schema_version": 9,
+  "project_id": "proj_2cec0f41bd854c4cb37a6bb6ee34587f",
+  "name": "CapCut text extraction POC - animation unsupported",
+  "revision": 1,
+  "settings": {
+    "width": 1080,
+    "height": 1920,
+    "canvas_background_color": "#000000",
+    "frame_rate": {
+      "numerator": 30,
+      "denominator": 1
+    },
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "assets": [],
+  "tracks": [
+    {
+      "track_id": "trk_capcut_probe",
+      "name": "Extracted text only - original effect unsupported",
+      "kind": "Video",
+      "muted": false,
+      "locked": false,
+      "items": [
+        {
+          "item_id": "clip_capcut_probe",
+          "asset_id": null,
+          "name": "CapCut text extraction",
+          "kind": "Text",
+          "timeline_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 2033333,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            }
+          },
+          "source_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 2033333,
+              "rate": {
+                "numerator": 1000000,
+                "denominator": 1
+              }
+            }
+          },
+          "transform": {
+            "position_x": 0.0,
+            "position_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0
+          },
+          "crop": {
+            "top": 0.0,
+            "bottom": 0.0,
+            "left": 0.0,
+            "right": 0.0
+          },
+          "placement_mode": "Fit",
+          "visual_effect": "None",
+          "speed": "Normal",
+          "opacity": 1.0,
+          "volume": 1.0,
+          "text_content": "Cá Kho Tộ",
+          "text_style": {
+            "font_family": "Inter",
+            "font_size": 48.0,
+            "font_weight": 700,
+            "font_color": "#FFFFFF",
+            "accent_color": null,
+            "background_color": null,
+            "background_opacity": 0.0,
+            "padding_x": 0.0,
+            "padding_y": 0.0,
+            "alignment": "Center",
+            "line_height": 1.0,
+            "anchor": "Center"
+          },
+          "text_template": null,
+          "fade_in": null,
+          "fade_out": null,
+          "transition": null,
+          "keyframes": []
+        }
+      ],
+      "transitions": [],
+      "audio_transitions": []
+    }
+  ],
+  "created_at": "2026-10-11T04:22:40.1126370Z",
+  "updated_at": "2026-10-11T04:22:53.334639800+00:00",
+  "client_registry": {
+    "min_accepted_epoch": 0,
+    "current_epoch": 1,
+    "max_active_clients": 64,
+    "clients": {
+      "cli": {
+        "client_epoch": 1,
+        "highest_sequence": 1,
+        "last_active_revision": 1,
+        "registered_at_revision": 1
+      }
+    }
+  },
+  "command_ledger": [
+    {
+      "operation_id": "op_capcut_track",
+      "transaction_id": "tx_capcut_text_probe",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_b86b972fd90cb030ddaf1dd20c49d73e60871cc72c7b61bcf1d3d7bbc8ec6ded",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": null,
+      "affected_track_id": "trk_capcut_probe"
+    },
+    {
+      "operation_id": "op_capcut_clip",
+      "transaction_id": "tx_capcut_text_probe",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_01dc0050a9adeb6fbaf72b966c71f6d6590afa47b07707b7c0e593ac7244a0dd",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "clip_capcut_probe",
+      "affected_track_id": "trk_capcut_probe"
+    },
+    {
+      "operation_id": "op_capcut_content",
+      "transaction_id": "tx_capcut_text_probe",
+      "client_id": "cli",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_daa2139c9e6f5d332d34ffcefeb064408460b5ad55683597ed48e18e37b2d522",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "clip_capcut_probe",
+      "affected_track_id": null
+    }
+  ]
+}
