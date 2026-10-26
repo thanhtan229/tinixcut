@@ -1,0 +1,330 @@
+{
+  "reference": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+  "recreation": "artifacts\\animated-text-templates\\phase-31\\recreated_sample_export.mp4",
+  "canvas": [
+    1920,
+    1080
+  ],
+  "note": "Reference uses proprietary M PLUS 1p ExtraBold and Lua motion; Tinix recreation uses Roboto-Bold and typed primitives. Metrics quantify approximation, not pixel parity.",
+  "samples": [
+    {
+      "t": 0.0,
+      "ref_roi": null,
+      "recreation_roi": null,
+      "ref_ink_px": 0,
+      "recreation_ink_px": 0
+    },
+    {
+      "t": 0.3,
+      "ref_roi": [
+        176,
+        481,
+        902,
+        715
+      ],
+      "recreation_roi": [
+        184,
+        450,
+        800,
+        590
+      ],
+      "ref_ink_px": 59264,
+      "recreation_ink_px": 29231,
+      "union_roi": [
+        176,
+        450,
+        902,
+        715
+      ],
+      "roi_ssim": 0.496748121844469,
+      "roi_mae": 0.11701537453028926,
+      "roi_centroid_offset_px": [
+        -47.0,
+        -78.0
+      ],
+      "roi_size_delta_px": [
+        -110,
+        -94
+      ]
+    },
+    {
+      "t": 0.5,
+      "ref_roi": [
+        176,
+        476,
+        1285,
+        716
+      ],
+      "recreation_roi": [
+        184,
+        456,
+        1278,
+        607
+      ],
+      "ref_ink_px": 96820,
+      "recreation_ink_px": 57717,
+      "union_roi": [
+        176,
+        456,
+        1285,
+        716
+      ],
+      "roi_ssim": 0.6425937006796455,
+      "roi_mae": 0.1132198173860652,
+      "roi_centroid_offset_px": [
+        0.5,
+        -64.5
+      ],
+      "roi_size_delta_px": [
+        -15,
+        -89
+      ]
+    },
+    {
+      "t": 0.8,
+      "ref_roi": [
+        176,
+        361,
+        1762,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        480,
+        1738,
+        614
+      ],
+      "ref_ink_px": 143704,
+      "recreation_ink_px": 89118,
+      "union_roi": [
+        176,
+        361,
+        1762,
+        614
+      ],
+      "roi_ssim": 0.6539381472671694,
+      "roi_mae": 0.12183398129549233,
+      "roi_centroid_offset_px": [
+        -8.0,
+        60.5
+      ],
+      "roi_size_delta_px": [
+        -32,
+        -117
+      ]
+    },
+    {
+      "t": 1.0333,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142892,
+      "recreation_ink_px": 87446,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.6205381540893645,
+      "roi_mae": 0.19965412580893127,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    },
+    {
+      "t": 1.5,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142888,
+      "recreation_ink_px": 87369,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.6205290719419502,
+      "roi_mae": 0.19968197721360006,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    },
+    {
+      "t": 2.5,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142883,
+      "recreation_ink_px": 87369,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.6205302058348036,
+      "roi_mae": 0.19968134540727567,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    },
+    {
+      "t": 3.5,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142883,
+      "recreation_ink_px": 87369,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.6205376831349828,
+      "roi_mae": 0.1996776022564763,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    },
+    {
+      "t": 4.5,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142883,
+      "recreation_ink_px": 87369,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.6205361176801963,
+      "roi_mae": 0.19968627180090656,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    },
+    {
+      "t": 4.9,
+      "ref_roi": [
+        176,
+        472,
+        1746,
+        612
+      ],
+      "recreation_roi": [
+        184,
+        488,
+        1738,
+        614
+      ],
+      "ref_ink_px": 142883,
+      "recreation_ink_px": 87369,
+      "union_roi": [
+        176,
+        472,
+        1746,
+        614
+      ],
+      "roi_ssim": 0.620536143774302,
+      "roi_mae": 0.1996862310619053,
+      "roi_centroid_offset_px": [
+        0.0,
+        9.0
+      ],
+      "roi_size_delta_px": [
+        -16,
+        -14
+      ]
+    }
+  ],
+  "timing": {
+    "threshold_px_at_480x270": 8,
+    "ref": {
+      "onset_frame": 1,
+      "last_visible_frame": 149,
+      "peak_frame": 23,
+      "peak_ink_px": 9001
+    },
+    "recreation": {
+      "onset_frame": 1,
+      "last_visible_frame": 149,
+      "peak_frame": 26,
+      "peak_ink_px": 6028
+    }
+  }
+}

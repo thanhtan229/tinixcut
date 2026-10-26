@@ -160,6 +160,8 @@ pub struct ProjectInspectReport {
     pub supported_loop_modes: Vec<String>,
     #[serde(default)]
     pub supported_duration_conflict_policies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_capabilities: Option<crate::modules::templates::agent::TemplateCapabilitiesReport>,
 }
 
 fn default_schema_version_3() -> u32 {
@@ -193,6 +195,8 @@ pub struct CapabilitiesReport {
     pub supported_loop_modes: Vec<String>,
     #[serde(default)]
     pub supported_duration_conflict_policies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_capabilities: Option<crate::modules::templates::agent::TemplateCapabilitiesReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -338,6 +342,9 @@ impl AutomationSession {
             supported_loop_modes: AutomationAdapter::supported_loop_modes(),
             supported_duration_conflict_policies:
                 AutomationAdapter::supported_duration_conflict_policies(),
+            template_capabilities: Some(
+                crate::modules::templates::agent::AgentTemplateService::capabilities(),
+            ),
         })
     }
 
@@ -564,6 +571,93 @@ pub fn dispatch_method(
             let cancelled = session.export_cancel(job_id)?;
             Ok(serde_json::json!({ "cancelled": cancelled }))
         }
+        "template.capabilities" => {
+            let caps = crate::modules::templates::agent::AgentTemplateService::capabilities();
+            serde_json::to_value(caps).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "template.schema" => {
+            Ok(crate::modules::templates::agent::AgentTemplateService::draft_json_schema())
+        }
+        "template.validate" => {
+            let draft: crate::modules::templates::agent::TemplateDraft = if params.get("draft").is_some() {
+                serde_json::from_value(params.get("draft").unwrap().clone())
+            } else {
+                serde_json::from_value(params)
+            }
+            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+            let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+            let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(&draft, None, Some(&catalog));
+            serde_json::to_value(report).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "template.preview" => {
+            let draft: crate::modules::templates::agent::TemplateDraft = if params.get("draft").is_some() {
+                serde_json::from_value(params.get("draft").unwrap().clone())
+            } else {
+                serde_json::from_value(params.clone())
+            }
+            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+            let time_sec = params.get("timeSeconds").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let width = params.get("width").and_then(|v| v.as_u64()).map(|w| w as u32);
+            let height = params.get("height").and_then(|v| v.as_u64()).map(|h| h as u32);
+            let output_path = params.get("outputPath").and_then(|v| v.as_str()).map(Path::new);
+
+            if let Some(out_p) = output_path {
+                let receipt = crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+                    &draft, out_p, time_sec, width, height,
+                ).map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
+                serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+            } else {
+                let buf = crate::modules::templates::agent::AgentTemplateService::preview_draft(
+                    &draft, time_sec, width, height,
+                ).map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
+                Ok(serde_json::json!({
+                    "width": buf.width,
+                    "height": buf.height,
+                    "timeSeconds": time_sec,
+                    "hasVisibleContent": true
+                }))
+            }
+        }
+        "template.apply" => {
+            let project_path_str = params.get("projectPath").and_then(|v| v.as_str()).ok_or_else(|| {
+                AutomationError::Cli("Missing 'projectPath'".to_string())
+            })?;
+            let item_id = params.get("itemId").and_then(|v| v.as_str()).ok_or_else(|| {
+                AutomationError::Cli("Missing 'itemId'".to_string())
+            })?;
+            let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_value(
+                params.get("draft").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+
+            let client_id = params.get("clientId").and_then(|v| v.as_str()).map(ToString::to_string);
+            let client_epoch = params.get("clientEpoch").and_then(|v| v.as_u64());
+            let sequence_number = params.get("sequenceNumber").and_then(|v| v.as_u64());
+            let transaction_id = params.get("transactionId").and_then(|v| v.as_str()).map(ToString::to_string);
+            let base_revision = params.get("baseRevision").and_then(|v| v.as_u64());
+
+            let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+            let receipt = crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
+                Path::new(project_path_str), item_id, &draft, client_id, client_epoch, sequence_number, transaction_id, base_revision, &catalog,
+            ).map_err(|e| match e {
+                crate::modules::templates::agent::AgentTemplateError::Command(cmd_err) => AutomationError::Command(cmd_err),
+                other => AutomationError::Cli(format!("Template apply failed: {other}")),
+            })?;
+            serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
+        "template.save" => {
+            let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_value(
+                params.get("draft").cloned().unwrap_or(serde_json::Value::Null),
+            ).map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+            let catalog_dir = params.get("catalogDir").and_then(|v| v.as_str()).map(PathBuf::from);
+            let overwrite = params.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+            let catalog = catalog_dir
+                .map(crate::modules::templates::catalog::TemplateCatalog::new)
+                .unwrap_or_else(crate::modules::templates::catalog::TemplateCatalog::default_catalog);
+            let receipt = crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
+                &draft, &catalog, overwrite,
+            ).map_err(|e| AutomationError::Cli(format!("Template save failed: {e}")))?;
+            serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+        }
         other => Err(AutomationError::Cli(format!("Unknown method '{other}'"))),
     }
 }
@@ -730,6 +824,16 @@ impl AutomationAdapter {
             "ClipTextFontSet".to_string(),
             "ClipTextAnimationSet".to_string(),
             "ClipTextRichReset".to_string(),
+            "TemplateApply".to_string(),
+            "TemplateTrackApply".to_string(),
+            "TemplateLayerAdd".to_string(),
+            "TemplateLayerRemove".to_string(),
+            "TemplateLayerReorder".to_string(),
+            "TemplateLayerUpdate".to_string(),
+            "TemplateParameterSet".to_string(),
+            "TemplateParametersBatchSet".to_string(),
+            "TemplateReset".to_string(),
+            "TemplateDetach".to_string(),
         ]
     }
 
@@ -865,6 +969,9 @@ impl AutomationAdapter {
             supported_stagger_orders: Self::supported_stagger_orders(),
             supported_loop_modes: Self::supported_loop_modes(),
             supported_duration_conflict_policies: Self::supported_duration_conflict_policies(),
+            template_capabilities: Some(
+                crate::modules::templates::agent::AgentTemplateService::capabilities(),
+            ),
         }
     }
 
@@ -975,6 +1082,165 @@ impl AutomationAdapter {
                 let receipt = Self::apply_file(project_path, &mut service, envelope, true)?;
                 serde_json::to_string_pretty(&receipt)
                     .map_err(|e| AutomationError::Serialization(e.to_string()))
+            }
+            "template" => {
+                if args.len() < 2 {
+                    return Err(AutomationError::Cli(
+                        "Usage: tinixcut template [capabilities|schema|validate|preview|apply|save] <args...>".to_string(),
+                    ));
+                }
+                match args[1].as_str() {
+                    "capabilities" => {
+                        let caps = crate::modules::templates::agent::AgentTemplateService::capabilities();
+                        serde_json::to_string_pretty(&caps)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    "schema" => {
+                        let schema = crate::modules::templates::agent::AgentTemplateService::draft_json_schema();
+                        serde_json::to_string_pretty(&schema)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    "validate" => {
+                        if args.len() < 3 {
+                            return Err(AutomationError::Cli(
+                                "Usage: tinixcut template validate <draft_path> [--project <project_path>]".to_string(),
+                            ));
+                        }
+                        let draft_path = Path::new(&args[2]);
+                        let content = std::fs::read_to_string(draft_path)
+                            .map_err(|e| AutomationError::Cli(format!("Cannot read draft file: {e}")))?;
+                        let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_str(&content)
+                            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft JSON: {e}")))?;
+                        let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+                        let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(&draft, Some(&content), Some(&catalog));
+                        serde_json::to_string_pretty(&report)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    "preview" => {
+                        if args.len() < 4 {
+                            return Err(AutomationError::Cli(
+                                "Usage: tinixcut template preview <draft_path> <output_png_path> [--time <sec>] [--width <w>] [--height <h>]".to_string(),
+                            ));
+                        }
+                        let draft_path = Path::new(&args[2]);
+                        let output_path = Path::new(&args[3]);
+                        let content = std::fs::read_to_string(draft_path)
+                            .map_err(|e| AutomationError::Cli(format!("Cannot read draft file: {e}")))?;
+                        let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_str(&content)
+                            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft JSON: {e}")))?;
+
+                        let mut time_sec = 1.0f64;
+                        let mut width = None;
+                        let mut height = None;
+                        let mut i = 4;
+                        while i < args.len() {
+                            if args[i] == "--time" && i + 1 < args.len() {
+                                time_sec = args[i + 1].parse().unwrap_or(1.0);
+                                i += 2;
+                            } else if args[i] == "--width" && i + 1 < args.len() {
+                                width = args[i + 1].parse().ok();
+                                i += 2;
+                            } else if args[i] == "--height" && i + 1 < args.len() {
+                                height = args[i + 1].parse().ok();
+                                i += 2;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        let receipt = crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+                            &draft, output_path, time_sec, width, height,
+                        ).map_err(|e| AutomationError::Cli(format!("Template preview error: {e}")))?;
+                        serde_json::to_string_pretty(&receipt)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    "apply" => {
+                        if args.len() < 5 {
+                            return Err(AutomationError::Cli(
+                                "Usage: tinixcut template apply <project_path> <item_id> <draft_path> [--client-id <id>] [--client-epoch <epoch>] [--sequence <seq>] [--transaction-id <tx>] [--base-revision <rev>]".to_string(),
+                            ));
+                        }
+                        let project_path = Path::new(&args[2]);
+                        let item_id = &args[3];
+                        let draft_path = Path::new(&args[4]);
+                        let content = std::fs::read_to_string(draft_path)
+                            .map_err(|e| AutomationError::Cli(format!("Cannot read draft file: {e}")))?;
+                        let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_str(&content)
+                            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft JSON: {e}")))?;
+
+                        let mut client_id = None;
+                        let mut client_epoch = None;
+                        let mut sequence_number = None;
+                        let mut transaction_id = None;
+                        let mut base_revision = None;
+                        let mut i = 5;
+                        while i < args.len() {
+                            if args[i] == "--client-id" && i + 1 < args.len() {
+                                client_id = Some(args[i + 1].clone());
+                                i += 2;
+                            } else if args[i] == "--client-epoch" && i + 1 < args.len() {
+                                client_epoch = args[i + 1].parse().ok();
+                                i += 2;
+                            } else if args[i] == "--sequence" && i + 1 < args.len() {
+                                sequence_number = args[i + 1].parse().ok();
+                                i += 2;
+                            } else if args[i] == "--transaction-id" && i + 1 < args.len() {
+                                transaction_id = Some(args[i + 1].clone());
+                                i += 2;
+                            } else if args[i] == "--base-revision" && i + 1 < args.len() {
+                                base_revision = args[i + 1].parse().ok();
+                                i += 2;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+                        let receipt = crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
+                            project_path, item_id, &draft, client_id, client_epoch, sequence_number, transaction_id, base_revision, &catalog,
+                        ).map_err(|e| match e {
+                            crate::modules::templates::agent::AgentTemplateError::Command(cmd_err) => {
+                                AutomationError::Command(cmd_err)
+                            }
+                            other => AutomationError::Cli(format!("Template apply error: {other}")),
+                        })?;
+                        serde_json::to_string_pretty(&receipt)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    "save" => {
+                        if args.len() < 3 {
+                            return Err(AutomationError::Cli(
+                                "Usage: tinixcut template save <draft_path> [--catalog-dir <dir>] [--overwrite]".to_string(),
+                            ));
+                        }
+                        let draft_path = Path::new(&args[2]);
+                        let content = std::fs::read_to_string(draft_path)
+                            .map_err(|e| AutomationError::Cli(format!("Cannot read draft file: {e}")))?;
+                        let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_str(&content)
+                            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft JSON: {e}")))?;
+                        let mut catalog_dir = None;
+                        let mut overwrite = false;
+                        let mut i = 3;
+                        while i < args.len() {
+                            if args[i] == "--catalog-dir" && i + 1 < args.len() {
+                                catalog_dir = Some(PathBuf::from(&args[i + 1]));
+                                i += 2;
+                            } else if args[i] == "--overwrite" {
+                                overwrite = true;
+                                i += 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        let catalog = catalog_dir
+                            .map(crate::modules::templates::catalog::TemplateCatalog::new)
+                            .unwrap_or_else(crate::modules::templates::catalog::TemplateCatalog::default_catalog);
+                        let receipt = crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
+                            &draft, &catalog, overwrite,
+                        ).map_err(|e| AutomationError::Cli(format!("Template save error: {e}")))?;
+                        serde_json::to_string_pretty(&receipt)
+                            .map_err(|e| AutomationError::Serialization(e.to_string()))
+                    }
+                    other => Err(AutomationError::Cli(format!("Unknown template command '{}'", other))),
+                }
             }
             "render" => {
                 if args.len() < 3 {

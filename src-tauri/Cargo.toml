@@ -27,6 +27,7 @@ rmcp = { version = "3.5.0", default-features = false, features = ["server", "mac
 unicode-segmentation = "1.13.3"
 ab_glyph = "0.2.32"
 unicode-normalization = "0.1.26"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 codegen-units = 1

@@ -3,11 +3,13 @@ import { HealthStatus } from "../types/health";
 import { Project } from "../types/project";
 import { CommandEnvelope, CommandReceipt, DiffReport } from "../types/command";
 import { ExportPreset } from "../types/export";
+import { TemplateDefinition, TemplatePackManifest } from "../types/template";
 import {
   PreviewFrameState,
   BenchmarkReport,
   ParitySuiteReport,
   PreviewVideoSourceStatus,
+  PreviewRichTextOverlay,
 } from "../types/preview";
 
 export interface CaptionsImportReport {
@@ -46,6 +48,45 @@ export interface PreviewOverlayIpcResponse {
   hasVisibleContent: boolean;
   fontSha256: string;
   renderElapsedMs: number;
+}
+
+export interface CapCutInspectionResult {
+  profile: {
+    draft_path: string;
+    draft_sha256: string;
+    app_version: string | null;
+    fps: number;
+    duration_us: number;
+    duration_seconds: number;
+    canvas_width: number;
+    canvas_height: number;
+    template_name: string | null;
+    layers_count: number;
+    resources: Array<{
+      resource_id: string;
+      panel: string;
+      original_path: string;
+      resolved_path: string | null;
+      status: "AVAILABLE" | "MISSING" | "CORRUPT" | "RELOCATED";
+      sha256: string | null;
+      byte_size: number | null;
+    }>;
+    missing_resources: string[];
+    recognized_family: "STAGGERED_CHARACTER_IN" | "VLOG_TITLE_MULTI_LAYER" | "TEXT_WITH_BACKGROUND_CARD" | "UNKNOWN";
+  };
+  report: {
+    status: "FULL_CONVERSION" | "PARTIAL_CONVERSION" | "UNSUPPORTED_SOURCE" | "MISSING_RESOURCES" | "BAKED_MEDIA_ONLY";
+    source_path: string;
+    source_sha256: string;
+    staging_token?: string | null;
+    template_name: string;
+    recognized_profile: string;
+    imported_elements: string[];
+    loss_details: Array<{ component: string; original: string; treatment: string; impact: string }>;
+    warnings: string[];
+    converted_definition: TemplateDefinition | null;
+  };
+  converted_definition: TemplateDefinition | null;
 }
 
 export const editorApi = {
@@ -121,6 +162,16 @@ export const editorApi = {
     return invoke<PreviewFrameState>("preview_sample_at", { frame });
   },
 
+  async previewRichTextOverlay(
+    itemId: string,
+    frame: number
+  ): Promise<PreviewRichTextOverlay | null> {
+    return invoke<PreviewRichTextOverlay | null>("preview_rich_text_overlay", {
+      itemId,
+      frame,
+    });
+  },
+
   async getCompatiblePreviewVideo(assetId: string): Promise<PreviewVideoSourceStatus> {
     return invoke<PreviewVideoSourceStatus>("media_get_compatible_preview_video", { assetId });
   },
@@ -145,5 +196,100 @@ export const editorApi = {
       text,
       progress,
     });
+  },
+
+  async templateListDefinitions(): Promise<TemplateDefinition[]> {
+    return invoke<TemplateDefinition[]>("template_list_definitions");
+  },
+
+  async templateGetDefinition(
+    id: string,
+    version?: number
+  ): Promise<TemplateDefinition | null> {
+    return invoke<TemplateDefinition | null>("template_get_definition", { id, version });
+  },
+
+  async templateSaveUserDefinition(
+    definition: TemplateDefinition
+  ): Promise<string> {
+    return invoke<string>("template_save_user_definition", { definition });
+  },
+
+  async templateDeleteUserDefinition(
+    id: string,
+    version: number
+  ): Promise<boolean> {
+    return invoke<boolean>("template_delete_user_definition", { id, version });
+  },
+
+  async templateImportPack(
+    packPath: string
+  ): Promise<TemplatePackManifest> {
+    return invoke<TemplatePackManifest>("template_import_pack", { packPath });
+  },
+
+  async hashLocalFile(path: string): Promise<string> {
+    return invoke<string>("media_file_sha256", { path });
+  },
+
+  async templateExportPack(
+    manifest: TemplatePackManifest,
+    definitions: TemplateDefinition[],
+    assetFiles: [string, string][],
+    outputPath: string
+  ): Promise<void> {
+    return invoke<void>("template_export_pack", {
+      manifest,
+      definitions,
+      assetFiles,
+      outputPath,
+    });
+  },
+
+  async capcutCreateInspectionToken(): Promise<string> {
+    return invoke<string>("capcut_create_inspection_token");
+  },
+
+  async capcutCancelInspection(token: string): Promise<boolean> {
+    return invoke<boolean>("capcut_cancel_inspection", { token });
+  },
+
+  async capcutInspectTemplateDraft(
+    draftPath: string,
+    selectedRoots: string[],
+    cancelToken: string
+  ): Promise<CapCutInspectionResult> {
+    return invoke<CapCutInspectionResult>("capcut_inspect_template_draft", {
+      draftPath,
+      selectedRoots,
+      cancelToken,
+    });
+  },
+
+  async capcutSaveTemplateToLibrary(
+    report: CapCutInspectionResult["report"],
+    assetSourceFiles: [string, string][],
+    expectedSourceHash: string
+  ): Promise<string> {
+    return invoke<string>("capcut_save_template_to_library", {
+      report,
+      assetSourceFiles,
+      expectedSourceHash,
+    });
+  },
+
+  async capcutApplyTemplateToProject(args: {
+    itemId: string;
+    templateId: string;
+    templateVersion: number;
+    textVariant?: string;
+    expectedRevision: number;
+    expectedSourceHash: string;
+    sourceDraftPath: string;
+    expectedResourceFingerprints: Record<string, string>;
+    stagingToken: string;
+    cancelToken?: string;
+  }): Promise<CommandReceipt> {
+    return invoke<CommandReceipt>("capcut_apply_template_to_project", args);
   },
 };

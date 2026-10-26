@@ -8,12 +8,20 @@ import {
   TextAlignment,
   TextAnchor,
   TextStyle,
+  TextFill,
+  TextStroke,
+  TextShadow,
+  TextBackgroundBox,
+  TextAnimation,
+  GradientKind,
   PlacementMode,
   ClipSpeed,
   TimelineItem,
   TransitionKind,
   VisualEffectPreset,
 } from "../types/project";
+import { TemplateLayer, TemplateParameterValue } from "../types/template";
+import { TemplateInstanceInspector } from "./TemplateInstanceInspector";
 
 const DEFAULT_TEXT_STYLE: TextStyle = {
   font_family: "Inter",
@@ -56,8 +64,23 @@ interface InspectorProps {
     templateVersion?: number
   ) => void;
   onResetTextTemplate?: () => void;
+  onTemplateParameterSet?: (parameterKey: string, value: TemplateParameterValue) => void;
+  onTemplateReset?: () => void;
+  onTemplateDetach?: () => void;
+  onTemplateLayerAdd?: (layer: TemplateLayer) => void;
+  onTemplateLayerRemove?: (layerId: string) => void;
+  onTemplateLayerReorder?: (layerIds: string[]) => void;
+  onTemplateLayerUpdate?: (layerId: string, patch: Partial<TemplateLayer>) => Promise<unknown> | void;
+  onSaveAsTemplate?: () => void;
   onUpdateTextStyle?: (style: TextStyle) => void;
   onApplyTextStyleToTrack?: (trackId: string, style: TextStyle) => void;
+  onUpdateTextAppearance?: (
+    fill: TextFill,
+    strokes: TextStroke[],
+    shadows: TextShadow[],
+    background?: TextBackgroundBox | null
+  ) => void;
+  onUpdateTextAnimation?: (animation?: TextAnimation | null) => void;
   textTrack?: {
     trackId: string;
     name: string;
@@ -103,8 +126,18 @@ export const Inspector: React.FC<InspectorProps> = ({
   onApplyTextTemplate,
   onApplyTextTemplateToTrack,
   onResetTextTemplate,
+  onTemplateParameterSet,
+  onTemplateReset,
+  onTemplateDetach,
+  onTemplateLayerAdd,
+  onTemplateLayerRemove,
+  onTemplateLayerReorder,
+  onTemplateLayerUpdate,
+  onSaveAsTemplate,
   onUpdateTextStyle,
   onApplyTextStyleToTrack,
+  onUpdateTextAppearance,
+  onUpdateTextAnimation,
   textTrack,
   onUpdateAudioFade,
   onUpdateTransition,
@@ -123,6 +156,8 @@ export const Inspector: React.FC<InspectorProps> = ({
   const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
   const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
   const [applyTemplateToTrack, setApplyTemplateToTrack] = useState(false);
+  const [appearanceExpanded, setAppearanceExpanded] = useState(false);
+  const [animationExpanded, setAnimationExpanded] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -657,6 +692,20 @@ export const Inspector: React.FC<InspectorProps> = ({
           </section>
         )}
 
+        {selectedItem.kind === "Text" && (
+          <TemplateInstanceInspector
+            item={selectedItem}
+            onParameterSet={onTemplateParameterSet}
+            onReset={onTemplateReset || onResetTextTemplate}
+            onDetach={onTemplateDetach}
+            onLayerAdd={onTemplateLayerAdd}
+            onLayerRemove={onTemplateLayerRemove}
+            onLayerReorder={onTemplateLayerReorder}
+            onLayerUpdate={onTemplateLayerUpdate}
+            onSaveAsTemplate={onSaveAsTemplate}
+          />
+        )}
+
         {selectedItem.kind === "Text" && onUpdateTextStyle && (
           <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
@@ -752,6 +801,413 @@ export const Inspector: React.FC<InspectorProps> = ({
                     </button>
                   )}
                 </>
+              );
+            })()}
+          </section>
+        )}
+
+        {selectedItem.kind === "Text" && onUpdateTextAppearance && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <button
+              type="button"
+              onClick={() => setAppearanceExpanded(!appearanceExpanded)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: "11px",
+                fontWeight: 600,
+                cursor: "pointer",
+                padding: "2px 0",
+                textAlign: "left",
+              }}
+            >
+              <span>APPEARANCE & FILL (GRADIENT / STROKE / SHADOW)</span>
+              <span>{appearanceExpanded ? "▼" : "▶"}</span>
+            </button>
+
+            {appearanceExpanded && (() => {
+              const rich = selectedItem.text_rich;
+              const fill = rich?.fill ?? { kind: "Solid" as const, color: selectedItem.text_style?.font_color ?? "#FFFFFF" };
+              const strokes = rich?.strokes ?? [];
+              const shadows = rich?.shadows ?? [];
+              const bg = rich?.background ?? null;
+
+              const isGradient = fill.kind === "Gradient";
+
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "11px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Fill Mode</span>
+                    <div style={{ display: "flex", gap: "4px" }}>
+                      <button
+                        type="button"
+                        className="btn-action"
+                        onClick={() => {
+                          onUpdateTextAppearance(
+                            { kind: "Solid", color: selectedItem.text_style?.font_color ?? "#FFFFFF" },
+                            strokes,
+                            shadows,
+                            bg
+                          );
+                        }}
+                        style={{
+                          padding: "2px 6px",
+                          fontSize: "10px",
+                          fontWeight: !isGradient ? 700 : 400,
+                          backgroundColor: !isGradient ? "var(--accent-primary)" : "var(--bg-surface)",
+                          color: !isGradient ? "#FFF" : "var(--text-main)",
+                        }}
+                      >
+                        Solid
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-action"
+                        onClick={() => {
+                          onUpdateTextAppearance(
+                            {
+                              kind: "Gradient",
+                              gradient_kind: "Linear",
+                              angle_deg: 90,
+                              stops: [
+                                { offset: 0, color: "#60A5FA" },
+                                { offset: 1, color: "#A855F7" },
+                              ],
+                            },
+                            strokes,
+                            shadows,
+                            bg
+                          );
+                        }}
+                        style={{
+                          padding: "2px 6px",
+                          fontSize: "10px",
+                          fontWeight: isGradient ? 700 : 400,
+                          backgroundColor: isGradient ? "var(--accent-primary)" : "var(--bg-surface)",
+                          color: isGradient ? "#FFF" : "var(--text-main)",
+                        }}
+                      >
+                        Gradient
+                      </button>
+                    </div>
+                  </div>
+
+                  {isGradient && fill.kind === "Gradient" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", padding: "6px", backgroundColor: "var(--bg-surface)", borderRadius: "4px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Type</span>
+                        <select
+                          value={fill.gradient_kind}
+                          onChange={(e) => {
+                            onUpdateTextAppearance(
+                              { ...fill, gradient_kind: e.target.value as GradientKind },
+                              strokes,
+                              shadows,
+                              bg
+                            );
+                          }}
+                          style={{ fontSize: "10px", padding: "2px 4px" }}
+                        >
+                          <option value="Linear">Linear</option>
+                          <option value="Radial">Radial</option>
+                        </select>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Angle</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <input
+                            type="range"
+                            min="0"
+                            max="360"
+                            value={fill.angle_deg}
+                            onChange={(e) => {
+                              onUpdateTextAppearance(
+                                { ...fill, angle_deg: Number(e.target.value) || 0 },
+                                strokes,
+                                shadows,
+                                bg
+                              );
+                            }}
+                            style={{ width: "80px" }}
+                          />
+                          <span>{fill.angle_deg}°</span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Start / End</span>
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          <input
+                            type="color"
+                            value={(fill.stops[0]?.color ?? "#60A5FA").slice(0, 7)}
+                            onChange={(e) => {
+                              const newStops = [...fill.stops];
+                              newStops[0] = { offset: 0, color: e.target.value.toUpperCase() };
+                              onUpdateTextAppearance(
+                                { ...fill, stops: newStops },
+                                strokes,
+                                shadows,
+                                bg
+                              );
+                            }}
+                            style={{ width: "28px", height: "20px", border: "none", cursor: "pointer" }}
+                          />
+                          <input
+                            type="color"
+                            value={(fill.stops[1]?.color ?? "#A855F7").slice(0, 7)}
+                            onChange={(e) => {
+                              const newStops = [...fill.stops];
+                              newStops[1] = { offset: 1, color: e.target.value.toUpperCase() };
+                              onUpdateTextAppearance(
+                                { ...fill, stops: newStops },
+                                strokes,
+                                shadows,
+                                bg
+                              );
+                            }}
+                            style={{ width: "28px", height: "20px", border: "none", cursor: "pointer" }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <input
+                          type="checkbox"
+                          checked={strokes.length > 0}
+                          onChange={(e) => {
+                            const newStrokes = e.target.checked
+                              ? [{ color: "#000000", width: 3, align: "Outside" as const }]
+                              : [];
+                            onUpdateTextAppearance(fill, newStrokes, shadows, bg);
+                          }}
+                        />
+                        <span>Stroke Outline</span>
+                      </div>
+                      {strokes.length > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <input
+                            type="color"
+                            value={(strokes[0].color ?? "#000000").slice(0, 7)}
+                            onChange={(e) => {
+                              const updated = [{ ...strokes[0], color: e.target.value.toUpperCase() }];
+                              onUpdateTextAppearance(fill, updated, shadows, bg);
+                            }}
+                            style={{ width: "24px", height: "18px", border: "none", cursor: "pointer" }}
+                          />
+                          <input
+                            type="number"
+                            min="1"
+                            max="20"
+                            value={strokes[0].width}
+                            onChange={(e) => {
+                              const updated = [{ ...strokes[0], width: Math.max(1, Number(e.target.value) || 1) }];
+                              onUpdateTextAppearance(fill, updated, shadows, bg);
+                            }}
+                            style={{ width: "36px", padding: "1px 3px", fontSize: "10px" }}
+                          />
+                          <span style={{ fontSize: "9px" }}>px</span>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <input
+                          type="checkbox"
+                          checked={shadows.length > 0}
+                          onChange={(e) => {
+                            const newShadows = e.target.checked
+                              ? [{ color: "#00000088", offset_x: 2, offset_y: 2, blur: 4 }]
+                              : [];
+                            onUpdateTextAppearance(fill, strokes, newShadows, bg);
+                          }}
+                        />
+                        <span>Drop Shadow</span>
+                      </div>
+                      {shadows.length > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <input
+                            type="color"
+                            value={(shadows[0].color ?? "#000000").slice(0, 7)}
+                            onChange={(e) => {
+                              const updated = [{ ...shadows[0], color: e.target.value.toUpperCase() }];
+                              onUpdateTextAppearance(fill, strokes, updated, bg);
+                            }}
+                            style={{ width: "24px", height: "18px", border: "none", cursor: "pointer" }}
+                          />
+                          <span style={{ fontSize: "9px" }}>blur {shadows[0].blur ?? 4}px</span>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+        )}
+
+        {selectedItem.kind === "Text" && onUpdateTextAnimation && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <button
+              type="button"
+              onClick={() => setAnimationExpanded(!animationExpanded)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: "11px",
+                fontWeight: 600,
+                cursor: "pointer",
+                padding: "2px 0",
+                textAlign: "left",
+              }}
+            >
+              <span>TEXT ANIMATION (IN / LOOP / OUT)</span>
+              <span>{animationExpanded ? "▼" : "▶"}</span>
+            </button>
+
+            {animationExpanded && (() => {
+              const anim = selectedItem.text_animation;
+              const inActive = Boolean(anim?.in_anim);
+              const loopActive = Boolean(anim?.loop_anim);
+              const outActive = Boolean(anim?.out_anim);
+
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "11px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Intro (In)</span>
+                    <select
+                      value={inActive ? "FadeIn" : "None"}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "None") {
+                          onUpdateTextAnimation(anim ? { ...anim, in_anim: null } : null);
+                        } else {
+                          onUpdateTextAnimation({
+                            ...(anim ?? {}),
+                            in_anim: {
+                              duration: { value: 15, rate: { numerator: 30, denominator: 1 } },
+                              from: {
+                                translate_x: 0,
+                                translate_y: 20,
+                                scale_x: 0.9,
+                                scale_y: 0.9,
+                                rotation: 0,
+                                opacity: 0,
+                              },
+                              to: {
+                                translate_x: 0,
+                                translate_y: 0,
+                                scale_x: 1,
+                                scale_y: 1,
+                                rotation: 0,
+                                opacity: 1,
+                              },
+                            },
+                          });
+                        }
+                      }}
+                      style={{ fontSize: "11px", padding: "2px 4px" }}
+                    >
+                      <option value="None">None</option>
+                      <option value="FadeIn">Fade & Rise In</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Continuous (Loop)</span>
+                    <select
+                      value={loopActive ? "Pulse" : "None"}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "None") {
+                          onUpdateTextAnimation(anim ? { ...anim, loop_anim: null } : null);
+                        } else {
+                          onUpdateTextAnimation({
+                            ...(anim ?? {}),
+                            loop_anim: {
+                              duration: { value: 30, rate: { numerator: 30, denominator: 1 } },
+                              from: {
+                                translate_x: 0,
+                                translate_y: 0,
+                                scale_x: 1,
+                                scale_y: 1,
+                                rotation: 0,
+                                opacity: 1,
+                              },
+                              to: {
+                                translate_x: 0,
+                                translate_y: 0,
+                                scale_x: 1.05,
+                                scale_y: 1.05,
+                                rotation: 0,
+                                opacity: 1,
+                              },
+                            },
+                          });
+                        }
+                      }}
+                      style={{ fontSize: "11px", padding: "2px 4px" }}
+                    >
+                      <option value="None">None</option>
+                      <option value="Pulse">Gentle Pulse</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-muted)" }}>Outro (Out)</span>
+                    <select
+                      value={outActive ? "FadeOut" : "None"}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "None") {
+                          onUpdateTextAnimation(anim ? { ...anim, out_anim: null } : null);
+                        } else {
+                          onUpdateTextAnimation({
+                            ...(anim ?? {}),
+                            out_anim: {
+                              duration: { value: 15, rate: { numerator: 30, denominator: 1 } },
+                              from: {
+                                translate_x: 0,
+                                translate_y: 0,
+                                scale_x: 1,
+                                scale_y: 1,
+                                rotation: 0,
+                                opacity: 1,
+                              },
+                              to: {
+                                translate_x: 0,
+                                translate_y: -20,
+                                scale_x: 0.95,
+                                scale_y: 0.95,
+                                rotation: 0,
+                                opacity: 0,
+                              },
+                            },
+                          });
+                        }
+                      }}
+                      style={{ fontSize: "11px", padding: "2px 4px" }}
+                    >
+                      <option value="None">None</option>
+                      <option value="FadeOut">Fade & Rise Out</option>
+                    </select>
+                  </div>
+                </div>
               );
             })()}
           </section>

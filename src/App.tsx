@@ -8,6 +8,22 @@ import { editorApi } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
 import { AutoCaptionDialog } from "./components/AutoCaptionDialog";
 import { MediaPanel } from "./components/MediaPanel";
+import { TemplateBrowser } from "./components/TemplateBrowser";
+import { TemplateAuthoringDialog } from "./components/TemplateAuthoringDialog";
+import { TemplateDefinition, TemplateLayer, TemplateParameterValue } from "./types/template";
+import {
+  createTemplateApplyOp,
+  createTemplateTrackApplyOp,
+  createTextTrackTemplateApplyOp,
+  isLegacyTemplateId,
+  createTemplateParameterSetOp,
+  createTemplateResetOp,
+  createTemplateDetachOp,
+  createTemplateLayerAddOp,
+  createTemplateLayerRemoveOp,
+  createTemplateLayerReorderOp,
+  createTemplateLayerUpdateOp,
+} from "./utils/templateHelpers";
 import { PreviewCanvas } from "./components/PreviewCanvas";
 import { Timeline } from "./components/Timeline";
 import { Inspector } from "./components/Inspector";
@@ -68,6 +84,8 @@ export function App() {
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
   const [exportPreset, setExportPreset] = useState<ExportPreset>("balanced");
   const [isAutoCaptionOpen, setIsAutoCaptionOpen] = useState(false);
+  const [activeLeftTab, setActiveLeftTab] = useState<"media" | "templates">("media");
+  const [isAuthoringOpen, setIsAuthoringOpen] = useState(false);
   const [autoCaptionReport, setAutoCaptionReport] = useState<Awaited<ReturnType<typeof editorApi.startAutoCaptions>> | null>(null);
   const audioUnlockRef = useRef<() => void>(() => {});
   const selectedItem = findTimelineItem(project, selectedItemId);
@@ -117,27 +135,54 @@ export function App() {
     };
   }, [autoCaptionReport?.jobId, autoCaptionReport?.state]);
 
-  const executeCommandEnvelope = async (operations: CommandEnvelope["operations"], desc: string) => {
-    if (!project) return;
-    try {
+  const commandQueueRef = useRef<Promise<any>>(Promise.resolve());
+
+  const executeCommandEnvelope = async (
+    operations:
+      | CommandEnvelope["operations"]
+      | ((project: Project) => CommandEnvelope["operations"]),
+    desc: string
+  ): Promise<any> => {
+    const task = commandQueueRef.current.then(async () => {
+      const currentProject = await editorApi.getCurrentProject();
+      if (!currentProject) {
+        throw new Error("No active project");
+      }
+      const resolvedOperations =
+        typeof operations === "function" ? operations(currentProject) : operations;
+
       const envelope: CommandEnvelope = {
-        schema_version: project.schema_version,
-        project_id: project.project_id,
-        base_revision: project.revision,
+        schema_version: currentProject.schema_version,
+        project_id: currentProject.project_id,
+        base_revision: currentProject.revision,
         dry_run: false,
         transaction_id: `tx_${Date.now()}`,
-        operations,
+        operations: resolvedOperations,
       };
 
-      const receipt = await editorApi.executeCommand(envelope);
-      setStatusMsg(`${desc} committed (rev ${receipt.new_revision})`);
-      await refreshProject();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setStatusMsg(`Command failed: ${msg}`);
-      // Invariant: Reconciliation on command failure
-      await refreshProject();
-    }
+      try {
+        const receipt = await editorApi.executeCommand(envelope);
+        setStatusMsg(`${desc} committed (rev ${receipt.new_revision})`);
+        const updated = await editorApi.getCurrentProject();
+        setProject(updated);
+        setSelection((prev) => reconcileSelection(prev, updated));
+        return receipt;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setStatusMsg(`Command failed: ${msg}`);
+        try {
+          const reconciled = await editorApi.getCurrentProject();
+          setProject(reconciled);
+          setSelection((prev) => reconcileSelection(prev, reconciled));
+        } catch {
+          // ignore reconcile error
+        }
+        throw err;
+      }
+    });
+
+    commandQueueRef.current = task.catch(() => {});
+    return task;
   };
 
   const handleNewProject = async () => {
@@ -865,24 +910,204 @@ export function App() {
     );
   };
 
-  const handleApplyTextTemplate = (templateId: string, templateVersion = 1) => {
+  const handleApplyTemplateDefinition = async (definition: TemplateDefinition) => {
+    if (!project) return;
+    const rate = project.settings.frame_rate;
+    const now = Date.now();
+
+    if (selectedItem?.kind === "Text") {
+      await executeCommandEnvelope(
+        [createTemplateApplyOp(selectedItem.item_id, definition.id, definition.version)],
+        `Apply template "${definition.name}"`
+      );
+    } else {
+      let targetTrack = project.tracks.find((t) => t.kind === "Video");
+      const operations: OperationEnvelope[] = [];
+
+      let trackId = targetTrack?.track_id;
+      if (!trackId) {
+        trackId = `trk_video_${now}`;
+        operations.push({
+          operation_id: `op_add_trk_${now}`,
+          operation: {
+            type: "TrackCreate",
+            payload: {
+              track_id: trackId,
+              name: "Video Track 1",
+              kind: "Video",
+            },
+          },
+        });
+      }
+
+      const newItemId = `txt_${now}`;
+      const duration = definition.default_duration ?? { value: 90, rate };
+
+      operations.push({
+        operation_id: `op_add_txt_clip_${now}`,
+        operation: {
+          type: "ClipCreate",
+          payload: {
+            track_id: trackId,
+            item_id: newItemId,
+            name: definition.name,
+            kind: "Text",
+            timeline_start: { value: playheadFrame, rate },
+            duration,
+          },
+        },
+      });
+
+      operations.push(
+        createTemplateApplyOp(newItemId, definition.id, definition.version)
+      );
+
+      await executeCommandEnvelope(operations, `Insert template "${definition.name}"`);
+      setSelection(selectSingle(newItemId));
+    }
+  };
+
+  const handleTemplateParameterSet = (parameterKey: string, value: TemplateParameterValue) => {
+    if (!selectedItemId) return;
+    return executeCommandEnvelope(
+      [createTemplateParameterSetOp(selectedItemId, parameterKey, value)],
+      `Set parameter "${parameterKey}"`
+    );
+  };
+
+  const handleTemplateReset = () => {
+    if (!selectedItemId) return;
+    if (selectedItem?.template_instance) {
+      executeCommandEnvelope(
+        [createTemplateResetOp(selectedItemId)],
+        "Reset template"
+      );
+    } else {
+      executeCommandEnvelope(
+        [
+          {
+            operation_id: `op_tpl_reset_${Date.now()}`,
+            operation: {
+              type: "ClipTextTemplateReset",
+              payload: {
+                item_id: selectedItemId,
+              },
+            },
+          },
+        ],
+        "Reset text template"
+      );
+    }
+  };
+
+  const handleTemplateDetach = () => {
     if (!selectedItemId) return;
     executeCommandEnvelope(
-      [
-        {
+      [createTemplateDetachOp(selectedItemId)],
+      "Detach template"
+    );
+  };
+
+  const handleTemplateLayerAdd = (layer: TemplateLayer) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [createTemplateLayerAddOp(selectedItemId, layer)],
+      `Add layer "${layer.name}"`
+    );
+  };
+
+  const handleTemplateLayerRemove = (layerId: string) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [createTemplateLayerRemoveOp(selectedItemId, layerId)],
+      "Remove template layer"
+    );
+  };
+
+  const handleTemplateLayerReorder = (layerIds: string[]) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [createTemplateLayerReorderOp(selectedItemId, layerIds)],
+      "Reorder template layers"
+    );
+  };
+
+  const handleTemplateLayerUpdate = (layerId: string, patch: Partial<TemplateLayer>) => {
+    if (!selectedItemId) return Promise.reject(new Error("No selected item"));
+    return executeCommandEnvelope((currentProject) => {
+      const item = currentProject.tracks
+        .flatMap((track) => track.items)
+        .find((candidate) => candidate.item_id === selectedItemId);
+      const canonical = item?.template_instance?.layers.find(
+        (layer) => layer.layer_id === layerId
+      );
+      if (!canonical) {
+        throw new Error("Template layer '" + layerId + "' was not found in the current project");
+      }
+      const merged: TemplateLayer = {
+        ...canonical,
+        ...patch,
+        transform: patch.transform
+          ? { ...canonical.transform, ...patch.transform }
+          : canonical.transform,
+        kind: patch.kind
+          ? patch.kind.type === canonical.kind.type
+            ? ({
+                type: canonical.kind.type,
+                data: {
+                  ...canonical.kind.data,
+                  ...patch.kind.data,
+                  ...(canonical.kind.type === "Text" &&
+                  patch.kind.type === "Text" &&
+                  patch.kind.data.text_style
+                    ? {
+                        text_style: {
+                          font_family: "sans-serif",
+                          font_size: 28,
+                          font_weight: 400,
+                          font_color: "#FFFFFF",
+                          accent_color: null,
+                          background_color: null,
+                          background_opacity: 0,
+                          padding_x: 0,
+                          padding_y: 0,
+                          alignment: "Center",
+                          line_height: 1.2,
+                          anchor: "Center",
+                          ...(((canonical.kind.data.is_primary
+                            ? item?.text_style
+                            : canonical.kind.data.text_style) ?? {}) as Partial<TextStyle>),
+                          ...(patch.kind.data.text_style as Partial<TextStyle>),
+                        },
+                      }
+                    : {}),
+                },
+              } as TemplateLayer["kind"])
+            : patch.kind
+          : canonical.kind,
+      };
+      return [createTemplateLayerUpdateOp(selectedItemId, layerId, merged)];
+    }, "Update template layer");
+  };
+
+  const handleApplyTextTemplate = (templateId: string, templateVersion = 1) => {
+    if (!selectedItemId) return;
+    const isLegacy = isLegacyTemplateId(templateId);
+    const op = isLegacy
+      ? {
           operation_id: `op_tpl_${Date.now()}`,
           operation: {
-            type: "TextTemplateApply",
+            type: "TextTemplateApply" as const,
             payload: {
               item_id: selectedItemId,
               template_id: templateId,
               template_version: templateVersion,
             },
           },
-        },
-      ],
-      `Apply text template "${templateId}"`
-    );
+        }
+      : createTemplateApplyOp(selectedItemId, templateId, templateVersion);
+
+    return executeCommandEnvelope([op], `Apply text template "${templateId}"`);
   };
 
   const handleOpenAutoCaptions = () => {
@@ -936,22 +1161,12 @@ export function App() {
     templateId: string,
     templateVersion = 1
   ) => {
-    executeCommandEnvelope(
-      [
-        {
-          operation_id: `op_track_tpl_${trackId}_${Date.now()}`,
-          operation: {
-            type: "TextTrackTemplateApply",
-            payload: {
-              track_id: trackId,
-              template_id: templateId,
-              template_version: templateVersion,
-            },
-          },
-        },
-      ],
-      `Apply text template "${templateId}" to text track`
-    );
+    const isLegacy = isLegacyTemplateId(templateId);
+    const op = isLegacy
+      ? createTextTrackTemplateApplyOp(trackId, templateId, templateVersion)
+      : createTemplateTrackApplyOp(trackId, templateId, templateVersion);
+
+    return executeCommandEnvelope([op], `Apply template "${templateId}" to text track`);
   };
 
   const handleResetTextTemplate = () => {
@@ -988,6 +1203,54 @@ export function App() {
         },
       ],
       "Update text style"
+    );
+  };
+
+  const handleUpdateTextAppearance = (
+    fill: import("./types/project").TextFill,
+    strokes: import("./types/project").TextStroke[],
+    shadows: import("./types/project").TextShadow[],
+    background?: import("./types/project").TextBackgroundBox | null
+  ) => {
+    if (!selectedItemId) return;
+    return executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_txt_appear_${Date.now()}`,
+          operation: {
+            type: "ClipTextAppearanceSet",
+            payload: {
+              item_id: selectedItemId,
+              fill,
+              strokes,
+              shadows,
+              background: background ?? null,
+            },
+          },
+        },
+      ],
+      "Update text appearance"
+    );
+  };
+
+  const handleUpdateTextAnimation = (
+    animation?: import("./types/project").TextAnimation | null
+  ) => {
+    if (!selectedItemId) return;
+    return executeCommandEnvelope(
+      [
+        {
+          operation_id: `op_txt_anim_${Date.now()}`,
+          operation: {
+            type: "ClipTextAnimationSet",
+            payload: {
+              item_id: selectedItemId,
+              animation: animation ?? null,
+            },
+          },
+        },
+      ],
+      "Update text animation"
     );
   };
 
@@ -1467,14 +1730,89 @@ export function App() {
         onImportCaptions={handleImportCaptions}
         onExportCaptions={handleExportCaptions}
         onAutoCaptions={handleOpenAutoCaptions}
+        onOpenTemplates={() => setActiveLeftTab("templates")}
       />
 
       <div className="main-workspace">
-        <MediaPanel
-          assets={project?.assets ?? []}
-          onAddSampleAsset={handleImportMedia}
-          onAddAssetToTimeline={handleAddAssetToTimeline}
-        />
+        <div
+          className="left-sidebar-container"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            flex: "0 0 280px",
+            height: "100%",
+            borderRight: "1px solid var(--border-color)",
+            backgroundColor: "var(--bg-panel)",
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            className="left-panel-tab-bar"
+            style={{
+              display: "flex",
+              borderBottom: "1px solid var(--border-color)",
+              backgroundColor: "var(--bg-panel)",
+              flexShrink: 0,
+            }}
+          >
+            <button
+              type="button"
+              className={`left-tab-btn ${activeLeftTab === "media" ? "active" : ""}`}
+              onClick={() => setActiveLeftTab("media")}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                fontSize: "11px",
+                fontWeight: 600,
+                backgroundColor: activeLeftTab === "media" ? "var(--bg-surface)" : "transparent",
+                color: activeLeftTab === "media" ? "var(--accent-primary)" : "var(--text-muted)",
+                border: "none",
+                borderBottom: activeLeftTab === "media" ? "2px solid var(--accent-primary)" : "2px solid transparent",
+                cursor: "pointer",
+              }}
+            >
+              🎬 Media
+            </button>
+            <button
+              type="button"
+              className={`left-tab-btn ${activeLeftTab === "templates" ? "active" : ""}`}
+              onClick={() => setActiveLeftTab("templates")}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                fontSize: "11px",
+                fontWeight: 600,
+                backgroundColor: activeLeftTab === "templates" ? "var(--bg-surface)" : "transparent",
+                color: activeLeftTab === "templates" ? "var(--accent-primary)" : "var(--text-muted)",
+                border: "none",
+                borderBottom: activeLeftTab === "templates" ? "2px solid var(--accent-primary)" : "2px solid transparent",
+                cursor: "pointer",
+              }}
+            >
+              🎨 Templates
+            </button>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {activeLeftTab === "media" ? (
+              <MediaPanel
+                assets={project?.assets ?? []}
+                onAddSampleAsset={handleImportMedia}
+                onAddAssetToTimeline={handleAddAssetToTimeline}
+              />
+            ) : (
+              <TemplateBrowser
+                selectedItem={selectedItem}
+                assets={project?.assets ?? []}
+                projectRevision={project?.revision ?? 0}
+                onProjectChanged={refreshProject}
+                onApplyTemplate={handleApplyTemplateDefinition}
+                onStatusChange={setStatusMsg}
+              />
+            )}
+          </div>
+        </div>
 
         <section className="center-panel">
           <PreviewCanvas
@@ -1557,6 +1895,16 @@ export function App() {
           onRemoveCutTransition={handleRemoveCutTransition}
           onUpdateAudioCrossfadeDuration={handleUpdateAudioCrossfadeDuration}
           onRemoveAudioCrossfade={handleRemoveAudioCrossfade}
+          onTemplateParameterSet={handleTemplateParameterSet}
+          onTemplateReset={handleTemplateReset}
+          onTemplateDetach={handleTemplateDetach}
+          onTemplateLayerAdd={handleTemplateLayerAdd}
+          onTemplateLayerRemove={handleTemplateLayerRemove}
+          onTemplateLayerReorder={handleTemplateLayerReorder}
+          onTemplateLayerUpdate={handleTemplateLayerUpdate}
+          onSaveAsTemplate={() => setIsAuthoringOpen(true)}
+          onUpdateTextAppearance={handleUpdateTextAppearance}
+          onUpdateTextAnimation={handleUpdateTextAnimation}
         />
       </div>
 
@@ -1575,6 +1923,17 @@ export function App() {
         onClose={() => setIsAutoCaptionOpen(false)}
         onStart={handleStartAutoCaptions}
         onCancel={handleCancelAutoCaptions}
+      />
+
+      <TemplateAuthoringDialog
+        isOpen={isAuthoringOpen}
+        selectedItem={selectedItem}
+        assets={project?.assets ?? []}
+        onClose={() => setIsAuthoringOpen(false)}
+        onSaved={(def) => {
+          setStatusMsg(`Saved template "${def.name}" to catalog`);
+          refreshProject();
+        }}
       />
     </div>
   );

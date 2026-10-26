@@ -1,0 +1,318 @@
+{
+  "schema_version": 11,
+  "project_id": "proj_d4e45c0a72194bceb6ff0a6336935117",
+  "name": "Evidence_Project",
+  "revision": 1,
+  "settings": {
+    "width": 1920,
+    "height": 1080,
+    "canvas_background_color": "#000000",
+    "frame_rate": {
+      "numerator": 30,
+      "denominator": 1
+    },
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "assets": [
+    {
+      "asset_id": "6841481374243754510",
+      "name": "MPLUS1p-ExtraBold.ttf",
+      "path": "C:\\Users\\Admin\\AppData\\Local\\TinixCut\\templates\\resources\\MPLUS1p-ExtraBold.ttf",
+      "media_kind": "Image",
+      "duration": null,
+      "file_size": 1769872,
+      "dimensions": null
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": "trk_c538e3d8334b442d9400e0d56da57e37",
+      "name": "Text Track",
+      "kind": "Video",
+      "muted": false,
+      "locked": false,
+      "items": [
+        {
+          "item_id": "clip_evidence",
+          "asset_id": null,
+          "name": "Item clip_evidence",
+          "kind": "Text",
+          "timeline_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 150,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            }
+          },
+          "source_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 150,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            }
+          },
+          "transform": {
+            "position_x": 0.0,
+            "position_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0
+          },
+          "crop": {
+            "top": 0.0,
+            "bottom": 0.0,
+            "left": 0.0,
+            "right": 0.0
+          },
+          "placement_mode": "Fit",
+          "visual_effect": "None",
+          "speed": "Normal",
+          "opacity": 1.0,
+          "volume": 1.0,
+          "text_content": "Tinix — Thử nghiệm tiếng Việt",
+          "text_style": {
+            "font_family": "MPLUS1p-ExtraBold.ttf",
+            "font_size": 150.0,
+            "font_weight": 700,
+            "font_color": "#FFE35F",
+            "accent_color": null,
+            "background_color": null,
+            "background_opacity": 0.0,
+            "padding_x": 0.0,
+            "padding_y": 0.0,
+            "alignment": "Center",
+            "line_height": 1.2,
+            "anchor": "Center"
+          },
+          "text_template": {
+            "template_id": "capcut_tpl_7522343677012774197",
+            "template_version": 1
+          },
+          "text_rich": {
+            "font": {
+              "family": "MPLUS1p-ExtraBold.ttf",
+              "weight": 700,
+              "style": "Normal",
+              "asset_id": "6841481374243754510"
+            },
+            "font_size": 150.0,
+            "layout": {
+              "max_width": null,
+              "alignment": "Center",
+              "line_height": 1.2,
+              "letter_spacing": 0.0,
+              "wrap_mode": "None",
+              "min_font_size": null,
+              "max_font_size": null
+            },
+            "fill": {
+              "kind": "Gradient",
+              "gradient_kind": "Linear",
+              "angle_deg": 118.0,
+              "radius": null,
+              "space": "All",
+              "stops": [
+                {
+                  "offset": 0.0,
+                  "color": "#FFE35FFF"
+                },
+                {
+                  "offset": 0.050884955,
+                  "color": "#FFE35FFF"
+                },
+                {
+                  "offset": 0.94911504,
+                  "color": "#FFFFFFFF"
+                },
+                {
+                  "offset": 1.0,
+                  "color": "#FFFFFFFF"
+                }
+              ]
+            },
+            "strokes": [
+              {
+                "color": "#AD5100FF",
+                "width": 3.8082194,
+                "align": "Outside"
+              }
+            ],
+            "shadows": [
+              {
+                "color": "#AD5100E5",
+                "offset_x": 3.535534,
+                "offset_y": -3.535534,
+                "blur": 0.0
+              },
+              {
+                "color": "#FFA758E5",
+                "offset_x": 1.4626455,
+                "offset_y": -1.4626455,
+                "blur": 1.706621
+              }
+            ],
+            "background": null,
+            "spans": []
+          },
+          "text_animation": {
+            "unit": "Grapheme",
+            "order": "Forward",
+            "seed": null,
+            "pivot_x": 0.5,
+            "pivot_y": 0.5,
+            "in_anim": {
+              "duration": {
+                "value": 31,
+                "rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              },
+              "easing": {
+                "CubicBezier": {
+                  "x1": 0.166667,
+                  "y1": 0.166667,
+                  "x2": 0.14,
+                  "y2": 1.0
+                }
+              },
+              "stagger_ratio": 0.7,
+              "from": {
+                "translate_x": 0.0,
+                "translate_y": -60.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation": 0.0,
+                "opacity": 0.0
+              },
+              "to": {
+                "translate_x": 0.0,
+                "translate_y": 0.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation": 0.0,
+                "opacity": 1.0
+              }
+            },
+            "loop_anim": null,
+            "out_anim": null,
+            "loop_mode": "None",
+            "conflict_policy": "Reject",
+            "phase_origin": null,
+            "phase_end": null
+          },
+          "template_instance": {
+            "template_id": "capcut_tpl_7522343677012774197",
+            "template_version": 1,
+            "layers": [
+              {
+                "layer_id": "lyr_primary_text",
+                "name": "Primary Text",
+                "z_index": 10,
+                "visible": true,
+                "opacity": 1.0,
+                "transform": {
+                  "position_x": 0.0,
+                  "position_y": 0.0,
+                  "scale_x": 0.58999705,
+                  "scale_y": 0.58999705,
+                  "rotation": 0.0
+                },
+                "anchor": "Center",
+                "pivot": [
+                  0.5,
+                  0.5
+                ],
+                "motion": null,
+                "kind": {
+                  "type": "Text",
+                  "data": {
+                    "is_primary": true,
+                    "slot_key": "title",
+                    "text_content": null,
+                    "text_style": null,
+                    "text_rich": null,
+                    "text_animation": null
+                  }
+                }
+              }
+            ],
+            "parameters": {
+              "title": {
+                "kind": "Text",
+                "value": "Tinix — Thử nghiệm tiếng Việt"
+              }
+            },
+            "initial_parameters": {
+              "title": {
+                "kind": "Text",
+                "value": "Tinix — Thử nghiệm tiếng Việt"
+              }
+            },
+            "overrides": [],
+            "responsive_policy": {
+              "reference_width": 1920,
+              "reference_height": 1080,
+              "supported_aspect_ratios": [
+                "16:9",
+                "9:16",
+                "1:1",
+                "4:5"
+              ],
+              "auto_wrap": true,
+              "auto_fit": false,
+              "safe_margin": 80.0
+            }
+          },
+          "fade_in": null,
+          "fade_out": null,
+          "transition": null,
+          "keyframes": []
+        }
+      ],
+      "transitions": [],
+      "audio_transitions": []
+    }
+  ],
+  "created_at": "2026-10-26T16:28:05.507325200+00:00",
+  "updated_at": "2026-10-26T16:28:05.508379+00:00",
+  "client_registry": {
+    "min_accepted_epoch": 0,
+    "current_epoch": 1,
+    "max_active_clients": 64,
+    "clients": {}
+  },
+  "command_ledger": [
+    {
+      "operation_id": "op_apply_9dcfacb1-eebf-40e9-94dc-9d83e0e37d7e",
+      "transaction_id": "tx_capcut_apply_15fa65ff-2da9-41d7-99cc-0f829ab1bd6f",
+      "client_id": null,
+      "client_epoch": null,
+      "sequence_number": null,
+      "fingerprint": "fp_sha256_c035e53e59a6e43bb9112e9b8f5afd8fd4f804e02801ce10c86ba4494df5f1ae",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "clip_evidence",
+      "affected_track_id": null
+    }
+  ]
+}

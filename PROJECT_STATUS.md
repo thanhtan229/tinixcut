@@ -11,31 +11,42 @@
 ## 0. Status Metadata
 
 **Project:** Automation-First Desktop Video Editor
-**Overall Status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–29 COMPLETE; PHASES 30–36 PLANNED
-**Current Selected Milestone:** Rich Animated Text Templates — Phase 29 Rich-Text Domain Model COMPLETE; Phase 30 Rich-Text Rendering next
-**Current Active Implementation Phase:** Phase 30 — Rich-Text Rendering & Parity (Ready)
+**Overall Status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–33 FUNCTIONALLY COMPLETE (NATIVE QUALIFICATION ITEMS DEFERRED); PHASE 34 IMPLEMENTED WITH AC-09 QUALIFICATION OPEN; PHASES 35–36 PLANNED
+**Current Selected Milestone:** Rich Animated Text Templates — Phase 35 Agent Template Generation IN PROGRESS
+**Current Active Implementation Phase:** Phase 34 — CapCut Template Import (implementation complete; native acceptance qualification open)
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred
-**Implementation:** Phases 0–25 implemented with automated validation; Phases 27–29 complete; native-desktop qualification is consolidated in Phase 26
+**Implementation:** Phases 0–25 implemented with automated validation; Phases 27–33 functionally complete; Phase 34 importer backend and UI implemented, with native acceptance qualification pending
 **ADR:** ADR-006 accepted for Phase 18; ADR-007 accepted for Phase 28 (Shared Text Renderer & Deterministic Overlay Seam — see `ADR_007_SHARED_TEXT_RENDERER_AND_OVERLAY_PIPELINE.md`)
-**Plan Status:** Phase 27, Phase 28 and Phase 29 complete; Phase 29 evidence is in `artifacts/animated-text-templates/phase-29/`; status tracked across PROJECT_STATUS.md and phase_status.md
-**Project Schema:** Schema v10 active; lossless v1–v3 migration, v4→v5 text-style migration, v5→v6 media-dimension/placement migration, v6→v7 canvas-background migration, v7→v8 visual-effect defaults, v8→v9 default clip-speed migration, and v9→v10 rich-text/animation defaults (all new fields default None) verified
+**Plan Status:** Phases 27–33 functionally complete; Phase 34 implemented with AC-09 native UI/source-comparison qualification pending; status tracked in `phase_status.md`
+**Project Schema:** Schema v11 active; lossless v1–v3 migration, v4→v5 text-style migration, v5→v6 media-dimension/placement migration, v6→v7 canvas-background migration, v7→v8 visual-effect defaults, v8→v9 default clip-speed migration, v9→v10 rich-text/animation defaults, and v10→v11 template defaults verified
 **Phase 17:** COMPLETE WITH DEFERRED ITEMS — qualification commit 28f94c6; durable reconciliation recorded
-**Baseline Commit:** e6462544b6956054ee50af40727d44e92121487b — Phase 29 is an uncommitted working-tree candidate (fingerprint a4f00b9f…)
+**Baseline Commit:** 94a084e076609f5e441c6376e3c8e45443653b80 (`chore(baseline): consolidate verified phases 19-29`); Phase 30 is an uncommitted working-tree candidate
 **Phase 18:** COMPLETE WITH DEFERRED ITEMS. User passed the documented video/audio transport and crossfade scenarios; direct native `app_health_check` observation and independent preview-media cleanup observation remain deferred.
 **Phase 27 Status:** COMPLETE (Gate 27 PASS). Baseline inventory, CapCut user sample index (exact 29 graphemes / 24 non-space letters = 21-char vertical slide + 3-char bounce/rotation, plus Apache-2.0 `Roboto-Bold.ttf` SHA-256), option compatibility matrix, canonical contract semantics, 14-fixture corpus, and reference workload budgets locked in `artifacts/animated-text-templates/phase-27/`.
 **Phase 28 Status:** COMPLETE (Gate 28 PASS). Pure Rust typography and rasterizer engine implemented (`src-tauri/src/modules/media/text_renderer_poc.rs` via `ab_glyph 0.2.32` + `unicode-normalization 0.1.25` + `unicode-segmentation 1.13.3`), true OpenType glyph rasterization with horizontal kerning and unified cluster masks, static-bounds-anchored 118° linear gradient, 2 outer strokes, 2 blurred drop shadows, `BoundedGlyphCache`, Tauri IPC command `render_text_template_poc_preview`, 6 integration tests passing, W1–W4 benchmarks satisfying Phase 27 budgets without relaxation (W1 Warm p95 = 5.21 ms, W2 = 14.87 ms, W3 16:9 = 17.23 ms, W3 9:16 = 16.92 ms, W4 = 5.18x RTF), lossless parity (ROI SSIM = 1.000000, MP4 ROI SSIM = 0.9978), 4-background alpha integrity, real FFmpeg stream export and cancellation verified, ADR-007 locked. Benchmarks must be run with the documented optimized test profile (`CARGO_PROFILE_TEST_OPT_LEVEL=3`); see phase-29/verification-log.md.
 **Phase 29 Status:** COMPLETE (Gate 29 PASS; QA PASS, Code Reviewer LGTM). Rich-text/animation domain model, schema v10 lossless migration, 7 Command Service operations with grapheme-span rebinding, composition/preview carry-through, TS types and CLI/MCP capability parity implemented. Evidence in `artifacts/animated-text-templates/phase-29/evidence-summary.json`; 13 Phase 29 + 12 QA tests pass.
-**Next Action:** Proceed to Phase 30 (Rich-Text Rendering & Parity) using Plans/plan_phase30_rich_text_rendering.md. Preserve Phase 26 native-desktop qualification, automatic-caption smoke, clean-VM and hardware-encoder evidence gaps.
-**Last Updated:** 2026-10-25
+**Phase 30 Status:** IMPLEMENTED WITH DEFERRED NATIVE QUALIFICATION (Gate 30 functional criteria PASS; QA PASS; Code Reviewer LGTM after remediation). Shared production renderer `src-tauri/src/modules/media/text_overlay.rs` consumes Phase 29 `text_rich` in preview (`preview_rich_text_overlay` IPC) and headless export (materialized ROI PNGs, never drawtext for rich items). 10 Phase 30 acceptance tests pass (1 ignored evidence writer); 162 lib + 13 Phase 29 tests, typecheck, 44 frontend tests, web build, native build and fmt pass. Evidence and documented limits in `artifacts/animated-text-templates/phase-30/` (W1 buffer p95 12.61 ms ≤ 16 ms; W2 19.83 ms ≤ 33.3 ms; oversized multi-line PNG packet 23.00 ms documented; native GUI/installed-app qualification deferred).
+**Next Action:** Complete Phase 34 AC-09 native qualification: exercise the importer dialog against the documented sample, verify inspection/resource reporting, then apply and save only in a clean test project and capture source-comparison ROI/frame evidence. Keep Phase 26 native-desktop qualification, Phase 30 native GUI/installed-resource observation, automatic-caption smoke, clean-VM and hardware-encoder evidence gaps visible.
+**Last Updated:** 2026-10-26
 
 ---
 
 ## 1. Current Objective
 
-The user approved implementation of the Animated Text Templates program per Plans/plan_animated_text_templates.md. Phases 27 (Template Contract, Fixtures and Baseline), 28 (Shared Text Renderer POC & Architecture Gate) and 29 (Rich-text & Animation Domain Model) are COMPLETE. Phase 30 (Rich-Text Rendering & Parity) is ready to begin.
+The user approved implementation of the Animated Text Templates program per Plans/plan_animated_text_templates.md. Phases 27 (Template Contract, Fixtures and Baseline), 28 (Shared Text Renderer POC & Architecture Gate), 29 (Rich-text & Animation Domain Model) and 30 (Rich-Text Rendering & Parity) are COMPLETE. Phase 31 (Text Animation Engine & Native Sample) is ready to begin.
 
 Phase tracking across the entire program is maintained in both PROJECT_STATUS.md and phase_status.md.
+
+### Phase 30 implementation checkpoint — 2026-10-25
+
+- **Shared production renderer (`src-tauri/src/modules/media/text_overlay.rs`)**: font resolution without silent substitution (bundled Roboto-Bold or explicit project font asset), NFC + UAX #29 grapheme layout with kerning, line height, tracking, alignment, Wrap/AutoFit, per-span fill/font-size/tracking, solid/linear/radial fills, ordered multi-stroke, multi-shadow blur, background boxes, bounded versioned mask cache, straight-alpha compositing, and placement scale/rotation/opacity baked into the overlay pixels.
+- **Preview seam**: `preview_rich_text_overlay` Tauri command + `editorApi.previewRichTextOverlay`; `PreviewCanvas` renders the ROI PNG for rich items (legacy text keeps the DOM path) and caches one overlay per item per project revision. Missing fonts/glyphs surface as an explicit banner, never a silent fallback.
+- **Export seam**: `ExportEngine::render_snapshot` materializes rich-text ROI PNGs through the same renderer and passes them to `build_video_filtergraph_with_overlays`; rich items never emit `drawtext`, legacy items keep it. Derived overlay and automation directories are removed on every exit path; output promotion retries briefly against Windows scan locks.
+- **Verification**: 7 Phase 30 tests pass (1 ignored evidence writer), including a real FFmpeg export with decoded non-background text pixels; 162 lib tests (POC5 skipped), 13 Phase 29 tests, typecheck, 44 frontend tests, web build, native build, clippy (no new lib findings) and `cargo fmt --check` pass.
+- **Performance**: W1 buffer warm p95 14.87 ms ≤ 16 ms; W2 19.83 ms ≤ 33.3 ms; canonical one-line IPC packet 7.49 ms. Oversized multi-line PNG packet p95 23.00 ms is documented as a transport limit (preview caches per revision).
+- **Deferred**: native GUI/installed-app observation remains under Phase 26; glow has no Phase 29 domain field; text animation and animated transforms are Phase 31.
+- **Evidence**: `artifacts/animated-text-templates/phase-30/` (`evidence-summary.json`, `verification-log.md`, `benchmark-production.json`, `export-metrics.json`, parity/alpha PNGs, `export-smoke.mp4`).
 
 ### Phase 29 implementation checkpoint — 2026-10-25
 
@@ -449,10 +460,10 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ## 9. Next Actions
 
-1. On a Windows session with native interactive desktop access, invoke the typed `app_health_check` command for P18-AC-14 and independently observe preview media-resource cleanup for the remaining portion of P18-AC-07.
-2. Keep P16-AC-56, true clean-VM, and hardware-encoder gates marked deferred until their required environments are available.
-3. Prepare and review a bounded Phase 20 plan for manual captions and SRT/VTT import/export.
-4. `Plans/research_creator_expansion.md` records the research basis and `Plans/plan_phase19_text_templates.md` records the completed Phase 19 implementation and qualification state.
+1. Complete P34-AC-09 apply/save/reopen qualification in a disposable test project, including CommandService history and undo/redo. Native dialog inspection of the documented CapCut sample now reports FULL CONVERSION and the expected StaggeredCharacterIn profile.
+2. Review the measured source-comparison ROI/frame evidence; it records substantial visual differences and does not establish parity.
+3. Keep Phase 26 desktop, Phase 30 native GUI/installed-resource, clean-VM, hardware-encoder, and automatic-caption smoke items marked deferred until their environments and evidence are available.
+4. Leave Phases 35–36 planned until the Phase 34/T3 gate is resolved.
 
 ---
 
@@ -460,25 +471,15 @@ Evidence: `tests/evidence/phase17_release_qualification_report.json`, `tests/evi
 
 ```text
 Current implementation checkpoint:
-- Phases 0 through 15: COMPLETE.
-- Phase 16: COMPLETE WITH DEFERRED ITEMS (P16-AC-56 interactive GUI QA deferred).
-- Phase 17: COMPLETE WITH DEFERRED ITEMS (P17-AC-01..78 in-scope acceptance passed; true VM, interactive GUI, and hardware encoder gates deferred).
-- Phase 17 reconciliation commits: 28f94c6 and 988b7cf; transport research amendment 36e19af.
-- Phase 18 research gate: COMPLETE and committed as `61f2122`; Phase 18 plan is self-reviewed and locked in the planning checkpoint.
-- Active implementation: Phase 18 code and automated checks are complete. User passed the documented video/audio transport and crossfade scenarios, in addition to the clip-selection/preview/Inspector smoke retest. Only direct typed health IPC and independent preview-media cleanup observation remain unqualified.
-- Objective: Schema v4 persistent equal-power crossfades between adjacent standalone Audio items, canonical preview/export gain parity, and audible standalone audio preview.
-- Durable decision: ADR-006 accepted for implementation. Handle automation offsets clamp to editorial endpoints; existing endpoint keyframe/fade evaluation is preserved in preview and export.
-- Current project schema is v5; v1–v3 migrations, v4→v5 migration, and current-schema text-style round trip are verified by targeted tests.
-- Phase 18 verification: latest fresh run passes 210 Rust tests and 44 frontend tests (5 benchmark tests intentionally ignored), along with typecheck, fmt, Clippy, frontend build, and Rust build.
-- Phase 19: COMPLETE WITH DEFERRED ITEMS. Domain/migration, six-template registry, template/style/reset commands, normalized composition propagation, preview/export style consumption, Inspector template/style controls, command-backed `+ Text` creation, and automation capability exposure are implemented. The user reports native smoke PASS; the deterministic FFmpeg fallback is accepted for personal-use v1. Native typed health IPC and independent cleanup observation remain deferred.
-- Latest remediation checkpoint: Preview transport RAF keeps its clock alive across playhead renders through refs; video audio follows sampled composition gain on the video element; decoder seeks are suppressed during ordinary playback drift and active seeks. On decoder error, preview requests a deduplicated 720p H.264/AAC cache proxy while preserving the original asset for project semantics and export. Standalone Audio uses native WebView media output instead of createMediaElementSource routing, and importing Audio into a video-only project atomically creates an Audio track. The waveform loader now polls pending extraction work every 400 ms instead of performing a one-shot request. Preview sampling now coalesces high-frequency playhead updates into one in-flight IPC request, so old playback samples cannot queue ahead of a user seek. A video layer that produces no decoded frame or dimensions within two seconds triggers the same compatible-preview proxy path, covering audio-only WebView decoder failures that do not emit a media error.
-- Track mute checkpoint: Rust already had the canonical undoable `TrackMuteSet` command and composition semantics, but the frontend had omitted its typed operation and any user control. Each timeline track header now has a persisted Mute/Unmute button that sends that command through the shared Command Service.
-- Selection/preview investigation: user confirmed the prior selection-outline change did not fix the black preview. Timeline selection does not seek, mutate the project, or resample composition. The selection rerender did recreate the inline video ref callback and render an overlay above the accelerated video surface. Current remediation memoizes the video layer so selection-only renders leave its DOM/ref untouched, and omits preview overlays for video layers to avoid WebView2 surface occlusion. Native reproduction/verification remains open because computer-use exposes no native app window.
-- Runtime checkpoint: the project-owned `pnpm tauri dev` process tree was replaced after the current media remediation passed frontend typecheck, tests, build, and the full Rust suite. The replacement Vite process listens on `::1:1420`, `localhost:1420` responds with HTTP 200, and a newly started `tinixcut.exe` process is present. Computer-use currently exposes no native application window (`apps: []`), so it cannot independently observe typed health IPC or preview cleanup.
-- Next action: prepare a bounded Phase 20 plan for manual captions and SRT/VTT import/export; also invoke `app_health_check` and observe preview cleanup when a native-window control surface is available. Retain the user-reported transport, crossfade, Inspector, and text-template smoke PASS results.
+- Phases 27–33 are functionally complete; earlier deferred native qualification items remain tracked.
+- Phase 34 backend and importer UI are implemented. Backend QA passed and backend/frontend received fresh Code Review LGTM.
+- Latest checks: Phase 34 Rust 30 passed / 0 failed / 1 ignored; frontend 81 passed; TypeScript typecheck and production build passed.
+- Local `pnpm tauri dev` was restarted after the final code changes; the new `tinixcut.exe` reports `Core Healthy (v0.1.0)` through the app accessibility tree.
+- P34-AC-09 remains open: native sample inspection is verified, and measured ROI/frame evidence is present; apply/save/reopen in a disposable test project remains pending. The measured ROI shows substantial visual differences and does not establish parity.
+- Do not begin Phase 35–36 before the T3 gate closes. Preserve other deferred qualification items listed in `phase_status.md`.
 
 Lifecycle State:
-Phases 0-15 COMPLETE -> Phase 16 COMPLETE WITH DEFERRED ITEMS -> Phase 17 COMPLETE WITH DEFERRED ITEMS -> Phase 18 COMPLETE WITH DEFERRED ITEMS (Schema v4; automated acceptance passed; user transport, crossfade, and clip-selection/Inspector smoke scenarios PASS; typed IPC and independent preview cleanup deferred) -> Phase 19 COMPLETE WITH DEFERRED ITEMS (Schema v5; core domain/registry/commands/composition/UI implemented; automated qualification passed; user-reported native smoke PASS; deterministic fallback accepted; typed IPC and independent preview cleanup deferred).
+Phases 27–33 functionally complete -> Phase 34 implemented / AC-09 open -> Phases 35–36 planned.
 ```
 
 ---
@@ -551,3 +552,65 @@ UX_UI.md
 ```
 
 Do not duplicate information unnecessarily across these files.
+
+
+### Phase 31 implementation checkpoint ? 2026-10-25
+
+- **Canonical evaluator (src-tauri/src/modules/domain/text_animation.rs)**: frame-grid RationalTime; NFC/UAX #29 grapheme units All/Grapheme/Word/Line (layout-aware wrapped lines); Forward/Backward/CenterOut/Random(seed); exact common-rational loop remainder; in/loop/out; Reject/ProportionalScale/ClampOut; persistent phase_origin/phase_end (additive fields) with legacy-compatible anchoring; split/trim/move phase continuity; rigid unit pivots; per-grapheme bilinear motion rasterizer with global painter passes.
+- **Preview/export**: preview samples animation and generic transform keyframes per frame (has_animation signal, per-frame WebView cache); animated export materializes a bounded, cancellable PNG sequence with export-wide frame/byte quota and full cleanup; static P30 path remains byte-identical; missing glyphs are rejected in preview and animated export.
+- **Verification**: 21 Phase 31 tests (1 ignored evidence writer), 10 Phase 30 tests, 172 lib tests (POC5 skipped), 13 Phase 29 tests, typecheck, 44 frontend tests, fmt; clippy only 3 pre-existing warnings. Independent QA PASS.
+- **Gate T1 status**: NOT PASS. Final Reviewer (Codex fallback after Antigravity auth failure) closed all P1 defects but requires stronger gradient/painter/oversized-reference regression evidence, measured reference-MP4 ROI/timing comparison, captured native GUI/runtime smoke, and animated W1/W2 benchmarks. These are explicitly deferred rather than claimed.
+- **Evidence**: rtifacts/animated-text-templates/phase-31/ (evidence-summary.json, differences_vs_reference.md, 	iming_frame_report.json, frames, MP4, project JSON).
+
+
+### Phase 31 T1 acceptance note ? 2026-10-25
+
+- Product Owner accepted Gate T1 as **IMPLEMENTED WITH DEFERRED QUALIFICATION** to unblock Phase 32?36.
+- Reference evidence: rtifacts/animated-text-templates/phase-31/reference-comparison.md and 
+eference-comparison.json (plateau bbox delta 16?14 px, centroid 9 px, identical onset/last frame, peak +3 frames, disclosed font/Lua differences).
+- Native runtime: pnpm tauri dev started (Vite HTTP 200, tinixcut process/window handle); interactive native edit/play/seek/export smoke not observable and remains deferred.
+- Animated W1/W2 benchmark and full interactive playback/caption matrix remain outstanding.
+
+
+### Phase 32 completion checkpoint ? 2026-10-26
+
+- **Schema v11** additive TemplateInstance with flat bounded Text/Image/Shape layers, immutable versioned definitions, typed parameters/bindings, responsive policy and resource manifests; lossless v10?v11 migration.
+- **Commands**: TemplateApply/TrackApply, layer add/remove/reorder/update, parameter set/batch/reset, save/delete definitions; primary text authority is TimelineItem; secondary slots own their text.
+- **Packs**: .tinixtpl zip with symlink/duplicate/path traversal rejection, bounded decompression, declared-resource-only install, SHA-256 verification, transactional rollback; local file-based catalog with isolated test root.
+- **Rendering**: one composite visual unit per template clip; layer motion/keyframes/rotation/rounded strokes, responsive scaling/safe area, explicit missing assets/glyphs; preview/export composite opacity parity; no duplicate secondary/image rendering.
+- **Verification**: Phase 32 20 tests, Phase 31 21, Phase 30 10, Phase 29 13+12, lib 172; typecheck/44 frontend tests/web build; fmt; clippy only 2 pre-existing warnings. QA PASS; Final Reviewer FINAL PASS (fallback Codex after Antigravity auth failure). Non-blocking gap: injected-failure rollback test exercises preflight rejection rather than post-write I/O faults.
+
+
+### Phase 33 checkpoint ? 2026-10-26
+
+- **Implemented**: template browser (search/category/source/favorites/recents, bounded catalog), presentation-only cards, insert/apply via CommandService, progressive-disclosure inspector for parameters/layers/responsive policy, save-as-template dialog, pack export dialog, dialog focus/shortcut handling, parameter constraints by exact definition version, serialized command execution.
+- **Verification**: typecheck, 81 frontend tests (7 files), production build; Rust P29 13+12, P30 10, P31 21, P32 20, lib 172; fmt; clippy only 2 pre-existing.
+- **QA**: PASS.
+- **Final Review**: **FINAL PASS**. Queue-time typography merge uses authoritative item style for primary/secondary layers; prior hook-order, generation guard, granular patches, resource hashing/collision and pack registration verified. Non-blocking gap: mounted interaction tests and native UI qualification still need stronger coverage; Gate T2 is functionally PASS with native qualification deferred.
+- **T2 status**: NOT PASS. P34?P36 remain blocked on T2.
+
+
+### Phase 33 completion checkpoint ? 2026-10-26
+
+- **UI**: template browser (search/category/source/favorites/recents, bounded pagination), presentation-only cards, insert/apply, progressive-disclosure inspector (typed parameters, layer reorder/visibility/add/remove, typography), save-as-template with real resource hashing, pack import/export dialogs, focus/keyboard isolation, catalog error/empty/loading states.
+- **Correctness**: primary text authority preserved; queue-time canonical merging with granular patches; save-as preserves independent layer motion and rich fill semantics; resource manifests validated/hashed; imported pack resources registered into a fresh project with SHA collision checks.
+- **Verification**: 81 frontend tests, typecheck, production build; Rust P29 13+12, P30 10, P31 21, P32 20, lib 172; fmt; clippy only 2 pre-existing.
+- **Review**: QA PASS; Final Reviewer **FINAL PASS** (Codex fallback after Antigravity auth failure). Native UI/mounted interaction qualification remains deferred; not claimed.
+- **Gate T2**: functionally PASS; native qualification deferred.
+
+
+### Phase 34 current checkpoint — 2026-10-26
+
+- **Implemented:** bounded/cancellable draft and ZIP inspection, bounded `effectStyle` reads, resource lifecycle cleanup, primary/secondary font manifests, animation ownership and classification guardrails, transactional catalog save, staged apply through `CommandService` with history/revision/hash checks, PNG CRC repair, and the Template Browser importer dialog (inspect/report/save/apply).
+- **Verification:** Phase 34 Rust tests: 30 passed, 0 failed, 1 ignored evidence generator; frontend: 81 passed; TypeScript typecheck and production build passed. Backend remediation and frontend integration each received a fresh independent Code Review LGTM; QA passed backend integration and evidence generation.
+- **Runtime:** restarted `pnpm tauri dev`; exact TinixCut process replaced and app health displayed `Core Healthy (v0.1.0)`. Native importer dialog opened, selected the documented sample, and returned FULL CONVERSION with verified Lua fingerprint.
+- **Evidence:** measured source ROI comparison is available in `artifacts/animated-text-templates/phase-34/`; PSNR 9.623 dB, global RGB SSIM 0.1142, and MAE 40.789. This snapshot shows material visual differences and is not a parity pass.
+- **Gate T3 / P34-AC-09:** OPEN pending disposable-project native apply/save/reopen and history/undo/redo smoke. Phase 35/36 stay planned until this gate is resolved.
+
+
+### Phase 34 completion checkpoint ? 2026-10-26
+
+- **Adapter**: 	emplates/capcut_import.rs ? bounded read-only inspect (draft/ZIP), SHA snapshots, family/Lua/wrapper/version fingerprints, effective style/fill/stroke/shadow alpha, animation placement/segments, resource manifest/remap, statuses FULL/PARTIAL/UNSUPPORTED/MISSING/BAKED, atomic staged apply with revision/source/resource/cancel checks and retry identity, transactional catalog save.
+- **Scope**: FULL only for evidenced StaggeredCharacterIn sample; other families PARTIAL/UNSUPPORTED with itemized losses.
+- **Verification**: Phase34 48 passed + 1 ignored; P32 20, P31 21, lib 172; frontend 81/typecheck/build; fmt. Final Reviewer FINAL PASS under Scope Option 1.
+- **Deferred**: native interactive AC-09, second real profile/corpus. T3 functionally PASS per Product Owner scope.

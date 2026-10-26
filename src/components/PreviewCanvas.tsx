@@ -130,6 +130,35 @@ function safeConvertFileSrc(path?: string | null): string {
   }
 }
 
+function bytesToPngDataUrl(bytes: number[]): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return `data:image/png;base64,${btoa(binary)}`;
+}
+
+interface RichTextOverlayEntry {
+  revision: number;
+  dataUrl: string;
+  roi: [number, number, number, number];
+}
+
+// Animated rich text needs one overlay per sampled frame; static rich text is
+// cached once per revision. Keep the playback cache bounded.
+const MAX_RICH_TEXT_CACHE_ENTRIES = 96;
+
+function richTextCacheKey(
+  revision: number,
+  layer: PreviewSampledLayer,
+  frame: number
+): string {
+  return layer.has_animation
+    ? `${revision}:${layer.item_id}:${frame}`
+    : `${revision}:${layer.item_id}`;
+}
+
 function visualEffectCssFilter(effect?: PreviewSampledLayer["visual_effect"]): string | undefined {
   switch (effect) {
     case "Mono":
@@ -185,7 +214,29 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [parityReport, setParityReport] = useState<ParitySuiteReport | null>(null);
   const [isRunningParity, setIsRunningParity] = useState<boolean>(false);
   const [mediaErrors, setMediaErrors] = useState<Record<string, boolean>>({});
-  const [proxyRequestedAssetIds, setProxyRequestedAssetIds] = useState<Record<string, true>>({});
+  const [richTextOverlays, setRichTextOverlays] = useState<Record<string, RichTextOverlayEntry>>({});
+  const [richTextErrors, setRichTextErrors] = useState<Record<string, string>>({});
+  const richTextCacheRef = useRef<Record<string, RichTextOverlayEntry>>({});
+  const richTextOrderRef = useRef<string[]>([]);
+  const richTextInFlightRef = useRef<Set<string>>(new Set());
+  const richTextRevisionRef = useRef(0);
+  const storeRichTextOverlay = useCallback((key: string, entry: RichTextOverlayEntry) => {
+    richTextCacheRef.current[key] = entry;
+    const order = richTextOrderRef.current;
+    if (!order.includes(key)) order.push(key);
+    while (order.length > MAX_RICH_TEXT_CACHE_ENTRIES) {
+      const evicted = order.shift();
+      if (!evicted) break;
+      delete richTextCacheRef.current[evicted];
+      setRichTextOverlays((previous) => {
+        if (!(evicted in previous)) return previous;
+        const next = { ...previous };
+        delete next[evicted];
+        return next;
+      });
+    }
+    setRichTextOverlays((previous) => ({ ...previous, [key]: entry }));
+  }, []);  const [proxyRequestedAssetIds, setProxyRequestedAssetIds] = useState<Record<string, true>>({});
   const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, string>>({});
   const [proxyPollAttempt, setProxyPollAttempt] = useState(0);
   const [showSafeZones, setShowSafeZones] = useState(false);
@@ -248,6 +299,71 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     requestCounterRef.current += 1;
     drainLatestPreviewSample();
   }, [playheadFrame, project?.revision, drainLatestPreviewSample]);
+
+  // Rich-text overlays are derived from canonical state through the shared
+  // native renderer. Static items are cached per project revision; animated
+  // items are cached per sampled frame with a bounded playback cache.
+  useEffect(() => {
+    richTextCacheRef.current = {};
+    richTextOrderRef.current = [];
+    richTextInFlightRef.current.clear();
+    richTextRevisionRef.current = project?.revision ?? 0;
+    setRichTextOverlays({});
+    setRichTextErrors({});
+  }, [project?.revision]);
+
+  useEffect(() => {
+    const revision = project?.revision ?? 0;
+    richTextRevisionRef.current = revision;
+    const frame = sampledState?.timestamp.value ?? playheadFrameRef.current;
+    const activeRichLayers = (sampledState?.active_layers ?? []).filter(
+      (layer) => layer.kind === "Text" && (Boolean(layer.text_rich) || Boolean(layer.has_template_instance))
+    );
+
+    for (const layer of activeRichLayers) {
+      const key = richTextCacheKey(revision, layer, frame);
+      if (Object.prototype.hasOwnProperty.call(richTextCacheRef.current, key)) continue;
+      if (richTextInFlightRef.current.has(key)) continue;
+      richTextInFlightRef.current.add(key);
+
+      void editorApi
+        .previewRichTextOverlay(layer.item_id, frame)
+        .then((overlay) => {
+          if (richTextRevisionRef.current !== revision) return;
+          // A null response means the item is not active at this exact frame
+          // (e.g. a stale playhead). Never cache that as a permanent blank.
+          if (!overlay) return;
+          if (!overlay.hasVisibleContent || overlay.roiPngBytes.length === 0) {
+            storeRichTextOverlay(key, {
+              revision,
+              dataUrl: "",
+              roi: overlay.roi,
+            });
+            return;
+          }
+          storeRichTextOverlay(key, {
+            revision,
+            dataUrl: bytesToPngDataUrl(overlay.roiPngBytes),
+            roi: overlay.roi,
+          });
+          setRichTextErrors((previous) => {
+            if (!(layer.item_id in previous)) return previous;
+            const next = { ...previous };
+            delete next[layer.item_id];
+            return next;
+          });
+        })
+        .catch((error: unknown) => {
+          if (richTextRevisionRef.current !== revision) return;
+          const message =
+            error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+          setRichTextErrors((previous) => ({ ...previous, [layer.item_id]: message }));
+        })
+        .finally(() => {
+          richTextInFlightRef.current.delete(key);
+        });
+    }
+  }, [sampledState, project?.revision, storeRichTextOverlay]);
 
   // 2. Continuous Playback Loop (Milestone 5)
   useEffect(() => {
@@ -535,6 +651,35 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       layer.asset_id ? compatibleVideoSources[layer.asset_id] ?? layer.asset_path : layer.asset_path
     );
 
+    // Rich text is rasterized once by the shared native renderer with placement
+    // and transform baked into the ROI pixels. Opacity stays a consumer property
+    // so a revision-scoped cache entry is not poisoned by a fade/keyframe frame.
+    if (layer.kind === "Text" && (Boolean(layer.text_rich) || Boolean(layer.has_template_instance))) {
+      const revision = project?.revision ?? 0;
+      const entry = richTextOverlays[richTextCacheKey(revision, layer, playheadFrame)];
+      if (!entry || !entry.dataUrl) return null;
+      const roiWidth = Math.max(0, entry.roi[2] - entry.roi[0]);
+      const roiHeight = Math.max(0, entry.roi[3] - entry.roi[1]);
+      return (
+        <img
+          key={layer.item_id}
+          src={entry.dataUrl}
+          alt={layer.name}
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: entry.roi[0] * scaleRatio,
+            top: entry.roi[1] * scaleRatio,
+            width: roiWidth * scaleRatio,
+            height: roiHeight * scaleRatio,
+            zIndex: layer.z_index,
+            opacity: layer.opacity,
+            pointerEvents: "none",
+          }}
+        />
+      );
+    }
+
     // Compute normalized transform coordinates
     const posX = layer.position[0] * scaleRatio;
     const posY = layer.position[1] * scaleRatio;
@@ -762,6 +907,27 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           }}
         >
           Preparing a compatible video preview…
+        </div>
+      )}
+      {Object.keys(richTextErrors).length > 0 && (
+        <div
+          role="alert"
+          style={{
+            width: "min(720px, 100%)",
+            boxSizing: "border-box",
+            marginBottom: "8px",
+            padding: "6px 10px",
+            color: "#fecaca",
+            background: "rgba(127, 29, 29, 0.7)",
+            border: "1px solid #b91c1c",
+            borderRadius: "4px",
+            fontSize: "12px",
+          }}
+        >
+          Rich text render failed (no silent fallback):{" "}
+          {Object.entries(richTextErrors)
+            .map(([itemId, message]) => `${itemId}: ${message}`)
+            .join(" | ")}
         </div>
       )}
       {/* Real Decoded Viewport */}

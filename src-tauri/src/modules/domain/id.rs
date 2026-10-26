@@ -32,7 +32,13 @@ pub fn generate_transition_id() -> String {
 }
 
 pub fn is_valid_id(id: &str) -> bool {
-    !id.trim().is_empty() && id.len() <= 64
+    let trimmed = id.trim();
+    !trimmed.is_empty()
+        && id.len() <= 64
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+        && !id.contains(':')
 }
 
 #[cfg(test)]

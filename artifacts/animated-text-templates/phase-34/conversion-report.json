@@ -1,0 +1,423 @@
+{
+  "status": "FULL_CONVERSION",
+  "source_path": "C:\\Users\\Admin\\Downloads\\__CAPCUT\\CapCut Drafts\\TINIX_CAPCUT_IMPORT_TEST\\draft_content.json",
+  "source_sha256": "FE7CFEA3E68C698B89B3BF910EAFEAF6B3BDBE03394C291EDDD55A38010883B3",
+  "template_name": "Variety show sense JP - いざ本番！",
+  "recognized_profile": "StaggeredCharacterIn",
+  "imported_elements": [
+    "Effective rich style: gradient fill, strokes, shadows",
+    "Validated StaggeredCharacterIn drop-in animation (Lua fingerprint verified)"
+  ],
+  "loss_details": [],
+  "warnings": [],
+  "converted_definition": {
+    "id": "capcut_tpl_7522343677012774197",
+    "version": 1,
+    "name": "Variety show sense JP - いざ本番！",
+    "category": "CapCut Import",
+    "description": "Imported from CapCut draft 'C:\\Users\\Admin\\Downloads\\__CAPCUT\\CapCut Drafts\\TINIX_CAPCUT_IMPORT_TEST\\draft_content.json'",
+    "tags": [
+      "capcut",
+      "imported"
+    ],
+    "parameters": [
+      {
+        "key": "title",
+        "name": "Title Text",
+        "param_type": {
+          "type": "Text"
+        },
+        "default_value": {
+          "kind": "Text",
+          "value": "Tinix — Thử nghiệm tiếng Việt"
+        },
+        "description": "Editable title text"
+      }
+    ],
+    "bindings": [
+      {
+        "parameter_key": "title",
+        "target_layer_id": "lyr_primary_text",
+        "target_property": "TextContent"
+      }
+    ],
+    "layers": [
+      {
+        "layer_id": "lyr_primary_text",
+        "name": "Primary Text",
+        "z_index": 10,
+        "visible": true,
+        "opacity": 1.0,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": 0.0,
+          "scale_x": 0.58999705,
+          "scale_y": 0.58999705,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Text",
+          "data": {
+            "is_primary": true,
+            "slot_key": "title",
+            "text_content": "Tinix — Thử nghiệm tiếng Việt",
+            "text_style": {
+              "font_family": "MPLUS1p-ExtraBold.ttf",
+              "font_size": 150.0,
+              "font_weight": 700,
+              "font_color": "#FFE35F",
+              "accent_color": null,
+              "background_color": null,
+              "background_opacity": 0.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0,
+              "alignment": "Center",
+              "line_height": 1.2,
+              "anchor": "Center"
+            },
+            "text_rich": {
+              "font": {
+                "family": "MPLUS1p-ExtraBold.ttf",
+                "weight": 700,
+                "style": "Normal",
+                "asset_id": "6841481374243754510"
+              },
+              "font_size": 150.0,
+              "layout": {
+                "max_width": null,
+                "alignment": "Center",
+                "line_height": 1.2,
+                "letter_spacing": 0.0,
+                "wrap_mode": "None",
+                "min_font_size": null,
+                "max_font_size": null
+              },
+              "fill": {
+                "kind": "Gradient",
+                "gradient_kind": "Linear",
+                "angle_deg": 118.0,
+                "radius": null,
+                "space": "All",
+                "stops": [
+                  {
+                    "offset": 0.0,
+                    "color": "#FFE35FFF"
+                  },
+                  {
+                    "offset": 0.050884955,
+                    "color": "#FFE35FFF"
+                  },
+                  {
+                    "offset": 0.94911504,
+                    "color": "#FFFFFFFF"
+                  },
+                  {
+                    "offset": 1.0,
+                    "color": "#FFFFFFFF"
+                  }
+                ]
+              },
+              "strokes": [
+                {
+                  "color": "#AD5100FF",
+                  "width": 3.8082194,
+                  "align": "Outside"
+                }
+              ],
+              "shadows": [
+                {
+                  "color": "#AD5100E5",
+                  "offset_x": 3.535534,
+                  "offset_y": -3.535534,
+                  "blur": 0.0
+                },
+                {
+                  "color": "#FFA758E5",
+                  "offset_x": 1.4626455,
+                  "offset_y": -1.4626455,
+                  "blur": 1.706621
+                }
+              ],
+              "background": null,
+              "spans": []
+            },
+            "text_animation": {
+              "unit": "Grapheme",
+              "order": "Forward",
+              "seed": null,
+              "pivot_x": 0.5,
+              "pivot_y": 0.5,
+              "in_anim": {
+                "duration": {
+                  "value": 31,
+                  "rate": {
+                    "numerator": 30,
+                    "denominator": 1
+                  }
+                },
+                "easing": {
+                  "CubicBezier": {
+                    "x1": 0.166667,
+                    "y1": 0.166667,
+                    "x2": 0.14,
+                    "y2": 1.0
+                  }
+                },
+                "stagger_ratio": 0.7,
+                "from": {
+                  "translate_x": 0.0,
+                  "translate_y": -60.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 0.0
+                },
+                "to": {
+                  "translate_x": 0.0,
+                  "translate_y": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 1.0
+                }
+              },
+              "loop_anim": null,
+              "out_anim": null,
+              "loop_mode": "None",
+              "conflict_policy": "Reject",
+              "phase_origin": null,
+              "phase_end": null
+            }
+          }
+        }
+      }
+    ],
+    "resources": {
+      "resources": [
+        {
+          "resource_id": "6841481374243754510",
+          "kind": "Font",
+          "file_name": "MPLUS1p-ExtraBold.ttf",
+          "sha256": "24993BA194D186848534DDF5A9A9B1D9CFEFB67B212270BCCE42A1F3F6794ABB",
+          "byte_size": 1769872,
+          "required": true
+        }
+      ]
+    },
+    "responsive_policy": {
+      "reference_width": 1920,
+      "reference_height": 1080,
+      "supported_aspect_ratios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:5"
+      ],
+      "auto_wrap": true,
+      "auto_fit": false,
+      "safe_margin": 80.0
+    },
+    "default_duration": {
+      "value": 150,
+      "rate": {
+        "numerator": 30,
+        "denominator": 1
+      }
+    }
+  },
+  "preview_instance": {
+    "template_id": "capcut_tpl_7522343677012774197",
+    "template_version": 1,
+    "layers": [
+      {
+        "layer_id": "lyr_primary_text",
+        "name": "Primary Text",
+        "z_index": 10,
+        "visible": true,
+        "opacity": 1.0,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": 0.0,
+          "scale_x": 0.58999705,
+          "scale_y": 0.58999705,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Text",
+          "data": {
+            "is_primary": true,
+            "slot_key": "title",
+            "text_content": "Tinix — Thử nghiệm tiếng Việt",
+            "text_style": {
+              "font_family": "MPLUS1p-ExtraBold.ttf",
+              "font_size": 150.0,
+              "font_weight": 700,
+              "font_color": "#FFE35F",
+              "accent_color": null,
+              "background_color": null,
+              "background_opacity": 0.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0,
+              "alignment": "Center",
+              "line_height": 1.2,
+              "anchor": "Center"
+            },
+            "text_rich": {
+              "font": {
+                "family": "MPLUS1p-ExtraBold.ttf",
+                "weight": 700,
+                "style": "Normal",
+                "asset_id": "6841481374243754510"
+              },
+              "font_size": 150.0,
+              "layout": {
+                "max_width": null,
+                "alignment": "Center",
+                "line_height": 1.2,
+                "letter_spacing": 0.0,
+                "wrap_mode": "None",
+                "min_font_size": null,
+                "max_font_size": null
+              },
+              "fill": {
+                "kind": "Gradient",
+                "gradient_kind": "Linear",
+                "angle_deg": 118.0,
+                "radius": null,
+                "space": "All",
+                "stops": [
+                  {
+                    "offset": 0.0,
+                    "color": "#FFE35FFF"
+                  },
+                  {
+                    "offset": 0.050884955,
+                    "color": "#FFE35FFF"
+                  },
+                  {
+                    "offset": 0.94911504,
+                    "color": "#FFFFFFFF"
+                  },
+                  {
+                    "offset": 1.0,
+                    "color": "#FFFFFFFF"
+                  }
+                ]
+              },
+              "strokes": [
+                {
+                  "color": "#AD5100FF",
+                  "width": 3.8082194,
+                  "align": "Outside"
+                }
+              ],
+              "shadows": [
+                {
+                  "color": "#AD5100E5",
+                  "offset_x": 3.535534,
+                  "offset_y": -3.535534,
+                  "blur": 0.0
+                },
+                {
+                  "color": "#FFA758E5",
+                  "offset_x": 1.4626455,
+                  "offset_y": -1.4626455,
+                  "blur": 1.706621
+                }
+              ],
+              "background": null,
+              "spans": []
+            },
+            "text_animation": {
+              "unit": "Grapheme",
+              "order": "Forward",
+              "seed": null,
+              "pivot_x": 0.5,
+              "pivot_y": 0.5,
+              "in_anim": {
+                "duration": {
+                  "value": 31,
+                  "rate": {
+                    "numerator": 30,
+                    "denominator": 1
+                  }
+                },
+                "easing": {
+                  "CubicBezier": {
+                    "x1": 0.166667,
+                    "y1": 0.166667,
+                    "x2": 0.14,
+                    "y2": 1.0
+                  }
+                },
+                "stagger_ratio": 0.7,
+                "from": {
+                  "translate_x": 0.0,
+                  "translate_y": -60.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 0.0
+                },
+                "to": {
+                  "translate_x": 0.0,
+                  "translate_y": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 1.0
+                }
+              },
+              "loop_anim": null,
+              "out_anim": null,
+              "loop_mode": "None",
+              "conflict_policy": "Reject",
+              "phase_origin": null,
+              "phase_end": null
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "title": {
+        "kind": "Text",
+        "value": "Tinix — Thử nghiệm tiếng Việt"
+      }
+    },
+    "initial_parameters": {
+      "title": {
+        "kind": "Text",
+        "value": "Tinix — Thử nghiệm tiếng Việt"
+      }
+    },
+    "overrides": [],
+    "responsive_policy": {
+      "reference_width": 1920,
+      "reference_height": 1080,
+      "supported_aspect_ratios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:5"
+      ],
+      "auto_wrap": true,
+      "auto_fit": false,
+      "safe_margin": 80.0
+    }
+  },
+  "reference_video": null,
+  "staging_token": "capcut_stage_1c61c191-11e4-41e7-817e-848893554d49"
+}

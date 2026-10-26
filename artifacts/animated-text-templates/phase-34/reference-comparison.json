@@ -1,0 +1,31 @@
+{
+  "method": "direct same-coordinate RGB comparison; Tinix alpha composited over source black canvas; no registration or color correction",
+  "reference_video": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4",
+  "reference_sha256": "95489CC32CBB56F6F9E7424FE9C9611FEB927D5C0E4EBD08841FA68A726A4DE1",
+  "tinix_frame": "frame_t_mid.png",
+  "frame_index": 15,
+  "timestamp_seconds": 0.5,
+  "fps": 30,
+  "dimensions": {
+    "width": 1920,
+    "height": 1080
+  },
+  "roi_xyxy": [
+    174,
+    474,
+    1288,
+    718
+  ],
+  "roi_dimensions": {
+    "width": 1114,
+    "height": 244
+  },
+  "foreground_pixels_reference": 103857,
+  "foreground_pixels_tinix": 20325,
+  "metrics": {
+    "rgb_psnr_db": 9.623235165031701,
+    "global_rgb_ssim": 0.1142074218398433,
+    "rgb_mae": 40.789234956326666
+  },
+  "interpretation": "Quantitative snapshot only; animation/font/effect differences remain visible in the ROI and require human review."
+}

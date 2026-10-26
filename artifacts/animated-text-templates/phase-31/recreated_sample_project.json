@@ -1,0 +1,234 @@
+{
+  "canvas": {
+    "duration_frames": 150,
+    "fps": 30.0,
+    "height": 1080,
+    "width": 1920
+  },
+  "grapheme_count": 29,
+  "project": {
+    "assets": [],
+    "client_registry": {
+      "clients": {},
+      "current_epoch": 1,
+      "max_active_clients": 64,
+      "min_accepted_epoch": 0
+    },
+    "command_ledger": [],
+    "created_at": "2026-10-26T01:58:40.766764700+00:00",
+    "name": "Recreated Reference Sample",
+    "project_id": "proj_57c1f2d9577247f891f45c58c2c4ea43",
+    "revision": 0,
+    "schema_version": 10,
+    "settings": {
+      "canvas_background_color": "#000000",
+      "channels": 2,
+      "frame_rate": {
+        "denominator": 1,
+        "numerator": 30
+      },
+      "height": 1080,
+      "sample_rate": 48000,
+      "width": 1920
+    },
+    "tracks": [
+      {
+        "audio_transitions": [],
+        "items": [
+          {
+            "asset_id": null,
+            "crop": {
+              "bottom": 0.0,
+              "left": 0.0,
+              "right": 0.0,
+              "top": 0.0
+            },
+            "fade_in": null,
+            "fade_out": null,
+            "item_id": "clip_eb1a8e188e3e4965b70e1002f94369c4",
+            "keyframes": [],
+            "kind": "Text",
+            "name": "Animated Text",
+            "opacity": 1.0,
+            "placement_mode": "Fit",
+            "source_range": {
+              "duration": {
+                "rate": {
+                  "denominator": 1,
+                  "numerator": 30
+                },
+                "value": 150
+              },
+              "start": {
+                "rate": {
+                  "denominator": 1,
+                  "numerator": 30
+                },
+                "value": 0
+              }
+            },
+            "speed": "Normal",
+            "text_animation": {
+              "conflict_policy": "Reject",
+              "in_anim": {
+                "duration": {
+                  "rate": {
+                    "denominator": 1,
+                    "numerator": 30
+                  },
+                  "value": 31
+                },
+                "easing": {
+                  "CubicBezier": {
+                    "x1": 0.166667,
+                    "x2": 0.14,
+                    "y1": 0.166667,
+                    "y2": 1.0
+                  }
+                },
+                "from": {
+                  "opacity": 0.0,
+                  "rotation": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "translate_x": 0.0,
+                  "translate_y": -60.0
+                },
+                "stagger_ratio": 0.699999988079071,
+                "to": {
+                  "opacity": 1.0,
+                  "rotation": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "translate_x": 0.0,
+                  "translate_y": 0.0
+                }
+              },
+              "loop_anim": null,
+              "loop_mode": "None",
+              "order": "Forward",
+              "out_anim": null,
+              "phase_end": null,
+              "phase_origin": null,
+              "pivot_x": 0.5,
+              "pivot_y": 0.5,
+              "seed": null,
+              "unit": "Grapheme"
+            },
+            "text_content": "Tinix — Thử nghiệm tiếng Việt",
+            "text_rich": {
+              "background": null,
+              "fill": {
+                "angle_deg": 118.0,
+                "gradient_kind": "Linear",
+                "kind": "Gradient",
+                "radius": null,
+                "space": "All",
+                "stops": [
+                  {
+                    "color": "#FFE35F",
+                    "offset": 0.05000000074505806
+                  },
+                  {
+                    "color": "#FFFFFF",
+                    "offset": 0.949999988079071
+                  }
+                ]
+              },
+              "font": {
+                "asset_id": null,
+                "family": "Roboto",
+                "style": "Normal",
+                "weight": 700
+              },
+              "font_size": 152.0,
+              "layout": {
+                "alignment": "Center",
+                "letter_spacing": 0.0,
+                "line_height": 1.2000000476837158,
+                "max_font_size": null,
+                "max_width": null,
+                "min_font_size": null,
+                "wrap_mode": "None"
+              },
+              "shadows": [
+                {
+                  "blur": 2.0,
+                  "color": "#AD5100",
+                  "offset_x": 3.5,
+                  "offset_y": 3.5
+                },
+                {
+                  "blur": 1.5,
+                  "color": "#FFA758",
+                  "offset_x": 1.5,
+                  "offset_y": 1.5
+                }
+              ],
+              "spans": [],
+              "strokes": [
+                {
+                  "align": "Outside",
+                  "color": "#AD5100",
+                  "width": 3.5
+                }
+              ]
+            },
+            "text_style": {
+              "accent_color": null,
+              "alignment": "Center",
+              "anchor": "Center",
+              "background_color": null,
+              "background_opacity": 0.0,
+              "font_color": "#FFFFFF",
+              "font_family": "Inter",
+              "font_size": 48.0,
+              "font_weight": 700,
+              "line_height": 1.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0
+            },
+            "text_template": null,
+            "timeline_range": {
+              "duration": {
+                "rate": {
+                  "denominator": 1,
+                  "numerator": 30
+                },
+                "value": 150
+              },
+              "start": {
+                "rate": {
+                  "denominator": 1,
+                  "numerator": 30
+                },
+                "value": 0
+              }
+            },
+            "transform": {
+              "position_x": 0.0,
+              "position_y": 0.0,
+              "rotation": 0.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0
+            },
+            "transition": null,
+            "visual_effect": "None",
+            "volume": 1.0
+          }
+        ],
+        "kind": "Video",
+        "locked": false,
+        "muted": false,
+        "name": "Text Track",
+        "track_id": "trk_80cf08b541274ef6b7266dc45ffb53b0",
+        "transitions": []
+      }
+    ],
+    "updated_at": "2026-10-26T01:58:40.766764700+00:00"
+  },
+  "provenance": "recreated_reference",
+  "recreation_font_sha256": "61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334",
+  "sample_id": "TINIX_RECREATED_SAMPLE_01",
+  "text": "Tinix — Thử nghiệm tiếng Việt"
+}

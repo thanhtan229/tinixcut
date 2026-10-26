@@ -1,0 +1,242 @@
+[
+  {
+    "bindings": 3,
+    "category": "Headline",
+    "id": "headline-bold",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Bold Headline",
+    "parameters": 3,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      600,
+      440,
+      1320,
+      640
+    ],
+    "shapes": 1,
+    "text_slots": 2,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Neon",
+    "id": "retro-neon",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Retro Neon",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      710,
+      478,
+      1210,
+      602
+    ],
+    "shapes": 2,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 3,
+    "category": "Lower Third",
+    "id": "clean-lower-third-v2",
+    "images": 0,
+    "layers_total": 4,
+    "name": "Modern Lower Third",
+    "parameters": 3,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      80,
+      910,
+      600,
+      1000
+    ],
+    "shapes": 2,
+    "text_slots": 2,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Quote",
+    "id": "quote-card-v2",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Minimal Quote Card",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      540,
+      410,
+      1380,
+      670
+    ],
+    "shapes": 1,
+    "text_slots": 2,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Sticker",
+    "id": "sticker-badge",
+    "images": 0,
+    "layers_total": 2,
+    "name": "Sticker Badge",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      789,
+      480,
+      1129,
+      598
+    ],
+    "shapes": 1,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Title",
+    "id": "minimal-title-card",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Minimal Title Card",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      840,
+      497,
+      1080,
+      582
+    ],
+    "shapes": 1,
+    "text_slots": 2,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Tech",
+    "id": "cyber-frame",
+    "images": 0,
+    "layers_total": 2,
+    "name": "Cyber Tech Frame",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      650,
+      460,
+      1270,
+      620
+    ],
+    "shapes": 1,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Social",
+    "id": "social-follow-bar",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Social Follow Bar",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      740,
+      930,
+      1180,
+      1000
+    ],
+    "shapes": 2,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 3,
+    "category": "Kinetic",
+    "id": "kinetic-stack",
+    "images": 0,
+    "layers_total": 3,
+    "name": "Kinetic Stack",
+    "parameters": 3,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      857,
+      463,
+      1061,
+      621
+    ],
+    "shapes": 0,
+    "text_slots": 3,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Editorial",
+    "id": "warm-editorial",
+    "images": 0,
+    "layers_total": 2,
+    "name": "Warm Editorial",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      770,
+      91,
+      1150,
+      148
+    ],
+    "shapes": 1,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "Gaming",
+    "id": "gaming-alert",
+    "images": 0,
+    "layers_total": 2,
+    "name": "Gaming Alert Banner",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      670,
+      485,
+      1250,
+      595
+    ],
+    "shapes": 1,
+    "text_slots": 1,
+    "version": 1
+  },
+  {
+    "bindings": 2,
+    "category": "News",
+    "id": "breaking-news",
+    "images": 0,
+    "layers_total": 4,
+    "name": "Breaking News Banner",
+    "parameters": 2,
+    "render_has_content": true,
+    "render_micros": 0,
+    "render_roi": [
+      260,
+      946,
+      1660,
+      1000
+    ],
+    "shapes": 2,
+    "text_slots": 2,
+    "version": 1
+  }
+]

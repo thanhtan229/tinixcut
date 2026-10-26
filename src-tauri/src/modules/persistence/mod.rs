@@ -200,6 +200,9 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
     if version <= 9 && CURRENT_SCHEMA_VERSION >= 10 {
         val = migrate_v9_to_v10(val)?;
     }
+    if version <= 10 && CURRENT_SCHEMA_VERSION >= 11 {
+        val = migrate_v10_to_v11(val)?;
+    }
 
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
 }
@@ -496,6 +499,19 @@ pub fn migrate_v9_to_v10(
         PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
     })?;
     obj.insert("schema_version".to_string(), serde_json::json!(10));
+    Ok(val)
+}
+
+/// Migrates Schema v10 projects to Schema v11. The layered template model
+/// is additive and backwards-compatible; existing items retain legacy styling
+/// and animation losslessly without synthetic defaults.
+pub fn migrate_v10_to_v11(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    obj.insert("schema_version".to_string(), serde_json::json!(11));
     Ok(val)
 }
 
@@ -1258,7 +1274,8 @@ mod tests {
         let migrated_v7 = migrate_v6_to_v7(migrated_v6).expect("v6 to v7 migration");
         let migrated_v8 = migrate_v7_to_v8(migrated_v7).expect("v7 to v8 migration");
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
-        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
         let loaded: Project =
             serde_json::from_value(migrated).expect("deserialize current project");
 
@@ -1282,7 +1299,8 @@ mod tests {
         let migrated_v7 = migrate_v6_to_v7(v6).expect("v6 migration");
         let migrated_v8 = migrate_v7_to_v8(migrated_v7).expect("v7 to v8 migration");
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
-        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
         let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
 
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
@@ -1322,7 +1340,8 @@ mod tests {
 
         let migrated_v8 = migrate_v7_to_v8(v7).expect("v7 to v8 migration");
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
-        let migrated = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
+        let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
         let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
 
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
@@ -1369,7 +1388,7 @@ mod tests {
         let migrated_str = run_migrations_if_needed(&raw_v9).expect("run migration");
         let loaded: Project = serde_json::from_str(&migrated_str).expect("deserialize");
 
-        assert_eq!(loaded.schema_version, 10);
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         let item = &loaded.tracks[0].items[0];
         assert_eq!(item.text_content.as_deref(), Some("Legacy text content"));
         assert!(item.text_rich.is_none());
@@ -1380,15 +1399,15 @@ mod tests {
 
     #[test]
     fn test_schema_11_rejected() {
-        let raw_json = r#"{"schema_version": 11, "name": "Future Project"}"#;
+        let raw_json = r#"{"schema_version": 12, "name": "Future Project"}"#;
         let err = run_migrations_if_needed(raw_json).unwrap_err();
         match err {
             PersistenceError::UnsupportedSchemaVersion {
                 found,
                 max_supported,
             } => {
-                assert_eq!(found, 11);
-                assert_eq!(max_supported, 10);
+                assert_eq!(found, 12);
+                assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
             }
             other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
         }

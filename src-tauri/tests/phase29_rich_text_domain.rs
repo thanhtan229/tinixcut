@@ -93,7 +93,7 @@ fn test_persistence_v9_to_v10_fixture_migration() {
     let migrated_json = run_migrations_if_needed(&raw).expect("run migration");
     let loaded: Project = serde_json::from_str(&migrated_json).expect("deserialize");
 
-    assert_eq!(loaded.schema_version, 10);
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     let item = loaded.tracks[1].find_item(&text_id).unwrap();
     assert_eq!(item.text_content.as_deref(), Some("Initial text"));
     assert!(item.text_rich.is_none());
@@ -101,15 +101,18 @@ fn test_persistence_v9_to_v10_fixture_migration() {
     assert_eq!(item.keyframes.len(), 1);
     loaded.validate().expect("migrated project is valid");
 
-    let future_json = r#"{"schema_version": 11, "name": "Future"}"#;
+    let future_json = &format!(
+        r#"{{"schema_version": {}, "name": "Future"}}"#,
+        CURRENT_SCHEMA_VERSION + 1
+    );
     let err = run_migrations_if_needed(future_json).unwrap_err();
     match err {
         PersistenceError::UnsupportedSchemaVersion {
             found,
             max_supported,
         } => {
-            assert_eq!(found, 11);
-            assert_eq!(max_supported, 10);
+            assert_eq!(found, CURRENT_SCHEMA_VERSION + 1);
+            assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
         }
         other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
     }
@@ -391,6 +394,8 @@ fn test_commands_all_seven_operations_apply_and_roundtrip_undo_redo() {
         seed: None,
         pivot_x: 0.5,
         pivot_y: 0.5,
+        phase_origin: Some(RationalTime::zero(rate)),
+        phase_end: Some(RationalTime::from_frames(100, rate)),
         in_anim: Some(TextAnimationSegment {
             duration: RationalTime::from_frames(15, rate),
             easing: KeyframeEasing::EaseOut,
@@ -1090,6 +1095,8 @@ fn test_bf02_json_disk_roundtrip_and_command_serde() {
         seed: None,
         pivot_x: 0.5,
         pivot_y: 0.5,
+        phase_origin: Some(RationalTime::zero(rate)),
+        phase_end: Some(RationalTime::from_frames(100, rate)),
         in_anim: Some(TextAnimationSegment {
             duration: RationalTime::from_frames(15, rate),
             easing: KeyframeEasing::EaseOut,
@@ -1341,7 +1348,7 @@ fn test_bf02_v9_to_v10_fixture_comprehensive_preservation() {
     let loaded: Project =
         serde_json::from_str(&migrated_str).expect("deserialize migrated project");
 
-    assert_eq!(loaded.schema_version, 10);
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
 
     // Assert preserved unchanged
     let loaded_text_item = loaded.tracks[1].find_item(&text_id).unwrap();

@@ -1,6 +1,6 @@
 # Phase 31 — Text Animation và Editable Sample Gate
 
-**Status:** PLANNED — chưa triển khai.
+**Status:** IMPLEMENTED WITH DEFERRED T1 QUALIFICATION - automated evaluator/renderer/preview/export and recreated sample complete; native smoke, reference ROI/timing comparison and animated workload benchmark remain open.
 **Dependency:** P30 PASS.
 **Gate T1:** Mẫu người dùng được dựng lại thành template Tinix chỉnh sửa được.
 

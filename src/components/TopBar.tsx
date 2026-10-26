@@ -18,6 +18,7 @@ interface TopBarProps {
   onAddTrack: () => void;
   onAddClip: () => void;
   onAddText: () => void;
+  onOpenTemplates?: () => void;
   onCanvasPresetChange: (width: number, height: number, label: string) => void;
   onCanvasBackgroundChange: (color: string) => void;
   exportPreset: ExportPreset;
@@ -46,6 +47,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onAddTrack,
   onAddClip,
   onAddText,
+  onOpenTemplates,
   onCanvasPresetChange,
   onCanvasBackgroundChange,
   exportPreset,
@@ -125,6 +127,16 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button className="btn-action" onClick={onAddText} title="Add a text item with the default template">
           + Text
         </button>
+        {onOpenTemplates && (
+          <button
+            className="btn-action"
+            onClick={onOpenTemplates}
+            title="Browse and apply animated text templates"
+            style={{ color: "var(--accent-primary)", fontWeight: 600 }}
+          >
+            🎨 Templates
+          </button>
+        )}
         <button className="btn-action" onClick={onImportCaptions} title="Import SRT or WebVTT captions">
           💬 Import captions
         </button>

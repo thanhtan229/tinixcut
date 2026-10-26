@@ -1,0 +1,16 @@
+{
+  "duration_frames": 150,
+  "duration_secs": 5.0,
+  "encoder_used": "libx264",
+  "in_animation_duration_secs": 1.033333,
+  "in_animation_frames": 31,
+  "key_frames": {
+    "t0_frame_0": "artifacts/animated-text-templates/phase-31/frame_t000.png",
+    "t_end_frame_31": "artifacts/animated-text-templates/phase-31/frame_t_end.png",
+    "t_mid_frame_15": "artifacts/animated-text-templates/phase-31/frame_t_mid.png"
+  },
+  "provenance": "recreated_reference",
+  "render_time_ms": 1245,
+  "rendered_file_size_bytes": 94005,
+  "sample_id": "TINIX_RECREATED_SAMPLE_01"
+}

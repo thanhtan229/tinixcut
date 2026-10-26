@@ -1,0 +1,10 @@
+{
+  "fps": 30.0,
+  "frames": {
+    "t0_frame_0": "artifacts/animated-text-templates/phase-34/frame_t000.png",
+    "t_end_frame_31": "artifacts/animated-text-templates/phase-34/frame_t_end.png",
+    "t_mid_frame_15": "artifacts/animated-text-templates/phase-34/frame_t_mid.png"
+  },
+  "in_animation_frames": 31,
+  "total_duration_frames": 150
+}

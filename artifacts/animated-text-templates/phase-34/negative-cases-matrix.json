@@ -1,0 +1,27 @@
+{
+  "binary_installers": {
+    "behavior": "No process spawn, no execution",
+    "input": "installer.exe / package.msi",
+    "result": "REJECTED with UnsupportedSource"
+  },
+  "oversized_file": {
+    "behavior": "Read aborted before parsing",
+    "input": "> 50 MB draft JSON",
+    "result": "REJECTED with BudgetExceeded"
+  },
+  "path_traversal_archive": {
+    "behavior": "Extraction aborted immediately",
+    "input": "zip with ../outside.txt",
+    "result": "REJECTED with SecurityViolation"
+  },
+  "stale_source_revision": {
+    "behavior": "Atomic abort, no partial library save",
+    "input": "Modified draft during commit",
+    "result": "REJECTED with StaleSourceRevision"
+  },
+  "tampered_lua_fingerprint": {
+    "behavior": "Safe fallback without code execution",
+    "input": "Altered AnimScript.lua",
+    "result": "Warning recorded; native execution blocked; mapped via standard curve"
+  }
+}

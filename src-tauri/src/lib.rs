@@ -1042,6 +1042,21 @@ fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFr
     Ok(plan.sample_preview_at(timestamp))
 }
 
+/// Renders one canonical rich-text overlay through the shared Phase 30 renderer.
+/// Returns `None` when the item is not an active rich-text layer at `frame`.
+#[tauri::command]
+fn preview_rich_text_overlay(
+    state: State<'_, AppState>,
+    item_id: String,
+    frame: i64,
+) -> Result<Option<crate::modules::media::text_overlay::PreviewRichTextOverlay>, String> {
+    let engine = state.0.lock().map_err(|e| e.to_string())?;
+    let project = engine.service.project();
+    let timestamp = RationalTime::new(frame, project.settings.frame_rate);
+    crate::modules::media::text_overlay::preview_overlay_at(project, &item_id, timestamp)
+        .map_err(|error| error.to_string())
+}
+
 /// Returns an H.264/AAC preview proxy after the WebView cannot decode an original video.
 /// The proxy is derived cache only: the project and export pipeline keep using the original asset.
 #[tauri::command]
@@ -1297,6 +1312,280 @@ fn media_get_waveform(
     Ok(WaveformStatus::Pending { progress: 0.0 })
 }
 
+#[tauri::command]
+fn template_list_definitions(
+) -> Result<Vec<crate::modules::domain::template::TemplateDefinition>, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    Ok(catalog.list_all())
+}
+
+#[tauri::command]
+fn template_get_definition(
+    id: String,
+    version: Option<u32>,
+) -> Result<Option<crate::modules::domain::template::TemplateDefinition>, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    if let Some(v) = version {
+        Ok(catalog.get(&id, v))
+    } else {
+        Ok(catalog
+            .list_all()
+            .into_iter()
+            .filter(|d| d.id == id)
+            .max_by_key(|d| d.version))
+    }
+}
+
+#[tauri::command]
+fn template_save_user_definition(
+    definition: crate::modules::domain::template::TemplateDefinition,
+) -> Result<String, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    catalog
+        .save_user_definition(&definition)
+        .map_err(|e| e.to_string())?;
+    Ok(format!("{}_v{}", definition.id, definition.version))
+}
+
+#[tauri::command]
+fn template_delete_user_definition(id: String, version: u32) -> Result<bool, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    catalog
+        .delete_user_definition(&id, version)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn template_import_pack(
+    pack_path: String,
+) -> Result<crate::modules::templates::pack::TemplatePackManifest, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    crate::modules::templates::pack::TemplatePackService::import_pack(
+        Path::new(&pack_path),
+        &catalog,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn template_export_pack(
+    manifest: crate::modules::templates::pack::TemplatePackManifest,
+    definitions: Vec<crate::modules::domain::template::TemplateDefinition>,
+    asset_files: Vec<(String, String)>,
+    output_path: String,
+) -> Result<(), String> {
+    let mut resource_map = std::collections::HashMap::new();
+    for (res_id, file_path) in asset_files {
+        let bytes = fs::read(&file_path)
+            .map_err(|e| format!("Failed to read asset '{}': {e}", file_path))?;
+        resource_map.insert(res_id, bytes);
+    }
+    crate::modules::templates::pack::TemplatePackService::export_pack(
+        &manifest,
+        &definitions,
+        &resource_map,
+        Path::new(&output_path),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// SHA-256 for a local source asset used by template pack manifests.
+#[tauri::command]
+fn media_file_sha256(path: String) -> Result<String, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read '{path}': {e}"))?;
+    Ok(crate::modules::media::text_renderer_poc::compute_sha256_hex(&bytes))
+}
+
+#[tauri::command]
+fn capcut_create_inspection_token() -> Result<String, String> {
+    let (token, _) =
+        crate::modules::templates::capcut_import::create_inspection_cancellation_token();
+    Ok(token)
+}
+
+#[tauri::command]
+fn capcut_cancel_inspection(token: String) -> Result<bool, String> {
+    Ok(crate::modules::templates::capcut_import::cancel_inspection(
+        &token,
+    ))
+}
+
+#[tauri::command]
+fn capcut_inspect_template_draft(
+    draft_path: String,
+    selected_roots: Option<Vec<String>>,
+    cancel_token: Option<String>,
+) -> Result<crate::modules::templates::capcut_import::CapCutInspectionResult, String> {
+    let roots: Vec<std::path::PathBuf> = selected_roots
+        .unwrap_or_default()
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    let cancel_flag = cancel_token
+        .as_deref()
+        .and_then(crate::modules::templates::capcut_import::get_inspection_cancellation_token);
+
+    let res = crate::modules::templates::capcut_import::inspect_draft(
+        std::path::Path::new(&draft_path),
+        &roots,
+        cancel_flag.as_deref(),
+    );
+
+    if let Some(ref tok) = cancel_token {
+        crate::modules::templates::capcut_import::remove_inspection_cancellation_token(tok);
+    }
+
+    res.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn capcut_save_template_to_library(
+    report: crate::modules::templates::capcut_import::CapCutConversionReport,
+    asset_source_files: Vec<(String, String)>,
+    expected_source_hash: Option<String>,
+) -> Result<String, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    let assets: Vec<(String, std::path::PathBuf)> = asset_source_files
+        .into_iter()
+        .map(|(id, p)| (id, std::path::PathBuf::from(p)))
+        .collect();
+    let expected = expected_source_hash
+        .as_deref()
+        .map(|h| (std::path::Path::new(&report.source_path), h));
+
+    crate::modules::templates::capcut_import::save_converted_to_catalog(
+        &catalog, &report, &assets, expected,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn capcut_apply_template_to_project(
+    state: tauri::State<'_, AppState>,
+    staging_token: String,
+    item_id: String,
+    template_id: String,
+    template_version: u32,
+    text_variant: Option<String>,
+    expected_revision: u64,
+    source_draft_path: String,
+    expected_source_hash: String,
+    expected_resource_fingerprints: std::collections::HashMap<String, String>,
+    cancel_token: Option<String>,
+) -> Result<crate::modules::command::CommandReceipt, String> {
+    let cancel_flag = cancel_token.as_ref().and_then(|tok| {
+        crate::modules::templates::capcut_import::get_inspection_cancellation_token(tok)
+    });
+
+    let res_fps_map: std::collections::HashMap<std::path::PathBuf, String> =
+        expected_resource_fingerprints
+            .into_iter()
+            .map(|(k, v)| (std::path::PathBuf::from(k), v))
+            .collect();
+
+    let draft_p = std::path::PathBuf::from(&source_draft_path);
+
+    let req = crate::modules::templates::capcut_import::ApplyTemplateGuardrailsRequest {
+        staging_token: &staging_token,
+        item_id: &item_id,
+        template_id: &template_id,
+        template_version,
+        text_variant: text_variant.as_deref(),
+        expected_revision,
+        expected_source_hash: &expected_source_hash,
+        source_draft_path: &draft_p,
+        expected_resource_fingerprints: &res_fps_map,
+        cancel: cancel_flag.as_deref(),
+    };
+
+    let mut engine_guard = state.0.lock().map_err(|e| e.to_string())?;
+    let engine = &mut *engine_guard;
+    crate::modules::templates::capcut_import::execute_staged_template_apply(
+        &mut engine.service,
+        Some(&mut engine.history),
+        req,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn template_draft_capabilities() -> crate::modules::templates::agent::TemplateCapabilitiesReport {
+    crate::modules::templates::agent::AgentTemplateService::capabilities()
+}
+
+#[tauri::command]
+fn template_draft_validate(
+    draft: crate::modules::templates::agent::TemplateDraft,
+) -> crate::modules::templates::agent::TemplateValidationReport {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    crate::modules::templates::agent::AgentTemplateService::validate_draft(&draft, None, Some(&catalog))
+}
+
+#[tauri::command]
+fn template_draft_preview(
+    draft: crate::modules::templates::agent::TemplateDraft,
+    time_seconds: Option<f64>,
+    output_path: Option<String>,
+) -> Result<crate::modules::templates::agent::TemplatePreviewReceipt, String> {
+    let t = time_seconds.unwrap_or(1.0);
+    let out = output_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("tinixcut_preview_{}.png", uuid::Uuid::new_v4().simple())));
+    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(&draft, &out, t, None, None)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn template_draft_save(
+    draft: crate::modules::templates::agent::TemplateDraft,
+    overwrite: Option<bool>,
+) -> Result<crate::modules::templates::agent::TemplateSaveReceipt, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
+        &draft,
+        &catalog,
+        overwrite.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn template_draft_apply(
+    state: State<'_, AppState>,
+    item_id: String,
+    draft: crate::modules::templates::agent::TemplateDraft,
+) -> Result<crate::modules::templates::agent::TemplateApplyReceipt, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    let mut engine_guard = state.0.lock().map_err(|e| e.to_string())?;
+    let engine = &mut *engine_guard;
+    let project_path = engine
+        .current_file_path
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("active_session.tcproj"));
+
+    save_project_atomic(engine.service.project(), &project_path).map_err(|e| e.to_string())?;
+
+    let receipt = crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
+        &project_path,
+        &item_id,
+        &draft,
+        Some("gui_agent".to_string()),
+        None,
+        None,
+        None,
+        None,
+        &catalog,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let reloaded = load_project(&project_path).map_err(|e| e.to_string())?;
+    engine.service = CommandService::new(reloaded);
+
+    Ok(receipt)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_project = Project::new("Untitled Project".to_string());
@@ -1327,9 +1616,27 @@ pub fn run() {
             media_get_waveform,
             media_get_compatible_preview_video,
             preview_sample_at,
+            preview_rich_text_overlay,
             preview_run_benchmark,
             parity_run_suite,
-            render_text_template_poc_preview
+            render_text_template_poc_preview,
+            template_list_definitions,
+            template_get_definition,
+            template_save_user_definition,
+            template_delete_user_definition,
+            template_import_pack,
+            template_export_pack,
+            media_file_sha256,
+            capcut_create_inspection_token,
+            capcut_cancel_inspection,
+            capcut_inspect_template_draft,
+            capcut_save_template_to_library,
+            capcut_apply_template_to_project,
+            template_draft_capabilities,
+            template_draft_validate,
+            template_draft_preview,
+            template_draft_save,
+            template_draft_apply
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

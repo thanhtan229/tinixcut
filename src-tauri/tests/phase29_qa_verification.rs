@@ -376,30 +376,30 @@ fn test_qa_ac02_and_ac03_migration_and_atomic_save_roundtrip() {
     v9_val["schema_version"] = serde_json::json!(9);
     let v9_raw = serde_json::to_string(&v9_val).expect("to string");
 
-    // Migrate v9 -> v10
-    let migrated_str = run_migrations_if_needed(&v9_raw).expect("migrate v9 to v10");
-    let migrated_proj: Project = serde_json::from_str(&migrated_str).expect("deserialize v10");
-    assert_eq!(migrated_proj.schema_version, 10);
+    // Migrate v9 -> current (v11)
+    let migrated_str = run_migrations_if_needed(&v9_raw).expect("migrate v9 to v11");
+    let migrated_proj: Project = serde_json::from_str(&migrated_str).expect("deserialize v11");
+    assert_eq!(migrated_proj.schema_version, 11);
     let migrated_item = migrated_proj.tracks[1].find_item(&text_id).unwrap();
     assert!(migrated_item.text_rich.is_none());
     assert!(migrated_item.text_animation.is_none());
     assert_eq!(migrated_item.keyframes.len(), 1);
 
-    // Schema 11 rejected
-    let schema_11_json = r#"{"schema_version": 11, "project_id": "proj_fut", "name": "Future"}"#;
-    let err = run_migrations_if_needed(schema_11_json).unwrap_err();
+    // Schema 12 (future) rejected
+    let schema_12_json = r#"{"schema_version": 12, "project_id": "proj_fut", "name": "Future"}"#;
+    let err = run_migrations_if_needed(schema_12_json).unwrap_err();
     assert!(matches!(
         err,
         PersistenceError::UnsupportedSchemaVersion {
-            found: 11,
-            max_supported: 10
+            found: 12,
+            max_supported: 11,
         }
     ));
 
     // AC-03: Atomic save and recovery untouched
     save_project_atomic(&migrated_proj, &project_path).expect("save atomic");
     let loaded = load_project(&project_path).expect("load atomic project");
-    assert_eq!(loaded.schema_version, 10);
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(loaded.tracks.len(), migrated_proj.tracks.len());
     let loaded_item = loaded.tracks[1].find_item(&text_id).unwrap();
     assert_eq!(loaded_item.keyframes.len(), 1);
@@ -627,6 +627,8 @@ fn test_qa_ac04_all_seven_commands_and_transaction_rollback() {
                     out_anim: None,
                     loop_mode: LoopMode::None,
                     conflict_policy: DurationConflictPolicy::Reject,
+                    phase_origin: None,
+                    phase_end: None,
                 }),
             },
         }],
@@ -1071,6 +1073,8 @@ fn test_qa_ac07_composition_and_json_serialization_spotcheck() {
         out_anim: None,
         loop_mode: LoopMode::None,
         conflict_policy: DurationConflictPolicy::Reject,
+        phase_origin: None,
+        phase_end: None,
     };
 
     {
@@ -1174,6 +1178,8 @@ fn test_qa_invariants_trim_shortening_reject_under_reject_policy() {
         }),
         loop_mode: LoopMode::None,
         conflict_policy: DurationConflictPolicy::Reject,
+        phase_origin: None,
+        phase_end: None,
     };
 
     service
@@ -1571,6 +1577,8 @@ fn test_qa_bf02_full_rich_and_animation_disk_roundtrip_and_command_serde() {
         }),
         loop_mode: LoopMode::PingPong,
         conflict_policy: DurationConflictPolicy::Reject,
+        phase_origin: None,
+        phase_end: None,
     };
 
     let text_item = project.tracks[1].find_item_mut(&text_id).unwrap();

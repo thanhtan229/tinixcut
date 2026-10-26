@@ -7,6 +7,7 @@ pub mod captions;
 pub mod ffmpeg;
 pub mod qualification;
 pub mod resolver;
+pub mod text_overlay;
 pub mod text_renderer_poc;
 pub mod transcription;
 pub mod waveform;

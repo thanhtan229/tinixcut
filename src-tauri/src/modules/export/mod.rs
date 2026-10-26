@@ -11,10 +11,12 @@ pub use automation::{
     escape_ffmpeg_filter_path, AutomationArtifactsGuard, ExportAutomationSchedule,
 };
 
-use crate::modules::composition::CompositionPlan;
-use crate::modules::domain::time::FrameRate;
+use crate::modules::composition::{CompositionPlan, TextOverlayInput};
+use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{Project, ProjectSettings};
 use crate::modules::media::resolver::MediaBinaryResolver;
+use crate::modules::media::text_overlay;
+use crate::modules::media::text_renderer_poc::RgbaBuffer;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,11 @@ pub enum ExportError {
     Composition(String),
 }
 
+/// Maximum number of rendered frames allowed for animated text sequences in export (Finding 7).
+pub const MAX_ANIMATED_SEQUENCE_FRAMES: i64 = 10_000;
+/// Maximum aggregate uncompressed/PNG byte quota for materialized overlay sequences (2 GB) (Finding 7).
+pub const MAX_ANIMATED_SEQUENCE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 fn default_export_audio_sample_rate() -> u32 {
     48000
 }
@@ -50,18 +57,13 @@ fn default_export_audio_sample_rate() -> u32 {
 ///
 /// Every preset inherits the project canvas and frame rate. This keeps export
 /// composition aligned with the canonical project semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportPreset {
+    #[default]
     Balanced,
     HighQuality,
     SmallerFile,
-}
-
-impl Default for ExportPreset {
-    fn default() -> Self {
-        Self::Balanced
-    }
 }
 
 impl ExportPreset {
@@ -192,6 +194,41 @@ pub struct ExportReport {
     pub attempted_encoders: Vec<String>,
 }
 
+/// Removes a disposable derived-artifact directory on every exit path.
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn remove_existing_output(path: &Path) {
+    for _ in 0..10 {
+        if !path.exists() {
+            return;
+        }
+        if fs::remove_file(path).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last_error = None;
+    for _ in 0..10 {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("promotion retry exhausted")))
+}
+
 /// Export Engine coordinating snapshot freeze, FFmpeg execution, and atomic promotion
 pub struct ExportEngine;
 
@@ -295,13 +332,157 @@ impl ExportEngine {
         let automation_dir = temp_output_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join(format!("tc_auto_{}", std::process::id()));
+            .join(format!(
+                "tc_auto_{}_{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+        let _automation_dir_guard = TempDirGuard(automation_dir.clone());
         let mut schedule = ExportAutomationSchedule::build(
             &plan,
             &automation_dir,
             profile.audio_sample_rate,
             cancel_flag.as_ref(),
         )?;
+
+        // Materialize rich-text overlays through the shared Phase 30 renderer.
+        // These PNGs are disposable derived artifacts, never project state.
+        let overlay_dir = automation_dir.join("text_overlays");
+        let _overlay_guard = TempDirGuard(overlay_dir.clone());
+        let mut overlays: Vec<TextOverlayInput> = Vec::new();
+        if plan
+            .visual_layers
+            .iter()
+            .any(|layer| layer.text_rich.is_some() || layer.template_instance.is_some())
+        {
+            fs::create_dir_all(&overlay_dir).map_err(|error| {
+                ExportError::IoError(format!("Failed to create text overlay directory: {error}"))
+            })?;
+            // Aggregate budget is export-wide, not per layer.
+            let mut total_seq_bytes: u64 = 0;
+            for layer in &plan.visual_layers {
+                if layer.item_id.contains("__layer_") {
+                    continue;
+                }
+                if layer.text_rich.is_none() && layer.template_instance.is_none() {
+                    continue;
+                }
+
+                let has_animation = layer.text_animation.is_some()
+                    || !layer.keyframes.is_empty()
+                    || layer.template_instance.as_ref().is_some_and(|ti| {
+                        ti.layers.iter().any(|l| {
+                            l.motion.is_some()
+                                || match &l.kind {
+                                    crate::modules::domain::template::TemplateLayerKind::Text(
+                                        t,
+                                    ) => t.text_animation.is_some(),
+                                    _ => false,
+                                }
+                        })
+                    });
+                if has_animation {
+                    // Animated rich text or keyframed text: materialize per-frame PNG sequence over the clip window
+                    let rate = plan.frame_rate;
+                    let duration_ticks = layer.timeline_range.duration.rescaled_to(rate).value;
+                    let num_frames = duration_ticks.max(1);
+
+                    // Enforce documented frame quota (Finding 7)
+                    if num_frames > MAX_ANIMATED_SEQUENCE_FRAMES {
+                        return Err(ExportError::RenderFailed(format!(
+                            "Animated text sequence for '{}' exceeds frame quota ({} > {})",
+                            layer.name, num_frames, MAX_ANIMATED_SEQUENCE_FRAMES
+                        )));
+                    }
+
+                    let seq_dir = overlay_dir.join(format!("{}_seq", layer.item_id));
+                    fs::create_dir_all(&seq_dir).map_err(|error| {
+                        ExportError::IoError(format!(
+                            "Failed to create sequence directory: {error}"
+                        ))
+                    })?;
+
+                    for frame_idx in 0..num_frames {
+                        // Check cancellation flag per frame during sequence preparation (Finding 7)
+                        if let Some(ref flag) = cancel_flag {
+                            if flag.load(Ordering::SeqCst) {
+                                return Err(ExportError::Cancelled);
+                            }
+                        }
+
+                        let timestamp = layer
+                            .timeline_range
+                            .start
+                            .add_exact(&RationalTime::from_frames(frame_idx, rate));
+                        let buf = text_overlay::render_frame_overlay_buffer_at(
+                            snapshot, &plan, layer, timestamp,
+                        )
+                        .map_err(|error| {
+                            ExportError::RenderFailed(format!(
+                                "Animated text overlay frame failed for '{}': {error}",
+                                layer.name
+                            ))
+                        })?
+                        .unwrap_or_else(|| RgbaBuffer::new(plan.width, plan.height));
+
+                        let png_bytes = buf.to_png_bytes();
+                        total_seq_bytes += png_bytes.len() as u64;
+
+                        // Enforce documented byte quota (Finding 7)
+                        if total_seq_bytes > MAX_ANIMATED_SEQUENCE_BYTES {
+                            return Err(ExportError::RenderFailed(format!(
+                                "Animated text sequence for '{}' exceeded byte quota ({} bytes > {} bytes)",
+                                layer.name, total_seq_bytes, MAX_ANIMATED_SEQUENCE_BYTES
+                            )));
+                        }
+
+                        let frame_path = seq_dir.join(format!("frame_{:06}.png", frame_idx));
+                        fs::write(&frame_path, &png_bytes).map_err(|error| {
+                            ExportError::IoError(format!(
+                                "Failed to write sequence frame '{:?}': {error}",
+                                frame_path
+                            ))
+                        })?;
+                    }
+
+                    overlays.push(TextOverlayInput {
+                        item_id: layer.item_id.clone(),
+                        path: seq_dir.join("frame_%06d.png"),
+                        roi: [0, 0, plan.width, plan.height],
+                    });
+                } else {
+                    match text_overlay::render_overlay_for_layer(
+                        snapshot,
+                        plan.width,
+                        plan.height,
+                        layer,
+                        layer.opacity,
+                    ) {
+                        Ok(Some(overlay)) if overlay.has_visible_content => {
+                            let path = overlay_dir.join(format!("{}.png", layer.item_id));
+                            fs::write(&path, &overlay.roi_png_bytes).map_err(|error| {
+                                ExportError::IoError(format!(
+                                    "Failed to write text overlay '{}': {error}",
+                                    layer.item_id
+                                ))
+                            })?;
+                            overlays.push(TextOverlayInput {
+                                item_id: layer.item_id.clone(),
+                                path,
+                                roi: overlay.roi,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            return Err(ExportError::RenderFailed(format!(
+                                "Rich text overlay failed for '{}': {error}",
+                                layer.name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
 
         let candidates = Self::get_encoder_candidates(&profile.video_codec);
         let mut attempted_encoders: Vec<String> = Vec::new();
@@ -319,11 +500,12 @@ impl ExportEngine {
             attempted_encoders.push(candidate.to_string());
 
             // Generate FFmpeg command arguments from the CompositionPlan with candidate codec and automation schedule
-            let (args, _) = plan.to_ffmpeg_export_args_with_schedule(
+            let (args, _) = plan.to_ffmpeg_export_args_with_overlays(
                 &temp_output_path,
                 profile.crf,
                 candidate,
                 Some(&schedule),
+                &overlays,
             );
 
             // Spawn child FFmpeg process via centralized MediaBinaryResolver
@@ -424,12 +606,11 @@ impl ExportEngine {
                     ));
                 }
 
-                // Safe output promotion: atomically rename temp file to target output
-                if target_path.exists() {
-                    let _ = fs::remove_file(target_path);
-                }
-
-                fs::rename(&temp_output_path, target_path).map_err(|e| {
+                // Safe output promotion: atomically rename temp file to target output.
+                // Windows can briefly hold a scan lock on a just-created file, so a
+                // bounded retry prevents a spurious failure when re-exporting.
+                remove_existing_output(target_path);
+                rename_with_retry(&temp_output_path, target_path).map_err(|e| {
                     let _ = fs::remove_file(&temp_output_path);
                     ExportError::IoError(format!(
                         "Failed to promote temporary render file to destination: {e}"

@@ -263,6 +263,162 @@ impl JsonSchema for ExportProfile {
     }
 }
 
+impl JsonSchema for crate::modules::templates::agent::TemplateDraft {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplateDraft".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplateDraft".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["draftId", "templateId", "name", "category", "description", "layers", "provenance"],
+            "properties": {
+                "draftId": { "type": "string" },
+                "schemaVersion": { "type": "integer" },
+                "templateId": { "type": "string" },
+                "templateVersion": { "type": "integer", "minimum": 1 },
+                "name": { "type": "string" },
+                "category": { "type": "string" },
+                "description": { "type": "string" },
+                "tags": { "type": "array", "items": { "type": "string" } },
+                "slots": { "type": "array", "items": { "type": "object" } },
+                "parameters": { "type": "array", "items": { "type": "object" } },
+                "bindings": { "type": "array", "items": { "type": "object" } },
+                "layers": { "type": "array", "items": { "type": "object" } },
+                "resources": { "type": "object" },
+                "responsivePolicy": { "type": "object" },
+                "defaultDuration": { "type": "object" },
+                "provenance": { "type": "object" },
+                "userOverrides": { "type": "array", "items": { "type": "object" } }
+            }
+        })
+    }
+}
+
+impl JsonSchema for crate::modules::templates::agent::TemplateValidationReport {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplateValidationReport".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplateValidationReport".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["valid", "schemaVersion", "issues", "missingResources", "unsupportedOptions"],
+            "properties": {
+                "valid": { "type": "boolean" },
+                "schemaVersion": { "type": "integer" },
+                "issues": { "type": "array", "items": { "type": "object" } },
+                "missingResources": { "type": "array", "items": { "type": "string" } },
+                "unsupportedOptions": { "type": "array", "items": { "type": "string" } },
+                "normalizedDraft": { "type": ["object", "null"] }
+            }
+        })
+    }
+}
+
+impl JsonSchema for crate::modules::templates::agent::TemplatePreviewReceipt {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplatePreviewReceipt".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplatePreviewReceipt".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["outputPath", "width", "height", "timeSeconds", "hasVisibleContent", "nonZeroPixels"],
+            "properties": {
+                "outputPath": { "type": "string" },
+                "width": { "type": "integer" },
+                "height": { "type": "integer" },
+                "timeSeconds": { "type": "number" },
+                "hasVisibleContent": { "type": "boolean" },
+                "nonZeroPixels": { "type": "integer" }
+            }
+        })
+    }
+}
+
+impl JsonSchema for crate::modules::templates::agent::TemplateApplyReceipt {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplateApplyReceipt".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplateApplyReceipt".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["receipt", "appliedDraftId", "templateId", "templateVersion", "revision"],
+            "properties": {
+                "receipt": { "type": "object" },
+                "appliedDraftId": { "type": "string" },
+                "templateId": { "type": "string" },
+                "templateVersion": { "type": "integer" },
+                "revision": { "type": "integer" }
+            }
+        })
+    }
+}
+
+impl JsonSchema for crate::modules::templates::agent::TemplateSaveReceipt {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplateSaveReceipt".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplateSaveReceipt".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["templateId", "version", "savedPath"],
+            "properties": {
+                "templateId": { "type": "string" },
+                "version": { "type": "integer" },
+                "savedPath": { "type": "string" }
+            }
+        })
+    }
+}
+
+impl JsonSchema for crate::modules::templates::agent::TemplateCapabilitiesReport {
+    fn schema_name() -> Cow<'static, str> {
+        "TemplateCapabilitiesReport".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        "tinixcut::TemplateCapabilitiesReport".into()
+    }
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "required": ["schemaVersion", "maxLayers", "maxTextSlots", "maxGraphemesPerSlot", "maxRepairIterations"],
+            "properties": {
+                "schemaVersion": { "type": "integer" },
+                "maxLayers": { "type": "integer" },
+                "maxTextSlots": { "type": "integer" },
+                "maxGraphemesPerSlot": { "type": "integer" },
+                "maxRepairIterations": { "type": "integer" },
+                "supportedLayerTypes": { "type": "array", "items": { "type": "string" } },
+                "supportedShapeKinds": { "type": "array", "items": { "type": "string" } },
+                "supportedParameterTypes": { "type": "array", "items": { "type": "string" } },
+                "supportedPropertyPaths": { "type": "array", "items": { "type": "string" } },
+                "supportedAnimationPresets": { "type": "array", "items": { "type": "string" } },
+                "supportedAnimationUnits": { "type": "array", "items": { "type": "string" } },
+                "supportedStaggerOrders": { "type": "array", "items": { "type": "string" } },
+                "supportedLoopModes": { "type": "array", "items": { "type": "string" } },
+                "supportedDurationConflictPolicies": { "type": "array", "items": { "type": "string" } },
+                "supportedUnits": { "type": "array", "items": { "type": "string" } },
+                "builtInPrimitives": { "type": "array", "items": { "type": "string" } },
+                "draftJsonSchema": { "type": "object" }
+            }
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool Argument DTOs
 // ---------------------------------------------------------------------------
@@ -330,6 +486,56 @@ pub struct ExportCancelArgs {
 #[serde(rename_all = "camelCase")]
 pub struct ExportCancelReceipt {
     pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateValidateArgs {
+    pub draft: crate::modules::templates::agent::TemplateDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplatePreviewArgs {
+    pub draft: crate::modules::templates::agent::TemplateDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateApplyArgs {
+    pub project_path: String,
+    pub item_id: String,
+    pub draft: crate::modules::templates::agent::TemplateDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_epoch: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateSaveArgs {
+    pub draft: crate::modules::templates::agent::TemplateDraft,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -614,6 +820,9 @@ impl TinixCutMcpServer {
             supported_loop_modes: AutomationAdapter::supported_loop_modes(),
             supported_duration_conflict_policies:
                 AutomationAdapter::supported_duration_conflict_policies(),
+            template_capabilities: Some(
+                crate::modules::templates::agent::AgentTemplateService::capabilities(),
+            ),
         };
         Ok(tool_ok(&report))
     }
@@ -926,6 +1135,170 @@ impl TinixCutMcpServer {
         };
         let cancelled = jm.cancel_job(&params.job_id);
         Ok(tool_ok(&ExportCancelReceipt { cancelled }))
+    }
+
+    #[tool(
+        name = "tinixcut_template_validate",
+        description = "Validate a typed TemplateDraft against domain limits, security rules, and catalog resources",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateValidationReport>()
+    )]
+    async fn template_validate(
+        &self,
+        Parameters(params): Parameters<TemplateValidateArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+        let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(
+            &params.draft,
+            None,
+            Some(&catalog),
+        );
+        Ok(tool_ok(&report))
+    }
+
+    #[tool(
+        name = "tinixcut_template_preview",
+        description = "Render a preview frame of a TemplateDraft at time t using the shared compositor and return frame receipt",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplatePreviewReceipt>()
+    )]
+    async fn template_preview(
+        &self,
+        Parameters(params): Parameters<TemplatePreviewArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let time_sec = params.time_seconds.unwrap_or(1.0);
+        let out_path = params
+            .output_path
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("tinixcut_preview_{}.png", uuid::Uuid::new_v4().simple()))
+            });
+        let receipt = match crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+            &params.draft,
+            &out_path,
+            time_sec,
+            params.width,
+            params.height,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(tool_error(StructuredError::new(
+                    "PREVIEW_RENDER_FAILED",
+                    e.to_string(),
+                )));
+            }
+        };
+        Ok(tool_ok(&receipt))
+    }
+
+    #[tool(
+        name = "tinixcut_template_apply",
+        description = "Apply a validated TemplateDraft to a project text item as an atomic CommandService transaction and persist",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateApplyReceipt>()
+    )]
+    async fn template_apply(
+        &self,
+        Parameters(params): Parameters<TemplateApplyArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let _guard = self.write_gate.lock().await;
+
+        if params
+            .client_id
+            .as_ref()
+            .is_none_or(|id| id.trim().is_empty() || id.len() > 64)
+        {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_VALIDATION_FAILED",
+                "Missing or invalid client_id: caller must supply a non-empty client_id (<= 64 chars)",
+            )));
+        }
+
+        if params.client_epoch.is_none() {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_VALIDATION_FAILED",
+                "Missing client_epoch: caller must supply client_epoch for durable idempotency",
+            )));
+        }
+
+        if params.sequence_number.is_none() || params.sequence_number == Some(0) {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_VALIDATION_FAILED",
+                "Missing or invalid sequence_number: caller must supply positive sequence_number >= 1",
+            )));
+        }
+
+        if params
+            .transaction_id
+            .as_ref()
+            .is_none_or(|tid| tid.trim().is_empty())
+        {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_VALIDATION_FAILED",
+                "Missing transaction_id: caller must supply transaction_id for atomic envelope",
+            )));
+        }
+
+        let project_path = PathBuf::from(&params.project_path);
+        let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+
+        match crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
+            &project_path,
+            &params.item_id,
+            &params.draft,
+            params.client_id,
+            params.client_epoch,
+            params.sequence_number,
+            params.transaction_id,
+            params.base_revision,
+            &catalog,
+        ) {
+            Ok(receipt) => Ok(tool_ok(&receipt)),
+            Err(crate::modules::templates::agent::AgentTemplateError::Command(cmd_err)) => {
+                Ok(tool_error(map_command_error(cmd_err)))
+            }
+            Err(e) => Ok(tool_error(StructuredError::new(
+                "TEMPLATE_APPLY_FAILED",
+                e.to_string(),
+            ))),
+        }
+    }
+
+    #[tool(
+        name = "tinixcut_template_save",
+        description = "Save a validated TemplateDraft into the template catalog as a reusable TemplateDefinition",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateSaveReceipt>()
+    )]
+    async fn template_save(
+        &self,
+        Parameters(params): Parameters<TemplateSaveArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let catalog = params
+            .catalog_dir
+            .map(PathBuf::from)
+            .map(crate::modules::templates::catalog::TemplateCatalog::new)
+            .unwrap_or_else(crate::modules::templates::catalog::TemplateCatalog::default_catalog);
+        let overwrite = params.overwrite.unwrap_or(false);
+
+        match crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
+            &params.draft,
+            &catalog,
+            overwrite,
+        ) {
+            Ok(receipt) => Ok(tool_ok(&receipt)),
+            Err(crate::modules::templates::agent::AgentTemplateError::Catalog(
+                crate::modules::templates::catalog::TemplateCatalogError::ImmutableVersionConflict {
+                    id,
+                    version,
+                },
+            )) => Ok(tool_error(StructuredError::with_details(
+                "IMMUTABLE_VERSION_CONFLICT",
+                format!("Template '{}' version {} already exists", id, version),
+                serde_json::json!({ "templateId": id, "version": version }),
+            ))),
+            Err(e) => Ok(tool_error(StructuredError::new(
+                "TEMPLATE_SAVE_FAILED",
+                e.to_string(),
+            ))),
+        }
     }
 }
 

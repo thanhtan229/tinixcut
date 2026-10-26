@@ -4,17 +4,21 @@
 
 pub mod evaluator;
 pub mod id;
+pub mod template;
 pub mod text;
+pub mod text_animation;
 pub mod time;
 
+pub use template::*;
 pub use text::*;
+pub use text_animation::*;
 
 use self::id::*;
 use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -745,6 +749,8 @@ pub struct TimelineItem {
     pub text_rich: Option<TextRichStyle>,
     #[serde(default)]
     pub text_animation: Option<TextAnimation>,
+    #[serde(default)]
+    pub template_instance: Option<TemplateInstance>,
     pub fade_in: Option<RationalTime>,
     pub fade_out: Option<RationalTime>,
     pub transition: Option<Transition>,
@@ -779,6 +785,7 @@ impl TimelineItem {
             text_template: None,
             text_rich: None,
             text_animation: None,
+            template_instance: None,
             fade_in: None,
             fade_out: None,
             transition: None,
@@ -811,11 +818,22 @@ impl TimelineItem {
                 "Only Text items can have text_rich or text_animation".to_string(),
             ));
         }
+        if self.kind != ItemKind::Text && self.template_instance.is_some() {
+            return Err(DomainError::Validation(
+                "Only Text items can have template_instance".to_string(),
+            ));
+        }
+        if let Some(instance) = &self.template_instance {
+            instance.validate()?;
+        }
         if let Some(rich) = &self.text_rich {
             rich.validate(self.text_content.as_deref().unwrap_or(""))?;
         }
         if let Some(anim) = &self.text_animation {
-            anim.validate_for_clip_duration(self.timeline_range.duration)?;
+            let effective_duration = anim
+                .phase_duration()
+                .unwrap_or(self.timeline_range.duration);
+            anim.validate_for_clip_duration(effective_duration)?;
         }
         if let Some(transition) = &self.transition {
             if matches!(

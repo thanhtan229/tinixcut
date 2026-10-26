@@ -1,8 +1,8 @@
 # Phase Status Tracking — Tinix Animated Text Templates (Phases 27–36)
 
-**Last Updated:** 2026-10-25  
+**Last Updated:** 2026-10-26
 **Active Roadmap:** `Plans/plan_animated_text_templates.md`  
-**Overall Program Status:** PHASES 27–29 COMPLETE; PHASE 30 READY TO START
+**Overall Program Status:** PHASES 27–33 FUNCTIONALLY COMPLETE (NATIVE QUALIFICATION ITEMS DEFERRED); PHASE 34 IMPLEMENTED, AC-09 NATIVE QUALIFICATION OPEN
 
 ---
 
@@ -13,12 +13,12 @@
 | **Phase 27** | Template Contract, Fixtures & Baseline | **COMPLETE** | Gate 27 PASS | `artifacts/animated-text-templates/phase-27/` (`baseline-inventory.json`, `capcut-sample-index.json`, `compatibility-matrix.json`, `contract-semantics.md`, `fixture-corpus.json`, `workload-budgets.md`, `evidence-summary.json`) |
 | **Phase 28** | Shared Text Renderer POC | **COMPLETE** | Gate 28 PASS | `artifacts/animated-text-templates/phase-28/` (`benchmark-report.md`, `benchmark-metrics.csv`, `candidate-evaluation.md`, `evidence-summary.json`, `poc_overlay_t05.png`, `poc_alpha_*.png`), `src-tauri/src/modules/media/text_renderer_poc.rs`, `src-tauri/tests/phase28_text_renderer_poc.rs`, ADR-007 locked |
 | **Phase 29** | Rich-text & Animation Domain Model | **COMPLETE** | Gate 29 PASS | Schema v10 lossless migration, rich-text/animation domain + validation, 7 Command Service operations with grapheme-span rebinding, composition/preview carry-through, TS types, CLI/MCP capability parity; `artifacts/animated-text-templates/phase-29/` (`evidence-summary.json`, `verification-log.md`); QA PASS, Code Reviewer LGTM |
-| **Phase 30** | Rich-Text Rendering & Parity | **READY** | Pending | Preview & headless export parity, multi-stroke/shadow/gradient, text ROI SSIM |
-| **Phase 31** | Text Animation Engine & Native Sample | **PLANNED** | Pending | In/Loop/Out evaluator, grapheme stagger, native CapCut sample recreation (Milestone T1) |
-| **Phase 32** | Layered Templates & Packs | **PLANNED** | Pending | Multilayer instances (<=16 layers), parameter bindings, `.tinixtpl` import/export |
-| **Phase 33** | Template Authoring & Library UI | **PLANNED** | Pending | Inspector customizer, animated preview cards, responsive anchor controls (Milestone T2) |
-| **Phase 34** | CapCut Template Import Adapter | **PLANNED** | Pending | Draft inspector, compatibility report, deterministic style/motion conversion (Milestone T3) |
-| **Phase 35** | Agent Template Generation (CLI/MCP) | **PLANNED** | Pending | Agent template authoring/editing via Command Service transaction (Milestone T4) |
+| **Phase 30** | Rich-Text Rendering & Parity | **COMPLETE WITH DEFERRED QUALIFICATION** | Gate 30 PASS (QA PASS, Code Reviewer LGTM; native qualification deferred) | Shared production renderer (`text_overlay.rs`), preview IPC + export PNG overlays, 7 acceptance tests, W1/W2 evidence; `artifacts/animated-text-templates/phase-30/` |
+| **Phase 31** | Text Animation Engine & Native Sample | **IMPLEMENTED / T1 DEFERRED ACCEPTED** | Gate T1 deferred by PO | Evaluator, rigid unit motion, preview/export sequence, recreated sample + tests; QA PASS; Final Review requires native/reference evidence |
+| **Phase 32** | Layered Templates & Packs | **COMPLETE** | Gate 32 PASS (QA PASS, Final Reviewer FINAL PASS) | Multilayer instances (<=16 layers), parameter bindings, `.tinixtpl` import/export |
+| **Phase 33** | Template Authoring & Library UI | **COMPLETE** | Gate T2 PASS (native qualification deferred) | Inspector customizer, animated preview cards, responsive anchor controls (Milestone T2) |
+| **Phase 34** | CapCut Template Import Adapter | **IMPLEMENTED / AC-09 OPEN** | Backend + frontend reviews LGTM; native qualification pending | Bounded/cancellable draft and ZIP inspection, resource-aware conversion, transactional save, guarded CommandService apply, CapCut importer UI; `artifacts/animated-text-templates/phase-34/` |
+| **Phase 35** | Agent Template Generation (CLI/MCP) | **IN PROGRESS** | Pending | Agent template authoring/editing via Command Service transaction (Milestone T4) |
 | **Phase 36** | Release Hardening & Qualification | **PLANNED** | Pending | Full performance benchmarks, installer integration, final user verification (Milestone T5) |
 
 ---
@@ -75,8 +75,9 @@
 
 ## 6. Next Implementation Step
 
-Proceed to **Phase 30 — Rich-Text Rendering & Parity** (`Plans/plan_phase30_rich_text_rendering.md`):
-1. Consume the Phase 29 canonical `text_rich`/`text_animation` values in preview and headless export through the shared renderer.
-2. Implement multi-stroke/shadow/gradient and background-box rendering parity with ROI SSIM tolerance.
-3. Keep duration-conflict evaluation and animation math for Phase 31; do not add a parallel mutation or render path.
+Proceed to **Phase 31 - Text Animation Engine & Native Sample** (`Plans/plan_phase31_text_animation.md`):
+1. Evaluate the Phase 29 `text_animation` (in/loop/out, grapheme stagger, transforms) on the canonical timeline and feed the shared renderer per frame.
+2. Preserve the Phase 30 preview/export parity seam; do not add a second renderer or mutation path.
+3. Recreate the user's CapCut sample as an editable Tinix template (Milestone T1) with Vietnamese diacritics intact.
+4. Keep the Phase 30 W1 packet transport limit and Phase 26 native qualification gaps explicit.
 

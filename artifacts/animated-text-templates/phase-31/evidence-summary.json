@@ -1,0 +1,96 @@
+{
+  "phase": 31,
+  "title": "Text Animation Engine & Native Sample",
+  "status": "IMPLEMENTED WITH DEFERRED T1 QUALIFICATION (accepted by Product Owner to unblock P32-P36)",
+  "gate": "Gate T1",
+  "date": "2026-10-25",
+  "provenance": "recreated_reference",
+  "font": {
+    "family": "Roboto-Bold",
+    "license": "Apache-2.0",
+    "sha256": "61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334"
+  },
+  "acceptance": {
+    "P31-AC-01": {
+      "status": "PASS",
+      "tests": [
+        "p31_ac01_unicode_unit_mapping"
+      ],
+      "evidence": "NFC/NFD Vietnamese and ZWJ emoji mapped through UAX #29 graphemes; All/Grapheme/Word/Line stable"
+    },
+    "P31-AC-02": {
+      "status": "PASS",
+      "tests": [
+        "p31_ac02_stagger_and_order_determinism",
+        "p31_ac03_easing_and_loop_boundary_continuity"
+      ],
+      "evidence": "Forward/Backward/CenterOut/Random(seed) deterministic; in/loop/out repeat and ping-pong boundary continuity"
+    },
+    "P31-AC-03": {
+      "status": "PASS",
+      "tests": [
+        "p31_ac04_clip_lifecycle_continuity",
+        "p31_ac05_duration_conflict_policies"
+      ],
+      "evidence": "source-time phase continuity across trim/split; Reject/ProportionalScale/ClampOut policies"
+    },
+    "P31-AC-04": {
+      "status": "PASS",
+      "tests": [
+        "p31_ac06_text_replacement_and_robustness"
+      ],
+      "evidence": "empty/short/long text, replacement and unit remap do not panic or drift"
+    },
+    "P31-AC-05": {
+      "status": "PASS WITH DISCLOSED APPROXIMATION",
+      "tests": [
+        "p31_native_sample_reconstruction_evidence"
+      ],
+      "evidence": "Measured against the real reference MP4: plateau bbox delta 16x14 px, centroid 9 px, onset/last frame identical, peak frame +3; ROI SSIM ~0.62 and MAE ~0.20 are informational because the reference font/Lua motion differ. See reference-comparison.md/json."
+    },
+    "P31-AC-06": {
+      "status": "PASS",
+      "evidence": "recreated_sample_project.json is command-backed editable; render/export does not require CapCut or the reference MP4"
+    },
+    "P31-AC-07": {
+      "status": "PARTIAL / DEFERRED NATIVE INTERACTIVE SMOKE",
+      "evidence": "pnpm tauri dev started, Vite HTTP 200 and tinixcut process/window handle observed; interactive native edit/play/seek/export capture was not observable in this session, so it is not claimed as PASS."
+    },
+    "P31-AC-08": {
+      "status": "PARTIAL / DEFERRED",
+      "evidence": "P30 static W1/W2 budgets and automated P31 parity/export/cancel regressions pass; animated W1/W2 benchmark and full interactive playback/caption matrix remain outstanding."
+    }
+  },
+  "tests": {
+    "phase31": "21 passed, 1 ignored evidence writer",
+    "phase30_regression": "10 passed",
+    "lib": "172 passed (POC5 skipped)",
+    "phase29": "13 passed"
+  },
+  "evidence": [
+    "recreated_sample_project.json",
+    "frame_t000.png",
+    "frame_t_mid.png",
+    "frame_t_end.png",
+    "recreated_sample_export.mp4",
+    "timing_frame_report.json",
+    "differences_vs_reference.md",
+    "reference-comparison.md",
+    "reference-comparison.json",
+    "reference-comparison-contact-sheet.png"
+  ],
+  "limitations": [
+    "CapCut Lua/JS is not executed; motion is recreated with typed Tinix primitives and differs in detail (see differences_vs_reference.md).",
+    "The reference font is proprietary and not bundled; Roboto-Bold is used and disclosed.",
+    "Animated export writes a full-canvas PNG per frame (disk proportional to duration x fps); streaming/ROI optimization is deferred to P36.",
+    "Native GUI/user smoke and installed-app qualification remain deferred under Phase 26."
+  ],
+  "review": {
+    "final_review": "remediation applied for split/trim validation, legacy phase anchors, mixed-rate loop arithmetic, aggregate export quota, preview keyframes",
+    "deferred": [
+      "native GUI smoke",
+      "reference MP4 ROI/timing comparison",
+      "animated workload benchmark"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "acceptance": {
+    "P1-01": "PASS: Bounded streaming reads, cancellation mid-traversal/hash/decompression, forged zip bomb protection",
+    "P1-02": "PASS: Validated Lua fingerprint + wrapper + supported version gates, no fake motion on unknown/changed",
+    "P1-03": "PASS: Real transforms, custom font sizes, alignment, secondary text layers, dynamic card geometry",
+    "P1-04": "PASS: Verified resource manifest with hashes/sizes, no silent substitution, missing resources explicit",
+    "P1-05": "PASS: Single-owner motion (text_animation only, layer.motion is None, no double evaluation)",
+    "P1-06": "PASS: Transactional catalog save with staging, preflight, and rollback preserving directory tree invariant",
+    "P1-07": "PASS: Atomic Command Service apply with history recording, undo/redo, and stale revision rejection",
+    "P34-AC-01": "PASS: Read-only inspect, budgets, cancellation, archive security validated",
+    "P34-AC-02": "PASS: Effective style preserved (gradient, stroke, dual shadows), outer defaults bypassed",
+    "P34-AC-03": "PASS: Dynamic text/duration variants preserved without hardcoded fixtures",
+    "P34-AC-04": "PASS: Lua fingerprint checked, no execution, safe sandbox preserved",
+    "P34-AC-05": "PASS: Report statuses, loss details, and reference MP4 policy strictly enforced",
+    "P34-AC-06": "PASS: Atomic apply, undo/redo, save/reopen, and stale revision rejection",
+    "P34-AC-07": "PASS: Offline standalone render without CapCut or reference MP4",
+    "P34-AC-08": "PASS: Additional profiles (VlogTitleMultiLayer, TextWithBackgroundCard) recognized",
+    "P34-AC-09": "PARTIAL: Frames, reports, negative matrix, and measured ROI comparison generated; native importer inspect/apply workflow not yet qualified"
+  },
+  "date": "2026-10-26",
+  "gate": "Gate T3",
+  "phase": 34,
+  "sample_profile": {
+    "animation_resource_id": "7498202895196736769",
+    "draft_sha256": "FE7CFEA3E68C698B89B3BF910EAFEAF6B3BDBE03394C291EDDD55A38010883B3",
+    "duration_frames": 150,
+    "family": "StaggeredCharacterIn",
+    "fps": 30.0,
+    "wrapper_id": "7522343677012774197"
+  },
+  "status": "PARTIAL (automated evidence generated; native AC-09 qualification pending)",
+  "title": "CapCut Template Inspection & Conversion"
+}

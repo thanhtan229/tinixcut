@@ -61,6 +61,17 @@ pub struct Rect {
     pub height: f32,
 }
 
+/// Materialized rich-text overlay PNG produced by the shared Phase 30/31 renderer.
+/// `path` is a disposable derived artifact, never canonical project state.
+/// When `path` points to an image sequence pattern (e.g. `frame_%06d.png`), it is
+/// materialized and filtered as an animated sequence input with project framerate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOverlayInput {
+    pub item_id: String,
+    pub path: PathBuf,
+    pub roi: [u32; 4],
+}
+
 /// Normalized visual layer in the composition plan
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompositionVisualLayer {
@@ -91,6 +102,8 @@ pub struct CompositionVisualLayer {
     pub text_rich: Option<TextRichStyle>,
     #[serde(default)]
     pub text_animation: Option<TextAnimation>,
+    #[serde(default)]
+    pub template_instance: Option<crate::modules::domain::template::TemplateInstance>,
     pub keyframes: Vec<CompositionKeyframe>,
     pub transition: Option<CompositionTransition>,
 }
@@ -586,6 +599,7 @@ impl CompositionPlan {
                             text_template: None,
                             text_rich: None,
                             text_animation: None,
+                            template_instance: None,
                             keyframes: item.keyframes.clone(),
                             transition: item.transition.clone(),
                         });
@@ -654,6 +668,7 @@ impl CompositionPlan {
                             text_template: item.text_template.clone(),
                             text_rich: item.text_rich.clone(),
                             text_animation: item.text_animation.clone(),
+                            template_instance: item.template_instance.clone(),
                             keyframes: item.keyframes.clone(),
                             transition: item.transition.clone(),
                         });
@@ -824,6 +839,20 @@ fn sample_visual_layer_at(
         text_template: layer.text_template.clone(),
         text_rich: layer.text_rich.clone(),
         text_animation: layer.text_animation.clone(),
+        has_animation: layer.text_animation.is_some()
+            || !layer.keyframes.is_empty()
+            || layer.template_instance.as_ref().is_some_and(|ti| {
+                ti.layers.iter().any(|l| {
+                    l.motion.is_some()
+                        || match &l.kind {
+                            crate::modules::domain::template::TemplateLayerKind::Text(t) => {
+                                t.text_animation.is_some()
+                            }
+                            _ => false,
+                        }
+                })
+            }),
+        has_template_instance: layer.template_instance.is_some(),
         computed_bounds: bounds,
     }
 }
@@ -1031,6 +1060,25 @@ impl CompositionPlan {
         base_duration: f64,
         sample_time: Option<RationalTime>,
         schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
+    ) -> (String, String) {
+        self.build_video_filtergraph_with_overlays(
+            input_paths,
+            base_duration,
+            sample_time,
+            schedule,
+            &[],
+        )
+    }
+
+    /// Builds the filtergraph with materialized shared-renderer text overlays.
+    /// Rich items never fall back to `drawtext`; legacy items keep the legacy path.
+    pub fn build_video_filtergraph_with_overlays(
+        &self,
+        input_paths: &[PathBuf],
+        base_duration: f64,
+        sample_time: Option<RationalTime>,
+        schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
+        overlays: &[TextOverlayInput],
     ) -> (String, String) {
         let mut filter_complex = String::new();
 
@@ -1291,30 +1339,76 @@ impl CompositionPlan {
                             }
                         }
                         ItemKind::Text => {
-                            let text = layer.text_content.as_deref().unwrap_or("");
-                            let escaped_text = text
-                                .replace('\\', "\\\\")
-                                .replace('\'', "'\\''")
-                                .replace(':', "\\:");
-                            let (font_size, font_color, box_args, text_x, text_y) =
-                                text_filter_options(layer, pos_x, pos_y, 0.0);
-                            let font_arg = if cfg!(windows)
-                                && Path::new("C:/Windows/Fonts/arial.ttf").exists()
-                            {
-                                ":fontfile='C\\:/Windows/Fonts/arial.ttf'"
-                            } else {
-                                ""
-                            };
+                            if layer.text_rich.is_some() || layer.template_instance.is_some() {
+                                // Rich items are rendered by the shared renderer.
+                                // A missing materialized overlay means the layer is
+                                // invisible at this boundary; never fall back to
+                                // drawtext or a browser approximation.
+                                if let Some(overlay) =
+                                    overlays.iter().find(|o| o.item_id == layer.item_id)
+                                {
+                                    let input_idx = input_paths
+                                        .iter()
+                                        .position(|path| path == &overlay.path)
+                                        .unwrap_or(0);
+                                    let overlay_tag = format!("txt_ov_{}", video_overlay_idx);
+                                    let next_base = format!("v_over_{}", video_overlay_idx);
+                                    video_overlay_idx += 1;
+                                    let is_sequence = overlay.path.to_string_lossy().contains('%');
+                                    if is_sequence {
+                                        filter_complex.push_str(&format!(
+                                            "[{}:v]setpts=PTS-STARTPTS+{:.4}/TB,format=rgba[{}];[{}][{}]overlay=x=0:y=0:format=auto:enable='between(t,{:.4},{:.4})'[{}];",
+                                            input_idx,
+                                            start_bound,
+                                            overlay_tag,
+                                            current_base,
+                                            overlay_tag,
+                                            start_bound,
+                                            end_bound,
+                                            next_base
+                                        ));
+                                    } else {
+                                        filter_complex.push_str(&format!(
+                                            "[{}:v]format=rgba[{}];[{}][{}]overlay=x={}:y={}:format=auto:enable='between(t,{:.4},{:.4})'[{}];",
+                                            input_idx,
+                                            overlay_tag,
+                                            current_base,
+                                            overlay_tag,
+                                            overlay.roi[0],
+                                            overlay.roi[1],
+                                            start_bound,
+                                            end_bound,
+                                            next_base
+                                        ));
+                                    }
+                                    current_base = next_base;
+                                }
+                            } else if !layer.item_id.contains("__layer_") {
+                                let text = layer.text_content.as_deref().unwrap_or("");
+                                let escaped_text = text
+                                    .replace('\\', "\\\\")
+                                    .replace('\'', "'\\''")
+                                    .replace(':', "\\:");
+                                let (font_size, font_color, box_args, text_x, text_y) =
+                                    text_filter_options(layer, pos_x, pos_y, 0.0);
+                                let font_arg = if cfg!(windows)
+                                    && Path::new("C:/Windows/Fonts/arial.ttf").exists()
+                                {
+                                    ":fontfile='C\\:/Windows/Fonts/arial.ttf'"
+                                } else {
+                                    ""
+                                };
 
-                            let next_base = format!("v_over_{}", video_overlay_idx);
-                            video_overlay_idx += 1;
-                            filter_complex.push_str(&format!(
-                                "[{}]drawtext=text='{}':fontsize={}{}:fontcolor={}{}:x='{}':y='{}':enable='between(t,{:.4},{:.4})'[{}];",
-                                current_base, escaped_text, font_size, font_arg, font_color,
-                                box_args,
-                                text_x, text_y, start_bound, end_bound, next_base
-                            ));
-                            current_base = next_base;
+                                let next_base = format!("v_over_{}", video_overlay_idx);
+                                video_overlay_idx += 1;
+                                filter_complex.push_str(&format!(
+                                    "[{}]drawtext=text='{}':fontsize={}{}:fontcolor={}{}:x='{}':y='{}':enable='between(t,{:.4},{:.4})'[{}];",
+                                    current_base, escaped_text, font_size, font_arg, font_color,
+                                    box_args,
+                                    text_x, text_y, start_bound, end_bound, next_base
+                                ));
+                                current_base = next_base;
+                            }
                         }
                         _ => {}
                     }
@@ -1648,6 +1742,18 @@ impl CompositionPlan {
         video_codec: &str,
         schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
     ) -> (Vec<String>, String) {
+        self.to_ffmpeg_export_args_with_overlays(output_path, crf, video_codec, schedule, &[])
+    }
+
+    /// Projects export arguments including materialized rich-text overlay PNGs.
+    pub fn to_ffmpeg_export_args_with_overlays(
+        &self,
+        output_path: &Path,
+        crf: u32,
+        video_codec: &str,
+        schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
+        overlays: &[TextOverlayInput],
+    ) -> (Vec<String>, String) {
         let mut args: Vec<String> = Vec::new();
 
         // 1. Gather unique input assets
@@ -1666,9 +1772,20 @@ impl CompositionPlan {
                 }
             }
         }
+        for overlay in overlays {
+            if !input_paths.contains(&overlay.path) {
+                input_paths.push(overlay.path.clone());
+            }
+        }
 
         // Add inputs to command line
         for path in &input_paths {
+            if path.to_string_lossy().contains('%') {
+                args.push("-framerate".to_string());
+                args.push(format!("{:.4}", self.frame_rate.as_f64()));
+                args.push("-start_number".to_string());
+                args.push("0".to_string());
+            }
             args.push("-i".to_string());
             args.push(path.to_string_lossy().to_string());
         }
@@ -1689,8 +1806,13 @@ impl CompositionPlan {
 
         // 2. Build video filter chain:
         let duration_secs = self.duration.to_seconds();
-        let (mut filter_complex, current_base) =
-            self.build_video_filtergraph_with_schedule(&input_paths, duration_secs, None, schedule);
+        let (mut filter_complex, current_base) = self.build_video_filtergraph_with_overlays(
+            &input_paths,
+            duration_secs,
+            None,
+            schedule,
+            overlays,
+        );
 
         // Audio filter chain
         let mut audio_tags = Vec::new();
@@ -1818,6 +1940,16 @@ impl CompositionPlan {
         timestamp: RationalTime,
         output_path: &Path,
     ) -> (Vec<String>, String) {
+        self.to_ffmpeg_single_frame_args_with_overlays(timestamp, output_path, &[])
+    }
+
+    /// Single-frame projection including materialized rich-text overlay PNGs.
+    pub fn to_ffmpeg_single_frame_args_with_overlays(
+        &self,
+        timestamp: RationalTime,
+        output_path: &Path,
+        overlays: &[TextOverlayInput],
+    ) -> (Vec<String>, String) {
         let mut args: Vec<String> = Vec::new();
 
         // 1. Gather unique input assets
@@ -1829,8 +1961,19 @@ impl CompositionPlan {
                 }
             }
         }
+        for overlay in overlays {
+            if !input_paths.contains(&overlay.path) {
+                input_paths.push(overlay.path.clone());
+            }
+        }
 
         for path in &input_paths {
+            if path.to_string_lossy().contains('%') {
+                args.push("-framerate".to_string());
+                args.push(format!("{:.4}", self.frame_rate.as_f64()));
+                args.push("-start_number".to_string());
+                args.push("0".to_string());
+            }
             args.push("-i".to_string());
             args.push(path.to_string_lossy().to_string());
         }
@@ -1838,8 +1981,13 @@ impl CompositionPlan {
         let target_sec = timestamp.to_seconds();
         let duration_secs = (self.duration.to_seconds() + 1.0).max(target_sec + 1.0);
 
-        let (filter_complex, final_base) =
-            self.build_video_filtergraph(&input_paths, duration_secs, Some(timestamp));
+        let (filter_complex, final_base) = self.build_video_filtergraph_with_overlays(
+            &input_paths,
+            duration_secs,
+            Some(timestamp),
+            None,
+            overlays,
+        );
 
         args.push("-filter_complex".to_string());
         args.push(filter_complex.clone());
@@ -1920,6 +2068,10 @@ pub struct PreviewSampledLayer {
     pub text_rich: Option<TextRichStyle>,
     #[serde(default)]
     pub text_animation: Option<TextAnimation>,
+    #[serde(default)]
+    pub has_animation: bool,
+    #[serde(default)]
+    pub has_template_instance: bool,
     pub computed_bounds: Rect,
 }
 

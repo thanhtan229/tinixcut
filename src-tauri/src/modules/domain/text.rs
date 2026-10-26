@@ -689,6 +689,12 @@ pub struct TextAnimation {
     pub loop_mode: LoopMode,
     #[serde(default)]
     pub conflict_policy: DurationConflictPolicy,
+    /// Absolute source time where in-animation begins. Defaults to clip source start.
+    #[serde(default)]
+    pub phase_origin: Option<RationalTime>,
+    /// Absolute source time where out-animation completes. Defaults to clip source end.
+    #[serde(default)]
+    pub phase_end: Option<RationalTime>,
 }
 
 impl Default for TextAnimation {
@@ -704,11 +710,50 @@ impl Default for TextAnimation {
             out_anim: None,
             loop_mode: LoopMode::None,
             conflict_policy: DurationConflictPolicy::Reject,
+            phase_origin: None,
+            phase_end: None,
         }
     }
 }
 
 impl TextAnimation {
+    pub fn phase_duration(&self) -> Option<RationalTime> {
+        match (self.phase_origin, self.phase_end) {
+            (Some(origin), Some(end)) if end >= origin => Some(end - origin),
+            _ => None,
+        }
+    }
+
+    /// Fills missing lifecycle anchors from an item's current source extent.
+    /// Legacy (schema v10) animations deserialize with None; every editorial
+    /// command must establish anchors before mutating ranges.
+    pub fn ensure_phase_anchors(&mut self, origin: RationalTime, end: RationalTime) {
+        if self.phase_origin.is_none() {
+            self.phase_origin = Some(origin);
+        }
+        if self.phase_end.is_none() {
+            self.phase_end = Some(end);
+        }
+    }
+
+    /// Materializes anchors with the same effective extent the unanchored
+    /// evaluator used before Phase 31: origin at source zero and end at
+    /// origin + source duration. This preserves legacy appearance for clips
+    /// whose source range does not start at zero.
+    pub fn ensure_legacy_phase_anchors(&mut self, source_duration: RationalTime) {
+        if self.phase_origin.is_none() && self.phase_end.is_none() {
+            let origin = RationalTime::zero(source_duration.rate);
+            self.phase_origin = Some(origin);
+            self.phase_end = Some(source_duration);
+        } else {
+            let origin = self
+                .phase_origin
+                .unwrap_or(RationalTime::zero(source_duration.rate));
+            let end = self.phase_end.unwrap_or(source_duration);
+            self.ensure_phase_anchors(origin, end);
+        }
+    }
+
     pub fn validate_for_clip_duration(
         &self,
         clip_duration: RationalTime,
@@ -730,6 +775,22 @@ impl TextAnimation {
             return Err(DomainError::Validation(
                 "StaggerOrder::Random requires a seed".to_string(),
             ));
+        }
+        match (self.phase_origin, self.phase_end) {
+            (None, None) => {}
+            (Some(origin), Some(end)) => {
+                if end < origin {
+                    return Err(DomainError::Validation(
+                        "Animation phase_end must not precede phase_origin".to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(DomainError::Validation(
+                    "Animation phase_origin and phase_end must both be set or both be absent"
+                        .to_string(),
+                ));
+            }
         }
 
         let mut in_scaled = None;

@@ -6,7 +6,7 @@
 use crate::modules::domain::id::*;
 use crate::modules::domain::time::{RationalTime, TimeRange};
 use crate::modules::domain::{
-    grapheme_count, AssetDimensions, AudioCrossfade, ClipSpeed, CommandLedgerEntry, Crop,
+    grapheme_count, Asset, AssetDimensions, AudioCrossfade, ClipSpeed, CommandLedgerEntry, Crop,
     CutTransition, DomainError, FontReference, ItemKind, Keyframe, KeyframeEasing,
     KeyframeProperty, MediaKind, PlacementMode, Project, ProjectSettings, RichTextSpan,
     TextAnimation, TextBackgroundBox, TextFill, TextLayout, TextRichStyle, TextShadow, TextStroke,
@@ -247,6 +247,52 @@ pub enum CommandOperation {
         animation: Option<TextAnimation>,
     },
     ClipTextRichReset {
+        item_id: String,
+    },
+    TemplateApply {
+        item_id: String,
+        template_id: String,
+        template_version: u32,
+        initial_parameters:
+            Option<HashMap<String, crate::modules::domain::template::TemplateParameterValue>>,
+    },
+    TemplateTrackApply {
+        track_id: String,
+        template_id: String,
+        template_version: u32,
+        initial_parameters:
+            Option<HashMap<String, crate::modules::domain::template::TemplateParameterValue>>,
+    },
+    TemplateLayerAdd {
+        item_id: String,
+        layer: crate::modules::domain::template::TemplateLayer,
+    },
+    TemplateLayerRemove {
+        item_id: String,
+        layer_id: String,
+    },
+    TemplateLayerReorder {
+        item_id: String,
+        layer_ids: Vec<String>,
+    },
+    TemplateLayerUpdate {
+        item_id: String,
+        layer_id: String,
+        layer: crate::modules::domain::template::TemplateLayer,
+    },
+    TemplateParameterSet {
+        item_id: String,
+        parameter_key: String,
+        value: crate::modules::domain::template::TemplateParameterValue,
+    },
+    TemplateParametersBatchSet {
+        item_id: String,
+        parameters: HashMap<String, crate::modules::domain::template::TemplateParameterValue>,
+    },
+    TemplateReset {
+        item_id: String,
+    },
+    TemplateDetach {
         item_id: String,
     },
     ClipAudioFadeSet {
@@ -1339,6 +1385,134 @@ impl CommandService {
         Ok(diff_changes)
     }
 
+    fn apply_template_parameter_binding(
+        item: &mut TimelineItem,
+        definition: &crate::modules::domain::template::TemplateDefinition,
+        param_key: &str,
+        param_val: &crate::modules::domain::template::TemplateParameterValue,
+    ) {
+        let primary_layer_id = item.template_instance.as_ref().and_then(|inst| {
+            inst.layers.iter().find_map(|l| {
+                if let crate::modules::domain::template::TemplateLayerKind::Text(t) = &l.kind {
+                    if t.is_primary {
+                        Some(l.layer_id.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        });
+
+        for binding in &definition.bindings {
+            if binding.parameter_key == param_key {
+                let is_primary = primary_layer_id
+                    .as_ref()
+                    .is_some_and(|pid| *pid == binding.target_layer_id);
+
+                if is_primary {
+                    match binding.target_property {
+                        crate::modules::domain::template::TemplatePropertyPath::TextContent => {
+                            if let crate::modules::domain::template::TemplateParameterValue::Text(s) = param_val {
+                                let new_count = grapheme_count(s) as u32;
+                                item.text_content = Some(s.clone());
+                                if let Some(ref mut rich) = item.text_rich {
+                                    for span in &mut rich.spans {
+                                        span.start = span.start.min(new_count);
+                                        span.end = span.end.min(new_count);
+                                    }
+                                    rich.spans.retain(|s| s.start < s.end);
+                                }
+                            }
+                        }
+                        crate::modules::domain::template::TemplatePropertyPath::FontColor => {
+                            if let crate::modules::domain::template::TemplateParameterValue::Color(c) = param_val {
+                                if item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+                                if let Some(style) = &mut item.text_style {
+                                    style.font_color = c.clone();
+                                }
+                                if let Some(rich) = &mut item.text_rich {
+                                    rich.fill = TextFill::Solid { color: c.clone() };
+                                }
+                            }
+                        }
+                        crate::modules::domain::template::TemplatePropertyPath::FontSize => {
+                            if let crate::modules::domain::template::TemplateParameterValue::Number(n) = param_val {
+                                let size = (*n as f32).max(1.0);
+                                if item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+                                if let Some(style) = &mut item.text_style {
+                                    style.font_size = size;
+                                }
+                                if let Some(rich) = &mut item.text_rich {
+                                    rich.font_size = Some(size);
+                                }
+                            }
+                        }
+                        crate::modules::domain::template::TemplatePropertyPath::FontFamily => {
+                            if let crate::modules::domain::template::TemplateParameterValue::Text(f) = param_val {
+                                if item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+                                if let Some(style) = &mut item.text_style {
+                                    style.font_family = f.clone();
+                                }
+                                if let Some(rich) = &mut item.text_rich {
+                                    rich.font = Some(FontReference {
+                                        family: f.clone(),
+                                        weight: 700,
+                                        style: crate::modules::domain::text::FontStyle::Normal,
+                                        asset_id: None,
+                                    });
+                                }
+                            }
+                        }
+                        crate::modules::domain::template::TemplatePropertyPath::BackgroundColor => {
+                            if let crate::modules::domain::template::TemplateParameterValue::Color(c) = param_val {
+                                if item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+                                if let Some(style) = &mut item.text_style {
+                                    style.background_color = Some(c.clone());
+                                    style.background_opacity = 1.0;
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(inst) = &mut item.template_instance {
+                                if let Some(target_layer) = inst.layers.iter_mut().find(|l| l.layer_id == binding.target_layer_id) {
+                                    crate::modules::domain::template::apply_property_to_layer(
+                                        target_layer,
+                                        binding.target_property,
+                                        param_val,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if let Some(inst) = &mut item.template_instance {
+                        if let Some(target_layer) = inst
+                            .layers
+                            .iter_mut()
+                            .find(|l| l.layer_id == binding.target_layer_id)
+                        {
+                            crate::modules::domain::template::apply_property_to_layer(
+                                target_layer,
+                                binding.target_property,
+                                param_val,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn apply_single_operation_to_project(
         project: &mut Project,
         operation: &CommandOperation,
@@ -1494,6 +1668,26 @@ impl CommandService {
                 new_timeline_range,
                 new_source_range,
             } => {
+                // Trim duration policy must be checked against the resulting clip
+                // before any transition reconciliation mutates project state.
+                if let Some(item) = project
+                    .tracks
+                    .iter()
+                    .find_map(|track| track.find_item(item_id))
+                {
+                    if let Some(anim) = &item.text_animation {
+                        if anim.conflict_policy
+                            == crate::modules::domain::text::DurationConflictPolicy::Reject
+                        {
+                            anim.validate_for_clip_duration(new_timeline_range.duration)
+                                .map_err(|error| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: error.to_string(),
+                                })?;
+                        }
+                    }
+                }
+
                 Self::reconcile_dependent_transitions_before_trim(
                     project,
                     item_id,
@@ -1512,6 +1706,31 @@ impl CommandService {
                         if !h.is_same_time(&RationalTime::zero(h.rate)) {
                             for kf in &mut item.keyframes {
                                 kf.offset = kf.offset - h;
+                            }
+                        }
+
+                        // Editorial trim must preserve existing phase endpoints (in/out stay at original source times)
+                        let old_source_duration = item.source_range.duration;
+                        if let Some(ref mut anim) = item.text_animation {
+                            // Preserve the pre-trim effective extent even for the
+                            // legacy unanchored case; rejection is enforced above.
+                            if anim.phase_origin.is_none() && anim.phase_end.is_none() {
+                                anim.ensure_legacy_phase_anchors(old_source_duration);
+                            }
+                        }
+                        if let Some(ref mut inst) = item.template_instance {
+                            for layer in &mut inst.layers {
+                                if let Some(ref mut anim) = layer.motion {
+                                    anim.ensure_legacy_phase_anchors(old_source_duration);
+                                }
+                                if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                    ref mut t,
+                                ) = layer.kind
+                                {
+                                    if let Some(ref mut anim) = t.text_animation {
+                                        anim.ensure_legacy_phase_anchors(old_source_duration);
+                                    }
+                                }
                             }
                         }
 
@@ -1840,12 +2059,50 @@ impl CommandService {
                         );
                         right_item.keyframes = right_keyframes;
 
+                        let orig_source_duration = item.source_range.duration;
                         let left_item = &mut track.items[pos];
                         left_item.timeline_range =
                             TimeRange::new(left_item.timeline_range.start, left_dur);
                         left_item.source_range =
                             TimeRange::new(left_item.source_range.start, left_source_duration);
                         left_item.keyframes = left_keyframes;
+
+                        if let Some(ref mut anim) = left_item.text_animation {
+                            anim.ensure_legacy_phase_anchors(orig_source_duration);
+                        }
+                        if let Some(ref mut anim) = right_item.text_animation {
+                            anim.ensure_legacy_phase_anchors(orig_source_duration);
+                        }
+                        if let Some(ref mut inst) = left_item.template_instance {
+                            for layer in &mut inst.layers {
+                                if let Some(ref mut anim) = layer.motion {
+                                    anim.ensure_legacy_phase_anchors(orig_source_duration);
+                                }
+                                if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                    ref mut t,
+                                ) = layer.kind
+                                {
+                                    if let Some(ref mut anim) = t.text_animation {
+                                        anim.ensure_legacy_phase_anchors(orig_source_duration);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ref mut inst) = right_item.template_instance {
+                            for layer in &mut inst.layers {
+                                if let Some(ref mut anim) = layer.motion {
+                                    anim.ensure_legacy_phase_anchors(orig_source_duration);
+                                }
+                                if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                    ref mut t,
+                                ) = layer.kind
+                                {
+                                    if let Some(ref mut anim) = t.text_animation {
+                                        anim.ensure_legacy_phase_anchors(orig_source_duration);
+                                    }
+                                }
+                            }
+                        }
 
                         left_item.validate()?;
                         right_item.validate()?;
@@ -2194,6 +2451,44 @@ impl CommandService {
                             item.text_rich = Some(candidate_rich);
                         }
                         item.text_content = Some(text.clone());
+                        if let Some(ref mut inst) = item.template_instance {
+                            let primary_layer_id = inst.layers.iter_mut().find_map(|l| {
+                                if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                    ref mut t,
+                                ) = l.kind
+                                {
+                                    if t.is_primary {
+                                        t.text_content = None;
+                                        t.text_rich = None;
+                                        t.text_animation = None;
+                                        t.text_style = None;
+                                        Some(l.layer_id.clone())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            });
+
+                            if let Some(prim_id) = primary_layer_id {
+                                let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+                                if let Some(def) =
+                                    catalog.get(&inst.template_id, inst.template_version)
+                                {
+                                    for b in &def.bindings {
+                                        if b.target_property == crate::modules::domain::template::TemplatePropertyPath::TextContent
+                                            && b.target_layer_id == prim_id
+                                        {
+                                            inst.parameters.insert(
+                                                b.parameter_key.clone(),
+                                                crate::modules::domain::template::TemplateParameterValue::Text(text.clone()),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         found = true;
                         break;
                     }
@@ -2629,14 +2924,24 @@ impl CommandService {
                                 ),
                             });
                         }
-                        if let Some(ref anim) = animation {
-                            anim.validate_for_clip_duration(item.timeline_range.duration)
+                        let mut resolved_animation = animation.clone();
+                        if let Some(ref mut anim) = resolved_animation {
+                            if anim.phase_origin.is_none() && anim.phase_end.is_none() {
+                                anim.ensure_phase_anchors(
+                                    item.source_range.start,
+                                    item.source_range.end(),
+                                );
+                            }
+                            let effective_duration = anim
+                                .phase_duration()
+                                .unwrap_or(item.timeline_range.duration);
+                            anim.validate_for_clip_duration(effective_duration)
                                 .map_err(|error| CommandError::OperationValidationFailed {
                                     operation_id: op_id.to_string(),
                                     message: error.to_string(),
                                 })?;
                         }
-                        item.text_animation = animation.clone();
+                        item.text_animation = resolved_animation;
                         found = true;
                         break;
                     }
@@ -2676,6 +2981,924 @@ impl CommandService {
                         message: format!("Item '{}' not found", item_id),
                     });
                 }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateApply {
+                item_id,
+                template_id,
+                template_version,
+                initial_parameters,
+            } => {
+                let definition =
+                    crate::modules::templates::catalog::TemplateCatalog::default_catalog()
+                        .get(template_id, *template_version)
+                        .ok_or_else(|| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Template '{}' version {} not found in catalog",
+                                template_id, template_version
+                            ),
+                        })?;
+
+                register_template_resources(project, &definition)?;
+
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Text {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' is not a text item and cannot receive a template",
+                                    item_id
+                                ),
+                            });
+                        }
+
+                        let mut param_map = HashMap::new();
+                        for p in &definition.parameters {
+                            param_map.insert(p.key.clone(), p.default_value.clone());
+                        }
+                        if let Some(initial) = initial_parameters {
+                            for (k, v) in initial {
+                                let p_def = definition
+                                    .parameters
+                                    .iter()
+                                    .find(|p| p.key == *k)
+                                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                                        operation_id: op_id.to_string(),
+                                        message: format!(
+                                            "Unknown parameter key '{}' in template '{}'",
+                                            k, template_id
+                                        ),
+                                    })?;
+                                if !v.matches_type(&p_def.param_type) {
+                                    return Err(CommandError::OperationValidationFailed {
+                                        operation_id: op_id.to_string(),
+                                        message: format!("Invalid value {:?} for parameter '{}' in template '{}'", v, k, template_id),
+                                    });
+                                }
+                                param_map.insert(k.clone(), v.clone());
+                            }
+                        }
+
+                        let mut resolved_layers = definition.resolve_instance_layers(&param_map);
+
+                        // Primary slot reuses item.text_content / text_rich / text_animation
+                        if let Some(primary_layer) = resolved_layers.iter_mut().find(|l| {
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(t) =
+                                &l.kind
+                            {
+                                t.is_primary
+                            } else {
+                                false
+                            }
+                        }) {
+                            let prim_layer_id = primary_layer.layer_id.clone();
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                ref mut t,
+                            ) = primary_layer.kind
+                            {
+                                let existing_opt = item.text_content.clone();
+                                let has_init_text = definition.bindings.iter().any(|b| {
+                                    b.target_layer_id == prim_layer_id
+                                        && b.target_property
+                                            == crate::modules::domain::template::TemplatePropertyPath::TextContent
+                                        && initial_parameters
+                                            .as_ref()
+                                            .and_then(|p| p.get(&b.parameter_key))
+                                            .is_some()
+                                });
+
+                                if let Some(existing_text) = existing_opt {
+                                    if !existing_text.trim().is_empty() && !has_init_text {
+                                        // Preserve existing item text and sync into parameter map
+                                        for b in &definition.bindings {
+                                            if b.target_layer_id == prim_layer_id
+                                                && b.target_property
+                                                    == crate::modules::domain::template::TemplatePropertyPath::TextContent
+                                            {
+                                                param_map.insert(
+                                                    b.parameter_key.clone(),
+                                                    crate::modules::domain::template::TemplateParameterValue::Text(
+                                                        existing_text.clone(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    } else if let Some(txt) = &t.text_content {
+                                        item.text_content = Some(txt.clone());
+                                    }
+                                } else if let Some(txt) = &t.text_content {
+                                    item.text_content = Some(txt.clone());
+                                }
+
+                                if t.text_rich.is_some() {
+                                    item.text_rich = t.text_rich.clone();
+                                }
+                                if t.text_animation.is_some() {
+                                    item.text_animation = t.text_animation.clone();
+                                }
+                                if t.text_style.is_some() {
+                                    item.text_style = t.text_style.clone();
+                                }
+                                if item.text_rich.is_none() && item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+
+                                // Clear duplicate authority from primary layer
+                                t.text_content = None;
+                                t.text_rich = None;
+                                t.text_animation = None;
+                                t.text_style = None;
+                            }
+                        }
+
+                        item.template_instance =
+                            Some(crate::modules::domain::template::TemplateInstance {
+                                template_id: definition.id.clone(),
+                                template_version: definition.version,
+                                layers: resolved_layers,
+                                parameters: param_map.clone(),
+                                initial_parameters: param_map,
+                                overrides: Vec::new(),
+                                responsive_policy: Some(definition.responsive_policy.clone()),
+                            });
+                        item.text_template = Some(TextTemplateReference {
+                            template_id: definition.id.clone(),
+                            template_version: definition.version,
+                        });
+
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateTrackApply {
+                track_id,
+                template_id,
+                template_version,
+                initial_parameters,
+            } => {
+                let definition =
+                    crate::modules::templates::catalog::TemplateCatalog::default_catalog()
+                        .get(template_id, *template_version)
+                        .ok_or_else(|| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Template '{}' version {} not found in catalog",
+                                template_id, template_version
+                            ),
+                        })?;
+
+                register_template_resources(project, &definition)?;
+
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+
+                let mut updated_count = 0;
+                for item in &mut track.items {
+                    if item.kind == ItemKind::Text {
+                        let mut param_map = HashMap::new();
+                        for p in &definition.parameters {
+                            param_map.insert(p.key.clone(), p.default_value.clone());
+                        }
+                        if let Some(initial) = initial_parameters {
+                            for (k, v) in initial {
+                                let p_def = definition
+                                    .parameters
+                                    .iter()
+                                    .find(|p| p.key == *k)
+                                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                                        operation_id: op_id.to_string(),
+                                        message: format!(
+                                            "Unknown parameter key '{}' in template '{}'",
+                                            k, template_id
+                                        ),
+                                    })?;
+                                if !v.matches_type(&p_def.param_type) {
+                                    return Err(CommandError::OperationValidationFailed {
+                                        operation_id: op_id.to_string(),
+                                        message: format!("Invalid value {:?} for parameter '{}' in template '{}'", v, k, template_id),
+                                    });
+                                }
+                                param_map.insert(k.clone(), v.clone());
+                            }
+                        }
+
+                        let mut resolved_layers = definition.resolve_instance_layers(&param_map);
+
+                        if let Some(primary_layer) = resolved_layers.iter_mut().find(|l| {
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(t) =
+                                &l.kind
+                            {
+                                t.is_primary
+                            } else {
+                                false
+                            }
+                        }) {
+                            let prim_layer_id = primary_layer.layer_id.clone();
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                ref mut t,
+                            ) = primary_layer.kind
+                            {
+                                let existing_opt = item.text_content.clone();
+                                let has_init_text = definition.bindings.iter().any(|b| {
+                                    b.target_layer_id == prim_layer_id
+                                        && b.target_property
+                                            == crate::modules::domain::template::TemplatePropertyPath::TextContent
+                                        && initial_parameters
+                                            .as_ref()
+                                            .and_then(|p| p.get(&b.parameter_key))
+                                            .is_some()
+                                });
+
+                                if let Some(existing_text) = existing_opt {
+                                    if !existing_text.trim().is_empty() && !has_init_text {
+                                        // Preserve existing item text and sync into parameter map
+                                        for b in &definition.bindings {
+                                            if b.target_layer_id == prim_layer_id
+                                                && b.target_property
+                                                    == crate::modules::domain::template::TemplatePropertyPath::TextContent
+                                            {
+                                                param_map.insert(
+                                                    b.parameter_key.clone(),
+                                                    crate::modules::domain::template::TemplateParameterValue::Text(
+                                                        existing_text.clone(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    } else if let Some(txt) = &t.text_content {
+                                        item.text_content = Some(txt.clone());
+                                    }
+                                } else if let Some(txt) = &t.text_content {
+                                    item.text_content = Some(txt.clone());
+                                }
+
+                                if t.text_rich.is_some() {
+                                    item.text_rich = t.text_rich.clone();
+                                }
+                                if t.text_animation.is_some() {
+                                    item.text_animation = t.text_animation.clone();
+                                }
+                                if t.text_style.is_some() {
+                                    item.text_style = t.text_style.clone();
+                                }
+                                if item.text_rich.is_none() && item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+
+                                // Clear duplicate authority from primary layer
+                                t.text_content = None;
+                                t.text_rich = None;
+                                t.text_animation = None;
+                                t.text_style = None;
+                            }
+                        }
+
+                        item.template_instance =
+                            Some(crate::modules::domain::template::TemplateInstance {
+                                template_id: definition.id.clone(),
+                                template_version: definition.version,
+                                layers: resolved_layers,
+                                parameters: param_map.clone(),
+                                initial_parameters: param_map,
+                                overrides: Vec::new(),
+                                responsive_policy: Some(definition.responsive_policy.clone()),
+                            });
+                        item.text_template = Some(TextTemplateReference {
+                            template_id: definition.id.clone(),
+                            template_version: definition.version,
+                        });
+
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+                        updated_count += 1;
+                    }
+                }
+
+                if updated_count == 0 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Track '{}' does not contain text items to apply a template",
+                            track_id
+                        ),
+                    });
+                }
+
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateLayerAdd { item_id, layer } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let instance = item.template_instance.as_mut().ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' has no active template instance",
+                                    item_id
+                                ),
+                            }
+                        })?;
+
+                        if instance.layers.len()
+                            >= crate::modules::domain::template::MAX_TEMPLATE_LAYERS
+                        {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Cannot add layer: maximum layer limit ({}) reached",
+                                    crate::modules::domain::template::MAX_TEMPLATE_LAYERS
+                                ),
+                            });
+                        }
+
+                        if instance.layers.iter().any(|l| l.layer_id == layer.layer_id) {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Layer ID '{}' already exists in template",
+                                    layer.layer_id
+                                ),
+                            });
+                        }
+
+                        layer
+                            .validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        instance.layers.push(layer.clone());
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateLayerRemove { item_id, layer_id } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let instance = item.template_instance.as_mut().ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' has no active template instance",
+                                    item_id
+                                ),
+                            }
+                        })?;
+
+                        let pos = instance
+                            .layers
+                            .iter()
+                            .position(|l| l.layer_id == *layer_id)
+                            .ok_or_else(|| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Layer '{}' not found in template instance",
+                                    layer_id
+                                ),
+                            })?;
+
+                        instance.layers.remove(pos);
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateLayerReorder { item_id, layer_ids } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let instance = item.template_instance.as_mut().ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' has no active template instance",
+                                    item_id
+                                ),
+                            }
+                        })?;
+
+                        if instance.layers.len() != layer_ids.len() {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Reorder layer count ({}) does not match existing layer count ({})",
+                                    layer_ids.len(),
+                                    instance.layers.len()
+                                ),
+                            });
+                        }
+
+                        let mut reordered = Vec::with_capacity(layer_ids.len());
+                        for (idx, id) in layer_ids.iter().enumerate() {
+                            let mut layer = instance
+                                .layers
+                                .iter()
+                                .find(|l| l.layer_id == *id)
+                                .cloned()
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Layer '{}' not found in template instance",
+                                        id
+                                    ),
+                                })?;
+                            layer.z_index = idx as i32;
+                            reordered.push(layer);
+                        }
+
+                        instance.layers = reordered;
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateLayerUpdate {
+                item_id,
+                layer_id,
+                layer,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let instance = item.template_instance.as_mut().ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Item '{}' has no active template instance",
+                                    item_id
+                                ),
+                            }
+                        })?;
+
+                        let pos = instance
+                            .layers
+                            .iter()
+                            .position(|l| l.layer_id == *layer_id)
+                            .ok_or_else(|| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Layer '{}' not found in template instance",
+                                    layer_id
+                                ),
+                            })?;
+
+                        layer
+                            .validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        if layer.layer_id != *layer_id {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Layer ID mismatch: operation targets '{}' but layer has '{}'",
+                                    layer_id, layer.layer_id
+                                ),
+                            });
+                        }
+
+                        let mut stored_layer = layer.clone();
+                        if let crate::modules::domain::template::TemplateLayerKind::Text(
+                            ref mut t,
+                        ) = stored_layer.kind
+                        {
+                            if t.is_primary {
+                                if let Some(txt) = &t.text_content {
+                                    let new_count = grapheme_count(txt) as u32;
+                                    item.text_content = Some(txt.clone());
+                                    if let Some(ref mut rich) = item.text_rich {
+                                        for span in &mut rich.spans {
+                                            span.start = span.start.min(new_count);
+                                            span.end = span.end.min(new_count);
+                                        }
+                                        rich.spans.retain(|s| s.start < s.end);
+                                    }
+                                }
+                                if t.text_rich.is_some() {
+                                    item.text_rich = t.text_rich.clone();
+                                }
+                                if t.text_animation.is_some() {
+                                    item.text_animation = t.text_animation.clone();
+                                }
+                                if t.text_style.is_some() {
+                                    item.text_style = t.text_style.clone();
+                                }
+                                t.text_content = None;
+                                t.text_rich = None;
+                                t.text_animation = None;
+                                t.text_style = None;
+                            }
+                        }
+
+                        instance.layers[pos] = stored_layer;
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateParameterSet {
+                item_id,
+                parameter_key,
+                value,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let (template_id, template_version) = {
+                            let instance = item.template_instance.as_ref().ok_or_else(|| {
+                                CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Item '{}' has no active template instance",
+                                        item_id
+                                    ),
+                                }
+                            })?;
+                            (instance.template_id.clone(), instance.template_version)
+                        };
+
+                        let definition =
+                            crate::modules::templates::catalog::TemplateCatalog::default_catalog()
+                                .get(&template_id, template_version)
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Template '{}' v{} definition unavailable",
+                                        template_id, template_version
+                                    ),
+                                })?;
+
+                        let param_def = definition
+                            .parameters
+                            .iter()
+                            .find(|p| p.key == *parameter_key)
+                            .ok_or_else(|| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Unknown parameter '{}' for template '{}'",
+                                    parameter_key, template_id
+                                ),
+                            })?;
+
+                        if !value.matches_type(&param_def.param_type) {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Value for parameter '{}' does not match declared type",
+                                    parameter_key
+                                ),
+                            });
+                        }
+
+                        let instance = item.template_instance.as_mut().unwrap();
+                        instance
+                            .parameters
+                            .insert(parameter_key.clone(), value.clone());
+
+                        Self::apply_template_parameter_binding(
+                            item,
+                            &definition,
+                            parameter_key,
+                            value,
+                        );
+
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateParametersBatchSet {
+                item_id,
+                parameters,
+            } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let (template_id, template_version) = {
+                            let instance = item.template_instance.as_ref().ok_or_else(|| {
+                                CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Item '{}' has no active template instance",
+                                        item_id
+                                    ),
+                                }
+                            })?;
+                            (instance.template_id.clone(), instance.template_version)
+                        };
+
+                        let definition =
+                            crate::modules::templates::catalog::TemplateCatalog::default_catalog()
+                                .get(&template_id, template_version)
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Template '{}' v{} definition unavailable",
+                                        template_id, template_version
+                                    ),
+                                })?;
+
+                        for (key, val) in parameters {
+                            let param_def = definition
+                                .parameters
+                                .iter()
+                                .find(|p| p.key == *key)
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Unknown parameter '{}' for template '{}'",
+                                        key, template_id
+                                    ),
+                                })?;
+                            if !val.matches_type(&param_def.param_type) {
+                                return Err(CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Value for parameter '{}' does not match declared type",
+                                        key
+                                    ),
+                                });
+                            }
+                        }
+
+                        let instance = item.template_instance.as_mut().unwrap();
+                        for (key, val) in parameters {
+                            instance.parameters.insert(key.clone(), val.clone());
+                        }
+                        for (key, val) in parameters {
+                            Self::apply_template_parameter_binding(item, &definition, key, val);
+                        }
+
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateReset { item_id } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        let (template_id, template_version) = {
+                            let instance = item.template_instance.as_ref().ok_or_else(|| {
+                                CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                        "Item '{}' has no active template instance",
+                                        item_id
+                                    ),
+                                }
+                            })?;
+                            (instance.template_id.clone(), instance.template_version)
+                        };
+
+                        let definition =
+                            crate::modules::templates::catalog::TemplateCatalog::default_catalog()
+                                .get(&template_id, template_version)
+                                .ok_or_else(|| CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: format!(
+                                    "Cannot reset: template '{}' version {} unavailable in catalog",
+                                    template_id, template_version
+                                ),
+                                })?;
+
+                        let mut default_params = HashMap::new();
+                        for p in &definition.parameters {
+                            default_params.insert(p.key.clone(), p.default_value.clone());
+                        }
+
+                        let mut resolved_layers =
+                            definition.resolve_instance_layers(&default_params);
+                        if let Some(primary_layer) = resolved_layers.iter_mut().find(|l| {
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(t) =
+                                &l.kind
+                            {
+                                t.is_primary
+                            } else {
+                                false
+                            }
+                        }) {
+                            if let crate::modules::domain::template::TemplateLayerKind::Text(
+                                ref mut t,
+                            ) = primary_layer.kind
+                            {
+                                if t.text_content.is_some() {
+                                    item.text_content = t.text_content.clone();
+                                }
+                                if t.text_rich.is_some() {
+                                    item.text_rich = t.text_rich.clone();
+                                }
+                                if t.text_animation.is_some() {
+                                    item.text_animation = t.text_animation.clone();
+                                }
+                                if t.text_style.is_some() {
+                                    item.text_style = t.text_style.clone();
+                                }
+                                if item.text_rich.is_none() && item.text_style.is_none() {
+                                    item.text_style = Some(TextStyle::default());
+                                }
+                                t.text_content = None;
+                                t.text_rich = None;
+                                t.text_animation = None;
+                                t.text_style = None;
+                            }
+                        }
+
+                        let instance = item.template_instance.as_mut().unwrap();
+                        instance.layers = resolved_layers;
+                        instance.parameters = default_params;
+                        instance.overrides.clear();
+
+                        item.validate()
+                            .map_err(|e| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: e.to_string(),
+                            })?;
+
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::TemplateDetach { item_id } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        item.template_instance = None;
+                        item.text_template = None;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+
                 Ok(Some(DiffChange::ClipModified {
                     item_id: item_id.clone(),
                 }))
@@ -4037,6 +5260,84 @@ impl CommandService {
             });
         }
     }
+}
+
+fn register_template_resources(
+    project: &mut Project,
+    definition: &crate::modules::domain::template::TemplateDefinition,
+) -> Result<(), CommandError> {
+    if definition.resources.resources.is_empty() {
+        return Ok(());
+    }
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+    for resource in &definition.resources.resources {
+        if let Some(existing) = project
+            .assets
+            .iter()
+            .find(|asset| asset.asset_id == resource.resource_id)
+            .cloned()
+        {
+            let existing_path = std::path::Path::new(&existing.path);
+            if !existing_path.is_file() {
+                if resource.required {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: "template_resources".to_string(),
+                        message: format!(
+                            "Existing asset '{}' for template resource '{}' is missing on disk; relink before applying",
+                            resource.resource_id, resource.file_name
+                        ),
+                    });
+                }
+                continue;
+            }
+            let bytes = std::fs::read(existing_path).map_err(|error| {
+                CommandError::OperationValidationFailed {
+                    operation_id: "template_resources".to_string(),
+                    message: format!(
+                        "Failed to read existing asset '{}' for resource verification: {error}",
+                        existing.path
+                    ),
+                }
+            })?;
+            let actual = crate::modules::media::text_renderer_poc::compute_sha256_hex(&bytes);
+            if !actual.eq_ignore_ascii_case(&resource.sha256) {
+                return Err(CommandError::OperationValidationFailed {
+                    operation_id: "template_resources".to_string(),
+                    message: format!(
+                        "Template resource id '{}' collides with an existing project asset whose content does not match the pack SHA-256",
+                        resource.resource_id
+                    ),
+                });
+            }
+            continue;
+        }
+        let path = catalog.resources_dir().join(&resource.file_name);
+        if !path.is_file() {
+            if resource.required {
+                return Err(CommandError::OperationValidationFailed {
+                    operation_id: "template_resources".to_string(),
+                    message: format!(
+                        "Required template resource '{}' is missing from the local catalog",
+                        resource.file_name
+                    ),
+                });
+            }
+            continue;
+        }
+        let file_size = std::fs::metadata(&path)
+            .map(|m| m.len())
+            .unwrap_or(resource.byte_size);
+        project.assets.push(Asset {
+            asset_id: resource.resource_id.clone(),
+            name: resource.file_name.clone(),
+            path: path.to_string_lossy().into_owned(),
+            media_kind: MediaKind::Image,
+            duration: None,
+            file_size,
+            dimensions: None,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

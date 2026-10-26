@@ -252,6 +252,23 @@ impl RgbaBuffer {
                 return Err("Truncated PNG chunk".to_string());
             }
             let chunk_data = &png[data_start..data_end];
+            let chunk_crc = u32::from_be_bytes([
+                png[data_end],
+                png[data_end + 1],
+                png[data_end + 2],
+                png[data_end + 3],
+            ]);
+            let mut ctype_arr = [0u8; 4];
+            ctype_arr.copy_from_slice(ctype);
+            let expected_crc = png_chunk_crc(&ctype_arr, chunk_data);
+            if chunk_crc != expected_crc {
+                return Err(format!(
+                    "PNG chunk {} CRC mismatch: got {:08X}, expected {:08X}",
+                    String::from_utf8_lossy(ctype),
+                    chunk_crc,
+                    expected_crc
+                ));
+            }
             if ctype == b"IHDR" && len >= 8 {
                 width = u32::from_be_bytes([
                     chunk_data[0],
@@ -409,27 +426,51 @@ fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(chunk_type);
     out.extend_from_slice(data);
-    let mut crc = crc32_fast(chunk_type);
-    crc = crc32_update(crc, data);
+    let crc = png_chunk_crc(chunk_type, data);
     out.extend_from_slice(&crc.to_be_bytes());
 }
 
-fn crc32_fast(data: &[u8]) -> u32 {
-    crc32_update(0xFFFFFFFF, data)
+/// Standard PNG chunk CRC-32 computed over chunk_type followed by data.
+pub fn png_chunk_crc(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc = 0xFFFFFFFFu32;
+    crc = crc32_update(crc, chunk_type);
+    crc = crc32_update(crc, data);
+    !crc
 }
 
-fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
-    for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            if (crc & 1) != 0 {
-                crc = (crc >> 1) ^ 0xEDB88320;
+/// Standard IEEE 802.3 CRC-32 of a byte slice.
+pub fn crc32_fast(data: &[u8]) -> u32 {
+    !crc32_update(0xFFFFFFFF, data)
+}
+
+const fn build_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut index = 0usize;
+    while index < 256 {
+        let mut value = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            value = if (value & 1) != 0 {
+                (value >> 1) ^ 0xEDB88320
             } else {
-                crc >>= 1;
-            }
+                value >> 1
+            };
+            bit += 1;
         }
+        table[index] = value;
+        index += 1;
     }
-    !crc
+    table
+}
+
+static CRC32_TABLE: [u32; 256] = build_crc32_table();
+
+/// Updates a running CRC32 accumulator across byte slices without inverting bits.
+pub fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    for &byte in data {
+        crc = CRC32_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc
 }
 
 fn zlib_compress_store(data: &[u8]) -> Vec<u8> {
@@ -451,9 +492,13 @@ fn zlib_compress_store(data: &[u8]) -> Vec<u8> {
 
     let mut s1 = 1u32;
     let mut s2 = 0u32;
-    for &b in data {
-        s1 = (s1 + b as u32) % 65521;
-        s2 = (s2 + s1) % 65521;
+    for chunk in data.chunks(5_552) {
+        for &byte in chunk {
+            s1 += byte as u32;
+            s2 += s1;
+        }
+        s1 %= 65521;
+        s2 %= 65521;
     }
     let adler = (s2 << 16) | s1;
     out.extend_from_slice(&adler.to_be_bytes());

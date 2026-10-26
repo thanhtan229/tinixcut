@@ -32,6 +32,8 @@ export interface PreviewSampledLayer {
   text_template?: TextTemplateReference | null;
   text_rich?: TextRichStyle | null;
   text_animation?: TextAnimation | null;
+  has_animation?: boolean;
+  has_template_instance?: boolean;
   computed_bounds: {
     x: number;
     y: number;
@@ -63,6 +65,25 @@ export interface PreviewFrameState {
   active_layers: PreviewSampledLayer[];
   active_audio: PreviewSampledAudio[];
   transition_groups?: PreviewTransitionGroup[];
+}
+
+export interface PreviewTextOverlayDiagnostics {
+  fontFamily: string;
+  fontSha256: string;
+  fontOrigin: string;
+  missingGlyphs: string[];
+  notes: string[];
+  rendererVersion: number;
+}
+
+export interface PreviewRichTextOverlay {
+  itemId: string;
+  zIndex: number;
+  roi: [number, number, number, number];
+  roiPngBytes: number[];
+  hasVisibleContent: boolean;
+  diagnostics: PreviewTextOverlayDiagnostics;
+  renderMicros: number;
 }
 
 export interface BenchmarkReport {

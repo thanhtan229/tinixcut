@@ -1,0 +1,23 @@
+{
+  "acceptance_criteria": {
+    "AC01_multi_layer_model": "PASS - Schema v11 additive TemplateInstance, z-ordering, responsive layout & anchors, preview/export parity verified",
+    "AC02_parameters_overrides_reset": "PASS - Typed parameters, bindings, defaults reset, version immutability, undo/redo verified",
+    "AC03_offline_render_and_missing_resources": "PASS - Standalone project render without catalog, explicit offline missing asset flag (never silent substitution)",
+    "AC04_portable_pack_roundtrip": "PASS - .tinixtpl zip archive export/import, verified clean relative paths without cache leaks",
+    "AC05_security_hardening": "PASS - Path traversal, zip bombs, oversized files, duplicate definitions rejected with zero partial install",
+    "AC06_curated_12_native_templates": "PASS - 12 native template definitions (headline, retro-neon, cyber-frame, quote, lower-third, etc.) render verified",
+    "AC07_layer_budget_limits_and_cancellation": "PASS - <=16 layers, <=8 text slots, <=512 graphemes enforced; export cancellation verified",
+    "AC08_regressions_and_migrations": "PASS - Lossless v10->v11 migration verified, 6 legacy presets preserved, single-text byte parity maintained"
+  },
+  "curated_template_count": 12,
+  "pack_file": "starter_pack.tinixtpl",
+  "phase": 32,
+  "sample_images": [
+    "headline-bold.png",
+    "retro-neon.png",
+    "cyber-frame.png"
+  ],
+  "schema_version": 11,
+  "status": "PASS",
+  "title": "Layered Templates, Parameters & Portable Packs"
+}

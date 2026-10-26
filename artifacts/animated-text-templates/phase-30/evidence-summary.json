@@ -1,0 +1,155 @@
+{
+  "phase": 30,
+  "title": "Rich-Text Rendering & Parity",
+  "status": "IMPLEMENTED WITH DEFERRED NATIVE QUALIFICATION",
+  "gate": "Gate 30",
+  "date": "2026-10-25",
+  "renderer_version": 1,
+  "font": {
+    "family": "Roboto-Bold",
+    "license": "Apache-2.0",
+    "sha256": "61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334",
+    "origin_policy": "bundled default or explicit project font asset; no silent substitution"
+  },
+  "acceptance": {
+    "P30-AC-01": {
+      "status": "PASS",
+      "evidence": "line_height/letter_spacing/alignment/wrap/auto-fit/spans alter rendered output; NFC vs NFD Vietnamese produce byte-identical ROI PNGs; CJK surfaces TextOverlayError::MissingGlyphs",
+      "tests": [
+        "p30_ac01_typography_layout_and_unicode_are_canonical",
+        "p30_review_descent_and_bleed_do_not_clip_diacritics_or_shadows"
+      ]
+    },
+    "P30-AC-02": {
+      "status": "PASS",
+      "evidence": "bundled/asset font resolution deterministic; missing asset and unparsable face fail explicitly; export fails instead of substituting",
+      "tests": [
+        "p30_ac02_font_resolution_is_deterministic_and_explicit",
+        "p30_ac08_missing_font_fails_export_instead_of_substituting",
+        "p30_review_per_span_font_fails_explicitly"
+      ]
+    },
+    "P30-AC-03": {
+      "status": "PASS",
+      "evidence": "preview_rich_text_overlay and export materialization return identical ROI and PNG bytes; rich items never emit drawtext; legacy items keep drawtext",
+      "tests": [
+        "p30_ac04_preview_and_export_consume_identical_overlay_pixels"
+      ]
+    },
+    "P30-AC-04": {
+      "status": "PASS",
+      "evidence": "linear/radial gradients, ordered multi-stroke, multi-shadow with blur, background box and per-span fill render deterministically (byte-identical repeated renders)",
+      "tests": [
+        "p30_ac04_ac05_style_primitives_and_alpha_are_shared"
+      ]
+    },
+    "P30-AC-05": {
+      "status": "PASS",
+      "evidence": "straight-alpha compositing over white has no dark halo; scale/rotation placement stays inside canvas bounds; artifacts alpha-white/black/color.png",
+      "tests": [
+        "p30_ac04_ac05_style_primitives_and_alpha_are_shared"
+      ]
+    },
+    "P30-AC-06": {
+      "status": "PASS",
+      "evidence": "cache clear+rebuild deterministic; stroke-style changes invalidate prepared masks; export removes text_overlays and tc_auto directories; real FFmpeg export embeds text pixels",
+      "tests": [
+        "p30_ac06_cache_invalidation_never_reuses_stale_masks",
+        "p30_ac07_ac08_export_smoke_cleans_derived_artifacts",
+        "p30_review_cache_signature_never_aliases_strokes_and_shadows"
+      ]
+    },
+    "P30-AC-07": {
+      "status": "PASS WITH DOCUMENTED LIMIT",
+      "evidence": "W1 buffer warm p95 14.87 ms <= 16 ms; W2 packet p95 22.60 ms <= 33.3 ms; canonical one-line IPC packet p95 8.85 ms. Oversized multi-line ROI packet p95 27.81 ms exceeds 16 ms because of PNG transport; preview caches overlays per project revision, not per frame, and this limitation is documented.",
+      "tests": [
+        "p30_write_evidence_artifacts -> benchmark-production.json"
+      ]
+    },
+    "P30-AC-08": {
+      "status": "IMPLEMENTED WITH DEFERRED NATIVE QUALIFICATION",
+      "evidence": "362 Rust tests targeted sets + 44 frontend tests + typecheck + web build + native build + cargo fmt pass; legacy text/captions/commands regression suites pass. Native GUI observation and interactive runtime health remain deferred (no native surface in this session), consistent with the Phase 26 deferred qualification.",
+      "tests": [
+        "cargo test --lib (162 passed, POC5 skipped)",
+        "cargo test --test phase29_rich_text_domain (13 passed)",
+        "pnpm test (44 passed)",
+        "pnpm run typecheck",
+        "pnpm run build",
+        "cargo build",
+        "cargo fmt --check"
+      ]
+    }
+  },
+  "benchmarks": {
+    "artifact": "benchmark-production.json",
+    "profile": "CARGO_PROFILE_TEST_OPT_LEVEL=3",
+    "host": "Windows development host (same session; Phase 28 reference host budgets)",
+    "w1": {
+      "definition": "120+ grapheme source text, 118deg gradient, 2 strokes, 2 shadows, wrapped to 1600 px, 1920x1080",
+      "cold_ms": 26.714499999999997,
+      "buffer_warm_p50_ms": 11.290700000000001,
+      "buffer_warm_p95_ms": 12.6086,
+      "packet_warm_p95_ms": 22.9984,
+      "budget_p95_ms": 16.0
+    },
+    "w2": {
+      "definition": "4 titles + shared rich style, sequential consumer render",
+      "packet_warm_p95_ms": 19.8297,
+      "budget_p95_ms": 33.3
+    },
+    "canonical_one_line_packet_p95_ms": 7.485,
+    "cache": {
+      "entries": 25,
+      "bytes": 277290,
+      "ceiling_bytes": 268435456
+    }
+  },
+  "export_smoke": {
+    "artifact": "export-smoke.mp4",
+    "metrics": "export-metrics.json",
+    "canvas": [
+      640,
+      360
+    ],
+    "duration_secs": 0.5,
+    "encoder": "libx264",
+    "file_size_bytes": 8061,
+    "overlay_roi": [
+      600,
+      506,
+      1328,
+      599
+    ]
+  },
+  "visual_artifacts": [
+    "sample-rich-overlay.png",
+    "alpha-white.png",
+    "alpha-black.png",
+    "alpha-color.png",
+    "parity-preview.png",
+    "parity-export.png"
+  ],
+  "known_limitations": [
+    "Glow is not part of the Phase 29 canonical domain; it is not rendered in Phase 30 (deferred to a domain extension in Phase 32).",
+    "Only the bundled Roboto-Bold face ships with the app. Other weights/faces require a project font asset; weight is reported as approximated, never silently substituted.",
+    "Center/Inside stroke alignment is painted as a half-width outside dilation with the fill covering the inner half (documented approximation; Outside is exact).",
+    "Animation evaluation, keyframed text transform and per-frame motion are Phase 31; Phase 30 renders the static resolved style at canonical time.",
+    "Preview overlays are cached per project revision, not per frame. A first render of an oversized multi-line ROI can exceed the 16 ms IPC budget because of PNG transport.",
+    "Native GUI qualification (interactive preview overlay, installed-app resource lookup) remains deferred under the Phase 26 consolidated qualification."
+  ],
+  "review": {
+    "qa": "PASS (independent re-verification)",
+    "code_review": "LGTM after remediation",
+    "closed_findings": [
+      "descent sign/bleed clipping of descenders, diacritics, strokes and shadows",
+      "mask-cache signature collision and per-call cache loss in production",
+      "silent per-span font substitution",
+      "preview revision cache poisoning/null caching/stale async responses"
+    ],
+    "regression_tests": [
+      "p30_review_descent_and_bleed_do_not_clip_diacritics_or_shadows",
+      "p30_review_cache_signature_never_aliases_strokes_and_shadows",
+      "p30_review_per_span_font_fails_explicitly"
+    ]
+  }
+}

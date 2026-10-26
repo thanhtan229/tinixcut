@@ -79,8 +79,12 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Suppress all timeline shortcuts while editing inside text/input controls
-      if (isFocusInInput()) {
+      // 1. Suppress all timeline shortcuts while editing inside text/input controls or when a dialog is open
+      if (
+        isFocusInInput() ||
+        (typeof document !== "undefined" &&
+          Boolean(document.querySelector(".dialog-backdrop, [role='dialog']")))
+      ) {
         return;
       }
 

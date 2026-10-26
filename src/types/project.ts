@@ -1,3 +1,6 @@
+import { TemplateInstance } from "./template";
+export * from "./template";
+
 export interface FrameRate {
   numerator: number;
   denominator: number;
@@ -334,6 +337,7 @@ export interface TimelineItem {
   opacity: number;
   volume: number;
   text_content?: string;
+  template_instance?: TemplateInstance | null;
   text_style?: TextStyle | null;
   text_template?: TextTemplateReference | null;
   text_rich?: TextRichStyle | null;

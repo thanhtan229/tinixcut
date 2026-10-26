@@ -24,6 +24,8 @@ import {
   TextRichStyle,
   TextShadow,
   TextStroke,
+  TemplateLayer,
+  TemplateParameterValue,
 } from "./project";
 
 export type CommandOperation =
@@ -313,6 +315,80 @@ export type CommandOperation =
     }
   | {
       type: "ClipTextRichReset";
+      payload: {
+        item_id: string;
+      };
+    }
+  | {
+      type: "TemplateApply";
+      payload: {
+        item_id: string;
+        template_id: string;
+        template_version: number;
+        initial_parameters?: Record<string, TemplateParameterValue> | null;
+      };
+    }
+  | {
+      type: "TemplateTrackApply";
+      payload: {
+        track_id: string;
+        template_id: string;
+        template_version: number;
+        initial_parameters?: Record<string, TemplateParameterValue> | null;
+      };
+    }
+  | {
+      type: "TemplateLayerAdd";
+      payload: {
+        item_id: string;
+        layer: TemplateLayer;
+      };
+    }
+  | {
+      type: "TemplateLayerRemove";
+      payload: {
+        item_id: string;
+        layer_id: string;
+      };
+    }
+  | {
+      type: "TemplateLayerReorder";
+      payload: {
+        item_id: string;
+        layer_ids: string[];
+      };
+    }
+  | {
+      type: "TemplateLayerUpdate";
+      payload: {
+        item_id: string;
+        layer_id: string;
+        layer: TemplateLayer;
+      };
+    }
+  | {
+      type: "TemplateParameterSet";
+      payload: {
+        item_id: string;
+        parameter_key: string;
+        value: TemplateParameterValue;
+      };
+    }
+  | {
+      type: "TemplateParametersBatchSet";
+      payload: {
+        item_id: string;
+        parameters: Record<string, TemplateParameterValue>;
+      };
+    }
+  | {
+      type: "TemplateReset";
+      payload: {
+        item_id: string;
+      };
+    }
+  | {
+      type: "TemplateDetach";
       payload: {
         item_id: string;
       };

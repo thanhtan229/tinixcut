@@ -1,6 +1,6 @@
 # Phase 30 — Font, Layout và Rich Text Rendering
 
-**Status:** PLANNED — chưa triển khai.
+**Status:** IMPLEMENTED WITH DEFERRED NATIVE QUALIFICATION - Gate 30 functional criteria PASS; evidence in rtifacts/animated-text-templates/phase-30/.
 **Dependency:** P29 PASS.
 **Gate:** Style/layout/font/alpha khớp preview và export.
 
@@ -55,3 +55,19 @@
 Lưu crop text ROI/alpha masks, font hashes, layout metrics, preview captures, headless exports, missing-font/cancel tests và benchmark dưới phase-30. Native UI không quan sát được thì capture gate chưa PASS.
 
 Dừng P31 nếu preview còn dùng font browser khác export, CSS approximates style chưa thông báo, renderer cắt shadow/glow, hoặc resource cache đang được dùng làm source. Không dùng ảnh chữ render sẵn để thay editable canonical content.
+
+---
+
+## 5. Acceptance Evidence (2026-10-25)
+
+- **P30-AC-01 PASS** ? Typography/layout values affect output; NFC/NFD Vietnamese byte-identical; spans, wrap, auto-fit; CJK diagnosed as missing glyphs.
+- **P30-AC-02 PASS** ? Deterministic bundled/asset font resolution; missing/invalid font fails explicitly; export never substitutes.
+- **P30-AC-03 PASS** ? Preview and export consume identical ROI/PNG bytes; rich items never emit drawtext; legacy items keep drawtext.
+- **P30-AC-04 PASS** ? Linear/radial gradients, ordered multi-stroke, multi-shadow blur, background box, per-span fill render deterministically.
+- **P30-AC-05 PASS** ? Straight-alpha overlay has no dark halo on white; scale/rotation stays in canvas bounds; alpha artifacts captured.
+- **P30-AC-06 PASS** ? Versioned bounded cache invalidates on style change; export removes derived overlay/automation directories; real FFmpeg export embeds text pixels.
+- **P30-AC-07 PASS WITH DOCUMENTED LIMIT** ? W1 buffer p95 12.61 ms <= 16 ms; W2 19.83 ms <= 33.3 ms; canonical packet 7.49 ms. Oversized multi-line PNG packet p95 23.00 ms is a documented transport limit (preview caches per revision).
+- **P30-AC-08 IMPLEMENTED WITH DEFERRED NATIVE QUALIFICATION** ? Legacy suites, typecheck, 44 frontend tests, web/native builds and fmt pass; native GUI/installed-resource observation remains under Phase 26.
+- **Known limits** ? glow absent from the Phase 29 domain; only bundled Roboto-Bold ships (weights approximated, reported); Center/Inside stroke alignment approximated; animation is Phase 31.
+
+Evidence: evidence-summary.json, erification-log.md, enchmark-production.json, export-metrics.json, sample-rich-overlay.png, lpha-white|black|color.png, parity-preview|export.png, export-smoke.mp4.
