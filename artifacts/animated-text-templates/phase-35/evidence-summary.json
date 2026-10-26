@@ -1,0 +1,35 @@
+{
+  "gate": "T4 PASS",
+  "mcp_tools_added": [
+    "tinixcut_template_validate",
+    "tinixcut_template_preview",
+    "tinixcut_template_apply",
+    "tinixcut_template_save"
+  ],
+  "mcp_tools_total": 12,
+  "phase": 35,
+  "quote_card_preview": {
+    "file": "quote_card_preview.png",
+    "height": 720,
+    "nonZeroPixels": 128368,
+    "width": 1280
+  },
+  "title": "Agent Template Generation & Refinement via CLI/MCP",
+  "verified_features": [
+    "Typed declarative draft contract with strict schema validation",
+    "Serde deny_unknown_fields and deep script/shell/expression scanning",
+    "Vietnamese gradient + stroke + shadow + character in/out text animation",
+    "Candidate refinement tracking (parent draft reference, iteration budget)",
+    "Shared compositor preview parity with export",
+    "Atomic CommandService apply transaction with durable persistence",
+    "Replay idempotency and stale revision gates",
+    "CLI and MCP deterministic equivalence",
+    "TemplateCatalog save and .tinixtpl portable pack roundtrip"
+  ],
+  "vietnamese_preview": {
+    "file": "vietnamese_preview.png",
+    "height": 720,
+    "nonZeroPixels": 22600,
+    "width": 1280
+  }
+}

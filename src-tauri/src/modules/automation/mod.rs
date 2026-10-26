@@ -579,37 +579,63 @@ pub fn dispatch_method(
             Ok(crate::modules::templates::agent::AgentTemplateService::draft_json_schema())
         }
         "template.validate" => {
-            let draft: crate::modules::templates::agent::TemplateDraft = if params.get("draft").is_some() {
+            let draft: crate::modules::templates::agent::TemplateDraft = if params
+                .get("draft")
+                .is_some()
+            {
                 serde_json::from_value(params.get("draft").unwrap().clone())
             } else {
                 serde_json::from_value(params)
             }
             .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
             let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
-            let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(&draft, None, Some(&catalog));
+            let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(
+                &draft,
+                None,
+                Some(&catalog),
+            );
             serde_json::to_value(report).map_err(|e| AutomationError::Serialization(e.to_string()))
         }
         "template.preview" => {
-            let draft: crate::modules::templates::agent::TemplateDraft = if params.get("draft").is_some() {
+            let draft: crate::modules::templates::agent::TemplateDraft = if params
+                .get("draft")
+                .is_some()
+            {
                 serde_json::from_value(params.get("draft").unwrap().clone())
             } else {
                 serde_json::from_value(params.clone())
             }
             .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
-            let time_sec = params.get("timeSeconds").and_then(|v| v.as_f64()).unwrap_or(1.0);
-            let width = params.get("width").and_then(|v| v.as_u64()).map(|w| w as u32);
-            let height = params.get("height").and_then(|v| v.as_u64()).map(|h| h as u32);
-            let output_path = params.get("outputPath").and_then(|v| v.as_str()).map(Path::new);
+            let time_sec = params
+                .get("timeSeconds")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0);
+            let width = params
+                .get("width")
+                .and_then(|v| v.as_u64())
+                .map(|w| w as u32);
+            let height = params
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .map(|h| h as u32);
+            let output_path = params
+                .get("outputPath")
+                .and_then(|v| v.as_str())
+                .map(Path::new);
 
             if let Some(out_p) = output_path {
-                let receipt = crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
-                    &draft, out_p, time_sec, width, height,
-                ).map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
-                serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
+                let receipt =
+                    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+                        &draft, out_p, time_sec, width, height,
+                    )
+                    .map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
+                serde_json::to_value(receipt)
+                    .map_err(|e| AutomationError::Serialization(e.to_string()))
             } else {
                 let buf = crate::modules::templates::agent::AgentTemplateService::preview_draft(
                     &draft, time_sec, width, height,
-                ).map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
+                )
+                .map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
                 Ok(serde_json::json!({
                     "width": buf.width,
                     "height": buf.height,
@@ -619,43 +645,81 @@ pub fn dispatch_method(
             }
         }
         "template.apply" => {
-            let project_path_str = params.get("projectPath").and_then(|v| v.as_str()).ok_or_else(|| {
-                AutomationError::Cli("Missing 'projectPath'".to_string())
-            })?;
-            let item_id = params.get("itemId").and_then(|v| v.as_str()).ok_or_else(|| {
-                AutomationError::Cli("Missing 'itemId'".to_string())
-            })?;
+            let project_path_str = params
+                .get("projectPath")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AutomationError::Cli("Missing 'projectPath'".to_string()))?;
+            let item_id = params
+                .get("itemId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AutomationError::Cli("Missing 'itemId'".to_string()))?;
             let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_value(
-                params.get("draft").cloned().unwrap_or(serde_json::Value::Null),
-            ).map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+                params
+                    .get("draft")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
 
-            let client_id = params.get("clientId").and_then(|v| v.as_str()).map(ToString::to_string);
+            let client_id = params
+                .get("clientId")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
             let client_epoch = params.get("clientEpoch").and_then(|v| v.as_u64());
             let sequence_number = params.get("sequenceNumber").and_then(|v| v.as_u64());
-            let transaction_id = params.get("transactionId").and_then(|v| v.as_str()).map(ToString::to_string);
+            let transaction_id = params
+                .get("transactionId")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
             let base_revision = params.get("baseRevision").and_then(|v| v.as_u64());
 
             let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
-            let receipt = crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
-                Path::new(project_path_str), item_id, &draft, client_id, client_epoch, sequence_number, transaction_id, base_revision, &catalog,
-            ).map_err(|e| match e {
-                crate::modules::templates::agent::AgentTemplateError::Command(cmd_err) => AutomationError::Command(cmd_err),
-                other => AutomationError::Cli(format!("Template apply failed: {other}")),
-            })?;
+            let receipt =
+                crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
+                    Path::new(project_path_str),
+                    item_id,
+                    &draft,
+                    client_id,
+                    client_epoch,
+                    sequence_number,
+                    transaction_id,
+                    base_revision,
+                    &catalog,
+                )
+                .map_err(|e| match e {
+                    crate::modules::templates::agent::AgentTemplateError::Command(cmd_err) => {
+                        AutomationError::Command(cmd_err)
+                    }
+                    other => AutomationError::Cli(format!("Template apply failed: {other}")),
+                })?;
             serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
         }
         "template.save" => {
             let draft: crate::modules::templates::agent::TemplateDraft = serde_json::from_value(
-                params.get("draft").cloned().unwrap_or(serde_json::Value::Null),
-            ).map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
-            let catalog_dir = params.get("catalogDir").and_then(|v| v.as_str()).map(PathBuf::from);
-            let overwrite = params.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+                params
+                    .get("draft")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|e| AutomationError::Serialization(format!("Invalid TemplateDraft: {e}")))?;
+            let catalog_dir = params
+                .get("catalogDir")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
+            let overwrite = params
+                .get("overwrite")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let catalog = catalog_dir
                 .map(crate::modules::templates::catalog::TemplateCatalog::new)
-                .unwrap_or_else(crate::modules::templates::catalog::TemplateCatalog::default_catalog);
-            let receipt = crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
-                &draft, &catalog, overwrite,
-            ).map_err(|e| AutomationError::Cli(format!("Template save failed: {e}")))?;
+                .unwrap_or_else(
+                    crate::modules::templates::catalog::TemplateCatalog::default_catalog,
+                );
+            let receipt =
+                crate::modules::templates::agent::AgentTemplateService::save_draft_to_catalog(
+                    &draft, &catalog, overwrite,
+                )
+                .map_err(|e| AutomationError::Cli(format!("Template save failed: {e}")))?;
             serde_json::to_value(receipt).map_err(|e| AutomationError::Serialization(e.to_string()))
         }
         other => Err(AutomationError::Cli(format!("Unknown method '{other}'"))),

@@ -1165,28 +1165,28 @@ impl TinixCutMcpServer {
         Parameters(params): Parameters<TemplatePreviewArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let time_sec = params.time_seconds.unwrap_or(1.0);
-        let out_path = params
-            .output_path
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::temp_dir()
-                    .join(format!("tinixcut_preview_{}.png", uuid::Uuid::new_v4().simple()))
-            });
-        let receipt = match crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
-            &params.draft,
-            &out_path,
-            time_sec,
-            params.width,
-            params.height,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(tool_error(StructuredError::new(
-                    "PREVIEW_RENDER_FAILED",
-                    e.to_string(),
-                )));
-            }
-        };
+        let out_path = params.output_path.map(PathBuf::from).unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "tinixcut_preview_{}.png",
+                uuid::Uuid::new_v4().simple()
+            ))
+        });
+        let receipt =
+            match crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+                &params.draft,
+                &out_path,
+                time_sec,
+                params.width,
+                params.height,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(tool_error(StructuredError::new(
+                        "PREVIEW_RENDER_FAILED",
+                        e.to_string(),
+                    )));
+                }
+            };
         Ok(tool_ok(&receipt))
     }
 

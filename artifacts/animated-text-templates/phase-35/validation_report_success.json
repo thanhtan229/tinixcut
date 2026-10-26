@@ -1,0 +1,365 @@
+{
+  "valid": true,
+  "schemaVersion": 1,
+  "issues": [],
+  "missingResources": [],
+  "unsupportedOptions": [],
+  "normalizedDraft": {
+    "draftId": "draft_vn_title_v2_refined",
+    "schemaVersion": 1,
+    "templateId": "vn_hao_khi",
+    "templateVersion": 1,
+    "name": "Hào Khí Việt Nam Title",
+    "category": "Title",
+    "description": "Vietnamese patriotic animated title with gold-red gradient, outer stroke and grapheme animation",
+    "tags": [
+      "vietnamese",
+      "gradient",
+      "animated",
+      "title"
+    ],
+    "slots": [
+      {
+        "slotKey": "title",
+        "name": "Main Title Text",
+        "slotType": "text",
+        "description": "Headline text in Vietnamese",
+        "required": true
+      }
+    ],
+    "parameters": [
+      {
+        "key": "accent_color",
+        "name": "Accent Bar Color",
+        "param_type": {
+          "type": "Color"
+        },
+        "default_value": {
+          "kind": "Color",
+          "value": "#00FFFF"
+        },
+        "description": "Color of bottom underline"
+      },
+      {
+        "key": "bar_width",
+        "name": "Accent Bar Width",
+        "param_type": {
+          "type": "Number",
+          "min": 50.0,
+          "max": 1200.0,
+          "step": 10.0
+        },
+        "default_value": {
+          "kind": "Number",
+          "value": 400.0
+        },
+        "description": "Width of accent bar"
+      }
+    ],
+    "bindings": [
+      {
+        "parameter_key": "accent_color",
+        "target_layer_id": "accent_bar",
+        "target_property": "FillColor"
+      },
+      {
+        "parameter_key": "bar_width",
+        "target_layer_id": "accent_bar",
+        "target_property": "Width"
+      }
+    ],
+    "layers": [
+      {
+        "layer_id": "accent_bar",
+        "name": "Accent Underline",
+        "z_index": 0,
+        "visible": true,
+        "opacity": 0.85,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": 70.0,
+          "scale_x": 1.0,
+          "scale_y": 1.0,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Shape",
+          "data": {
+            "shape_kind": "RoundedRectangle",
+            "width": 400.0,
+            "height": 8.0,
+            "fill_color": "#FFD700",
+            "stroke_color": null,
+            "stroke_width": 0.0,
+            "corner_radius": 4.0
+          }
+        }
+      },
+      {
+        "layer_id": "title_layer",
+        "name": "Main Title",
+        "z_index": 1,
+        "visible": true,
+        "opacity": 1.0,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": 0.0,
+          "scale_x": 1.0,
+          "scale_y": 1.0,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": {
+          "unit": "Grapheme",
+          "order": "Forward",
+          "seed": null,
+          "pivot_x": 0.5,
+          "pivot_y": 0.5,
+          "in_anim": {
+            "duration": {
+              "value": 18,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "easing": "EaseOut",
+            "stagger_ratio": 0.2,
+            "from": {
+              "translate_x": 0.0,
+              "translate_y": 40.0,
+              "scale_x": 0.8,
+              "scale_y": 0.8,
+              "rotation": 0.0,
+              "opacity": 0.0
+            },
+            "to": {
+              "translate_x": 0.0,
+              "translate_y": 0.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0,
+              "rotation": 0.0,
+              "opacity": 1.0
+            }
+          },
+          "loop_anim": null,
+          "out_anim": {
+            "duration": {
+              "value": 12,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "easing": "EaseIn",
+            "stagger_ratio": 0.2,
+            "from": {
+              "translate_x": 0.0,
+              "translate_y": 0.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0,
+              "rotation": 0.0,
+              "opacity": 1.0
+            },
+            "to": {
+              "translate_x": 0.0,
+              "translate_y": -30.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0,
+              "rotation": 0.0,
+              "opacity": 0.0
+            }
+          },
+          "loop_mode": "None",
+          "conflict_policy": "ProportionalScale",
+          "phase_origin": null,
+          "phase_end": null
+        },
+        "kind": {
+          "type": "Text",
+          "data": {
+            "is_primary": true,
+            "slot_key": "title",
+            "text_content": "Hào Khí Việt Nam",
+            "text_style": {
+              "font_family": "Roboto",
+              "font_size": 80.0,
+              "font_weight": 700,
+              "font_color": "#FFD700",
+              "accent_color": null,
+              "background_color": null,
+              "background_opacity": 0.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0,
+              "alignment": "Center",
+              "line_height": 1.0,
+              "anchor": "Center"
+            },
+            "text_rich": {
+              "font": {
+                "family": "Roboto",
+                "weight": 700,
+                "style": "Normal",
+                "asset_id": null
+              },
+              "font_size": 80.0,
+              "layout": {
+                "max_width": null,
+                "alignment": "Center",
+                "line_height": 1.0,
+                "letter_spacing": 0.0,
+                "wrap_mode": "None",
+                "min_font_size": null,
+                "max_font_size": null
+              },
+              "fill": {
+                "kind": "Gradient",
+                "gradient_kind": "Linear",
+                "angle_deg": 90.0,
+                "radius": null,
+                "space": "All",
+                "stops": [
+                  {
+                    "offset": 0.0,
+                    "color": "#00FFFF"
+                  },
+                  {
+                    "offset": 1.0,
+                    "color": "#0077FF"
+                  }
+                ]
+              },
+              "strokes": [
+                {
+                  "color": "#8B0000",
+                  "width": 4.0,
+                  "align": "Outside"
+                }
+              ],
+              "shadows": [
+                {
+                  "color": "#00000088",
+                  "offset_x": 3.0,
+                  "offset_y": 3.0,
+                  "blur": 3.0
+                }
+              ],
+              "background": null,
+              "spans": []
+            },
+            "text_animation": {
+              "unit": "Grapheme",
+              "order": "Forward",
+              "seed": null,
+              "pivot_x": 0.5,
+              "pivot_y": 0.5,
+              "in_anim": {
+                "duration": {
+                  "value": 18,
+                  "rate": {
+                    "numerator": 30,
+                    "denominator": 1
+                  }
+                },
+                "easing": "EaseOut",
+                "stagger_ratio": 0.2,
+                "from": {
+                  "translate_x": 0.0,
+                  "translate_y": 40.0,
+                  "scale_x": 0.8,
+                  "scale_y": 0.8,
+                  "rotation": 0.0,
+                  "opacity": 0.0
+                },
+                "to": {
+                  "translate_x": 0.0,
+                  "translate_y": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 1.0
+                }
+              },
+              "loop_anim": null,
+              "out_anim": {
+                "duration": {
+                  "value": 12,
+                  "rate": {
+                    "numerator": 30,
+                    "denominator": 1
+                  }
+                },
+                "easing": "EaseIn",
+                "stagger_ratio": 0.2,
+                "from": {
+                  "translate_x": 0.0,
+                  "translate_y": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 1.0
+                },
+                "to": {
+                  "translate_x": 0.0,
+                  "translate_y": -30.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0,
+                  "opacity": 0.0
+                }
+              },
+              "loop_mode": "None",
+              "conflict_policy": "ProportionalScale",
+              "phase_origin": null,
+              "phase_end": null
+            }
+          }
+        }
+      }
+    ],
+    "resources": {
+      "resources": []
+    },
+    "responsivePolicy": {
+      "reference_width": 1920,
+      "reference_height": 1080,
+      "supported_aspect_ratios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:5"
+      ],
+      "auto_wrap": true,
+      "auto_fit": false,
+      "safe_margin": 80.0
+    },
+    "defaultDuration": {
+      "value": 90,
+      "rate": {
+        "numerator": 30,
+        "denominator": 1
+      }
+    },
+    "provenance": {
+      "authorType": "agent",
+      "agentId": "tinix-creative-agent",
+      "agentVersion": "1.2.0",
+      "prompt": "Less shadow blur and cooler cyan-blue gradient",
+      "referenceSummary": "Reference style: Golden red festival title",
+      "parentDraftId": "draft_vn_title_v1",
+      "iteration": 2,
+      "createdAt": "2026-10-26T23:50:11.535897100+00:00"
+    },
+    "userOverrides": []
+  }
+}

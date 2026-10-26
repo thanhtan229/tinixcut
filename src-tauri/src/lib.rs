@@ -1520,7 +1520,11 @@ fn template_draft_validate(
     draft: crate::modules::templates::agent::TemplateDraft,
 ) -> crate::modules::templates::agent::TemplateValidationReport {
     let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
-    crate::modules::templates::agent::AgentTemplateService::validate_draft(&draft, None, Some(&catalog))
+    crate::modules::templates::agent::AgentTemplateService::validate_draft(
+        &draft,
+        None,
+        Some(&catalog),
+    )
 }
 
 #[tauri::command]
@@ -1530,11 +1534,16 @@ fn template_draft_preview(
     output_path: Option<String>,
 ) -> Result<crate::modules::templates::agent::TemplatePreviewReceipt, String> {
     let t = time_seconds.unwrap_or(1.0);
-    let out = output_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("tinixcut_preview_{}.png", uuid::Uuid::new_v4().simple())));
-    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(&draft, &out, t, None, None)
-        .map_err(|e| e.to_string())
+    let out = output_path.map(PathBuf::from).unwrap_or_else(|| {
+        std::env::temp_dir().join(format!(
+            "tinixcut_preview_{}.png",
+            uuid::Uuid::new_v4().simple()
+        ))
+    });
+    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
+        &draft, &out, t, None, None,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

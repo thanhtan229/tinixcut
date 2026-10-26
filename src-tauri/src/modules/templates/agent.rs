@@ -16,12 +16,12 @@ use crate::modules::command::{
     OperationEnvelope,
 };
 use crate::modules::composition::CompositionPlan;
-use crate::modules::domain::id::{generate_operation_id, is_valid_id};
+use crate::modules::domain::id::is_valid_id;
 use crate::modules::domain::template::{
     apply_property_to_layer, ResponsivePolicy, TemplateDefinition, TemplateInstance, TemplateLayer,
     TemplateLayerKind, TemplateOverride, TemplateParameterBinding, TemplateParameterDefinition,
-    TemplateResourceManifest, MAX_TEMPLATE_GRAPHEMES_PER_SLOT,
-    MAX_TEMPLATE_LAYERS, MAX_TEMPLATE_TEXT_SLOTS,
+    TemplateResourceManifest, MAX_TEMPLATE_GRAPHEMES_PER_SLOT, MAX_TEMPLATE_LAYERS,
+    MAX_TEMPLATE_TEXT_SLOTS,
 };
 use crate::modules::domain::text::grapheme_count;
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
@@ -81,7 +81,10 @@ pub enum AgentTemplateError {
     },
 
     #[error("Draft payload exceeds size limit of {max_bytes} bytes: found {found_bytes}")]
-    PayloadOversized { max_bytes: usize, found_bytes: usize },
+    PayloadOversized {
+        max_bytes: usize,
+        found_bytes: usize,
+    },
 
     #[error("Repair iteration budget exceeded: maximum is {max_iterations}, requested iteration was {requested}")]
     RepairBudgetExceeded { max_iterations: u32, requested: u32 },
@@ -328,7 +331,11 @@ impl AgentTemplateService {
             max_text_slots: MAX_TEMPLATE_TEXT_SLOTS,
             max_graphemes_per_slot: MAX_TEMPLATE_GRAPHEMES_PER_SLOT,
             max_repair_iterations: MAX_REPAIR_ITERATIONS,
-            supported_layer_types: vec!["Text".to_string(), "Shape".to_string(), "Image".to_string()],
+            supported_layer_types: vec![
+                "Text".to_string(),
+                "Shape".to_string(),
+                "Image".to_string(),
+            ],
             supported_shape_kinds: vec![
                 "Rectangle".to_string(),
                 "RoundedRectangle".to_string(),
@@ -503,23 +510,91 @@ impl AgentTemplateService {
     pub fn scan_malicious_content(content: &str) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         let suspicious_tokens = [
-            ("<script", "MALICIOUS_SCRIPT_TAG", "Draft contains HTML/XML script tags"),
-            ("</script", "MALICIOUS_SCRIPT_TAG", "Draft contains HTML/XML script tags"),
-            ("javascript:", "MALICIOUS_JS_URI", "Draft contains javascript: URI scheme"),
-            ("powershell", "MALICIOUS_SHELL_COMMAND", "Draft contains powershell reference"),
-            ("cmd.exe", "MALICIOUS_SHELL_COMMAND", "Draft contains cmd.exe reference"),
-            ("/bin/sh", "MALICIOUS_SHELL_COMMAND", "Draft contains shell execution command"),
-            ("/bin/bash", "MALICIOUS_SHELL_COMMAND", "Draft contains bash execution command"),
-            ("rm -rf", "MALICIOUS_SHELL_COMMAND", "Draft contains destructive command"),
-            ("eval(", "MALICIOUS_EXPRESSION", "Draft contains arbitrary eval() expression"),
-            ("SELECT ", "MALICIOUS_SQL_INJECTION", "Draft contains SQL query pattern"),
-            ("DROP TABLE", "MALICIOUS_SQL_INJECTION", "Draft contains SQL drop pattern"),
-            ("gl_FragColor", "UNSUPPORTED_NATIVE_SHADER", "Draft contains arbitrary GLSL shader instructions"),
-            ("varying ", "UNSUPPORTED_NATIVE_SHADER", "Draft contains native shader keywords"),
-            ("uniform ", "UNSUPPORTED_NATIVE_SHADER", "Draft contains native shader keywords"),
-            ("ffmpeg -", "UNSUPPORTED_FFMPEG_SHELL", "Draft contains arbitrary FFmpeg shell commands"),
-            ("-filter_complex", "UNSUPPORTED_FFMPEG_SHELL", "Draft contains raw FFmpeg filtergraph strings"),
-            ("data:text/html", "MALICIOUS_HTML_PAYLOAD", "Draft contains data:text/html URI payload"),
+            (
+                "<script",
+                "MALICIOUS_SCRIPT_TAG",
+                "Draft contains HTML/XML script tags",
+            ),
+            (
+                "</script",
+                "MALICIOUS_SCRIPT_TAG",
+                "Draft contains HTML/XML script tags",
+            ),
+            (
+                "javascript:",
+                "MALICIOUS_JS_URI",
+                "Draft contains javascript: URI scheme",
+            ),
+            (
+                "powershell",
+                "MALICIOUS_SHELL_COMMAND",
+                "Draft contains powershell reference",
+            ),
+            (
+                "cmd.exe",
+                "MALICIOUS_SHELL_COMMAND",
+                "Draft contains cmd.exe reference",
+            ),
+            (
+                "/bin/sh",
+                "MALICIOUS_SHELL_COMMAND",
+                "Draft contains shell execution command",
+            ),
+            (
+                "/bin/bash",
+                "MALICIOUS_SHELL_COMMAND",
+                "Draft contains bash execution command",
+            ),
+            (
+                "rm -rf",
+                "MALICIOUS_SHELL_COMMAND",
+                "Draft contains destructive command",
+            ),
+            (
+                "eval(",
+                "MALICIOUS_EXPRESSION",
+                "Draft contains arbitrary eval() expression",
+            ),
+            (
+                "SELECT ",
+                "MALICIOUS_SQL_INJECTION",
+                "Draft contains SQL query pattern",
+            ),
+            (
+                "DROP TABLE",
+                "MALICIOUS_SQL_INJECTION",
+                "Draft contains SQL drop pattern",
+            ),
+            (
+                "gl_FragColor",
+                "UNSUPPORTED_NATIVE_SHADER",
+                "Draft contains arbitrary GLSL shader instructions",
+            ),
+            (
+                "varying ",
+                "UNSUPPORTED_NATIVE_SHADER",
+                "Draft contains native shader keywords",
+            ),
+            (
+                "uniform ",
+                "UNSUPPORTED_NATIVE_SHADER",
+                "Draft contains native shader keywords",
+            ),
+            (
+                "ffmpeg -",
+                "UNSUPPORTED_FFMPEG_SHELL",
+                "Draft contains arbitrary FFmpeg shell commands",
+            ),
+            (
+                "-filter_complex",
+                "UNSUPPORTED_FFMPEG_SHELL",
+                "Draft contains raw FFmpeg filtergraph strings",
+            ),
+            (
+                "data:text/html",
+                "MALICIOUS_HTML_PAYLOAD",
+                "Draft contains data:text/html URI payload",
+            ),
         ];
 
         let lower = content.to_lowercase();
@@ -578,7 +653,10 @@ impl AgentTemplateService {
                 severity: ValidationSeverity::Error,
                 path: "templateId".to_string(),
                 code: "INVALID_TEMPLATE_ID".to_string(),
-                message: format!("templateId '{}' is not a valid identifier", draft.template_id),
+                message: format!(
+                    "templateId '{}' is not a valid identifier",
+                    draft.template_id
+                ),
             });
         }
         if draft.name.trim().is_empty() {
@@ -721,10 +799,19 @@ impl AgentTemplateService {
                     if let Some(rich) = &t.text_rich {
                         if let Some(font) = &rich.font {
                             let standard_fonts = [
-                                "Inter", "Arial", "Roboto", "Segoe UI", "Tahoma",
-                                "Times New Roman", "Helvetica", "sans-serif", "serif",
+                                "Inter",
+                                "Arial",
+                                "Roboto",
+                                "Segoe UI",
+                                "Tahoma",
+                                "Times New Roman",
+                                "Helvetica",
+                                "sans-serif",
+                                "serif",
                             ];
-                            if !standard_fonts.iter().any(|f| f.eq_ignore_ascii_case(&font.family))
+                            if !standard_fonts
+                                .iter()
+                                .any(|f| f.eq_ignore_ascii_case(&font.family))
                                 && font.asset_id.is_none()
                             {
                                 unsupported_options.push(format!("Font family '{}'", font.family));
@@ -769,13 +856,21 @@ impl AgentTemplateService {
                         });
                     }
                     if let Some(aid) = &img.asset_id {
-                        if !draft.resources.resources.iter().any(|r| &r.resource_id == aid) {
+                        if !draft
+                            .resources
+                            .resources
+                            .iter()
+                            .any(|r| &r.resource_id == aid)
+                        {
                             missing_resources.push(aid.clone());
                             issues.push(ValidationIssue {
                                 severity: ValidationSeverity::Warning,
                                 path: format!("{}.kind.data.assetId", path_prefix),
                                 code: "UNRESOLVED_IMAGE_ASSET".to_string(),
-                                message: format!("Image layer references unmanifested asset '{}'", aid),
+                                message: format!(
+                                    "Image layer references unmanifested asset '{}'",
+                                    aid
+                                ),
                             });
                         }
                     }
@@ -816,7 +911,10 @@ impl AgentTemplateService {
                     code: "INVALID_PARAMETER".to_string(),
                     message: e.to_string(),
                 });
-            } else if param_map.insert(param.key.as_str(), &param.param_type).is_some() {
+            } else if param_map
+                .insert(param.key.as_str(), &param.param_type)
+                .is_some()
+            {
                 issues.push(ValidationIssue {
                     severity: ValidationSeverity::Error,
                     path: format!("parameters[{}].key", p_idx),
@@ -881,7 +979,9 @@ impl AgentTemplateService {
             });
         }
 
-        let is_valid = !issues.iter().any(|i| i.severity == ValidationSeverity::Error);
+        let is_valid = !issues
+            .iter()
+            .any(|i| i.severity == ValidationSeverity::Error);
         let normalized = if is_valid {
             let mut norm = draft.clone();
             // Normalize default duration to 30fps if needed
@@ -915,14 +1015,22 @@ impl AgentTemplateService {
         width: Option<u32>,
         height: Option<u32>,
     ) -> Result<RgbaBuffer, AgentTemplateError> {
-        let w = width.unwrap_or(draft.responsive_policy.reference_width).max(320);
-        let h = height.unwrap_or(draft.responsive_policy.reference_height).max(180);
+        let w = width
+            .unwrap_or(draft.responsive_policy.reference_width)
+            .max(320);
+        let h = height
+            .unwrap_or(draft.responsive_policy.reference_height)
+            .max(180);
         let fps = FrameRate::FPS_30;
 
         let mut project = Project::new("TemplatePreviewStage".to_string());
         project.settings.width = w;
         project.settings.height = h;
         project.settings.frame_rate = fps;
+        project.tracks.push(crate::modules::domain::Track::new(
+            "Preview Track".to_string(),
+            crate::modules::domain::TrackKind::Video,
+        ));
 
         let instance = draft.to_instance();
         let dur = draft.default_duration.rescaled_to(fps);
@@ -964,18 +1072,20 @@ impl AgentTemplateService {
 
         project.tracks[0].items.push(item);
 
-        let plan = CompositionPlan::from_project(&project)
-            .map_err(|e| AgentTemplateError::Preview(format!("Failed to build CompositionPlan: {}", e)))?;
+        let plan = CompositionPlan::from_project(&project).map_err(|e| {
+            AgentTemplateError::Preview(format!("Failed to build CompositionPlan: {}", e))
+        })?;
 
-        let target_layer = plan
-            .visual_layers
-            .first()
-            .ok_or_else(|| AgentTemplateError::Preview("No visual layer produced in plan".to_string()))?;
+        let target_layer = plan.visual_layers.first().ok_or_else(|| {
+            AgentTemplateError::Preview("No visual layer produced in plan".to_string())
+        })?;
 
         let sample_time = RationalTime::from_seconds(time_seconds, fps);
         let buf = render_frame_overlay_buffer_at(&project, &plan, target_layer, sample_time)
             .map_err(|e| AgentTemplateError::Preview(format!("Compositor error: {}", e)))?
-            .ok_or_else(|| AgentTemplateError::Preview("Compositor returned empty frame".to_string()))?;
+            .ok_or_else(|| {
+                AgentTemplateError::Preview("Compositor returned empty frame".to_string())
+            })?;
 
         Ok(buf)
     }
@@ -1100,17 +1210,7 @@ impl AgentTemplateService {
         let project = load_project(project_path)
             .map_err(|e| AgentTemplateError::ProjectLoad(e.to_string()))?;
 
-        // 4. Stale revision gate
-        if let Some(expected_rev) = base_revision {
-            if expected_rev != project.revision {
-                return Err(AgentTemplateError::Command(CommandError::StaleRevision {
-                    expected: project.revision,
-                    received: expected_rev,
-                }));
-            }
-        }
-
-        // 5. Verify item exists and is text
+        // 4. Verify item exists and is text
         let mut target_found = false;
         for track in &project.tracks {
             if let Some(item) = track.items.iter().find(|i| i.item_id == item_id) {
@@ -1125,13 +1225,7 @@ impl AgentTemplateService {
             return Err(AgentTemplateError::ItemNotFound(item_id.to_string()));
         }
 
-        // 6. Build initial parameters map
-        let mut initial_param_map = HashMap::new();
-        for p in &draft.parameters {
-            initial_param_map.insert(p.key.clone(), p.default_value.clone());
-        }
-
-        // 7. Construct CommandEnvelope
+        // 5. Construct CommandEnvelope with deterministic operation IDs for idempotency
         let cid = client_id.unwrap_or_else(|| "agent_template".to_string());
         let cepoch = client_epoch.unwrap_or(project.client_registry.current_epoch);
         let seq = sequence_number.unwrap_or_else(|| {
@@ -1142,19 +1236,25 @@ impl AgentTemplateService {
                 .map(|c| c.highest_sequence + 1)
                 .unwrap_or(1)
         });
-        let tx_id = transaction_id.unwrap_or_else(|| format!("tx_{}", uuid::Uuid::new_v4().simple()));
+        let tx_id =
+            transaction_id.unwrap_or_else(|| format!("tx_{}", uuid::Uuid::new_v4().simple()));
+        let base_tx = if tx_id.len() > 40 {
+            &tx_id[..40]
+        } else {
+            &tx_id
+        };
 
         let mut operations = Vec::new();
 
-        // Operation 1: Apply template definition
+        let op0 = CommandOperation::TemplateApply {
+            item_id: item_id.to_string(),
+            template_id: draft.template_id.clone(),
+            template_version: draft.template_version,
+            initial_parameters: None,
+        };
         operations.push(OperationEnvelope {
-            operation_id: generate_operation_id(),
-            operation: CommandOperation::TemplateApply {
-                item_id: item_id.to_string(),
-                template_id: draft.template_id.clone(),
-                template_version: draft.template_version,
-                initial_parameters: Some(initial_param_map),
-            },
+            operation_id: format!("{}_op_0_apply", base_tx),
+            operation: op0,
         });
 
         // Operation 2: Apply primary text contents if specified
@@ -1168,7 +1268,7 @@ impl AgentTemplateService {
             if let TemplateLayerKind::Text(t) = &primary.kind {
                 if let Some(rich) = &t.text_rich {
                     operations.push(OperationEnvelope {
-                        operation_id: generate_operation_id(),
+                        operation_id: format!("{}_op_1_rich", base_tx),
                         operation: CommandOperation::ClipTextRichSet {
                             item_id: item_id.to_string(),
                             rich: rich.clone(),
@@ -1177,7 +1277,7 @@ impl AgentTemplateService {
                 }
                 if let Some(anim) = &t.text_animation {
                     operations.push(OperationEnvelope {
-                        operation_id: generate_operation_id(),
+                        operation_id: format!("{}_op_2_anim", base_tx),
                         operation: CommandOperation::ClipTextAnimationSet {
                             item_id: item_id.to_string(),
                             animation: Some(anim.clone()),
@@ -1200,7 +1300,7 @@ impl AgentTemplateService {
             }
             if !ovr_params.is_empty() {
                 operations.push(OperationEnvelope {
-                    operation_id: generate_operation_id(),
+                    operation_id: format!("{}_op_3_overrides", base_tx),
                     operation: CommandOperation::TemplateParametersBatchSet {
                         item_id: item_id.to_string(),
                         parameters: ovr_params,
@@ -1212,7 +1312,7 @@ impl AgentTemplateService {
         let envelope = CommandEnvelope {
             schema_version: crate::modules::domain::CURRENT_SCHEMA_VERSION,
             project_id: project.project_id.clone(),
-            base_revision: project.revision,
+            base_revision: base_revision.unwrap_or(project.revision),
             client_id: Some(cid),
             client_epoch: Some(cepoch),
             sequence_number: Some(seq),

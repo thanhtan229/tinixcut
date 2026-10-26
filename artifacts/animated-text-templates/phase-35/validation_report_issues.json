@@ -1,0 +1,230 @@
+{
+  "valid": true,
+  "schemaVersion": 1,
+  "issues": [
+    {
+      "severity": "warning",
+      "path": "provenance.unsupportedApproximations",
+      "code": "UNSUPPORTED_APPROXIMATION",
+      "message": "Option 'CustomFont(Playfair)' is approximated by editor primitives"
+    }
+  ],
+  "missingResources": [
+    "quote_icon_missing.png"
+  ],
+  "unsupportedOptions": [
+    "CustomFont(Playfair)"
+  ],
+  "normalizedDraft": {
+    "draftId": "draft_quote_card_v1",
+    "schemaVersion": 1,
+    "templateId": "quote_card_modern",
+    "templateVersion": 1,
+    "name": "Modern Quote Card",
+    "category": "QuoteCard",
+    "description": "Elegant rounded quote card with author attribution",
+    "tags": [
+      "quote",
+      "card",
+      "education"
+    ],
+    "slots": [
+      {
+        "slotKey": "quote",
+        "name": "Quote Statement",
+        "slotType": "text",
+        "description": "The main quote text",
+        "required": true
+      },
+      {
+        "slotKey": "author",
+        "name": "Author Name",
+        "slotType": "text",
+        "description": "Attribution line",
+        "required": false
+      }
+    ],
+    "parameters": [
+      {
+        "key": "border_color",
+        "name": "Card Border Color",
+        "param_type": {
+          "type": "Color"
+        },
+        "default_value": {
+          "kind": "Color",
+          "value": "#89B4FA"
+        },
+        "description": null
+      }
+    ],
+    "bindings": [
+      {
+        "parameter_key": "border_color",
+        "target_layer_id": "card_bg",
+        "target_property": "StrokeColor"
+      }
+    ],
+    "layers": [
+      {
+        "layer_id": "card_bg",
+        "name": "Card Background",
+        "z_index": 0,
+        "visible": true,
+        "opacity": 0.95,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": 0.0,
+          "scale_x": 1.0,
+          "scale_y": 1.0,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Shape",
+          "data": {
+            "shape_kind": "RoundedRectangle",
+            "width": 800.0,
+            "height": 360.0,
+            "fill_color": "#1E1E2E",
+            "stroke_color": "#89B4FA",
+            "stroke_width": 3.0,
+            "corner_radius": 18.0
+          }
+        }
+      },
+      {
+        "layer_id": "quote_text",
+        "name": "Quote Body",
+        "z_index": 1,
+        "visible": true,
+        "opacity": 1.0,
+        "transform": {
+          "position_x": 0.0,
+          "position_y": -30.0,
+          "scale_x": 1.0,
+          "scale_y": 1.0,
+          "rotation": 0.0
+        },
+        "anchor": "Center",
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Text",
+          "data": {
+            "is_primary": true,
+            "slot_key": "quote",
+            "text_content": "Học, học nữa, học mãi",
+            "text_style": {
+              "font_family": "Inter",
+              "font_size": 42.0,
+              "font_weight": 700,
+              "font_color": "#CDD6F4",
+              "accent_color": null,
+              "background_color": null,
+              "background_opacity": 0.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0,
+              "alignment": "Center",
+              "line_height": 1.0,
+              "anchor": "Center"
+            },
+            "text_rich": null,
+            "text_animation": null
+          }
+        }
+      },
+      {
+        "layer_id": "author_text",
+        "name": "Author Subtitle",
+        "z_index": 2,
+        "visible": true,
+        "opacity": 0.8,
+        "transform": {
+          "position_x": 200.0,
+          "position_y": 80.0,
+          "scale_x": 1.0,
+          "scale_y": 1.0,
+          "rotation": 0.0
+        },
+        "anchor": "MiddleRight",
+        "pivot": [
+          1.0,
+          0.5
+        ],
+        "motion": null,
+        "kind": {
+          "type": "Text",
+          "data": {
+            "is_primary": false,
+            "slot_key": "author",
+            "text_content": "— V. I. Lênin",
+            "text_style": {
+              "font_family": "Inter",
+              "font_size": 26.0,
+              "font_weight": 700,
+              "font_color": "#A6ADC8",
+              "accent_color": null,
+              "background_color": null,
+              "background_opacity": 0.0,
+              "padding_x": 0.0,
+              "padding_y": 0.0,
+              "alignment": "Center",
+              "line_height": 1.0,
+              "anchor": "Center"
+            },
+            "text_rich": null,
+            "text_animation": null
+          }
+        }
+      }
+    ],
+    "resources": {
+      "resources": []
+    },
+    "responsivePolicy": {
+      "reference_width": 1920,
+      "reference_height": 1080,
+      "supported_aspect_ratios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:5"
+      ],
+      "auto_wrap": true,
+      "auto_fit": false,
+      "safe_margin": 80.0
+    },
+    "defaultDuration": {
+      "value": 90,
+      "rate": {
+        "numerator": 30,
+        "denominator": 1
+      }
+    },
+    "provenance": {
+      "authorType": "agent",
+      "agentId": "tinix-quote-bot",
+      "agentVersion": "2.0.0",
+      "prompt": "Create a clean quote card for educational videos",
+      "referenceSummary": "Inspirational quote card layout",
+      "iteration": 1,
+      "unsupportedApproximations": [
+        "CustomFont(Playfair)"
+      ],
+      "requiredMissingResources": [
+        "quote_icon_missing.png"
+      ],
+      "createdAt": "2026-10-26T23:50:11.536015400+00:00"
+    },
+    "userOverrides": []
+  }
+}

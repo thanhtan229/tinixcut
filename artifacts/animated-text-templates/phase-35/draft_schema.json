@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindings": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "category": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "defaultDuration": {
+      "type": "object"
+    },
+    "description": {
+      "type": "string"
+    },
+    "draftId": {
+      "type": "string"
+    },
+    "layers": {
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "parameters": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "agentVersion": {
+          "type": "string"
+        },
+        "authorType": {
+          "enum": [
+            "agent",
+            "user",
+            "import"
+          ],
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "iteration": {
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "parentDraftId": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "referenceSummary": {
+          "type": "string"
+        },
+        "requiredMissingResources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unsupportedApproximations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "authorType"
+      ],
+      "type": "object"
+    },
+    "resources": {
+      "properties": {
+        "resources": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "responsivePolicy": {
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "type": "integer"
+    },
+    "slots": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "slotKey": {
+            "type": "string"
+          },
+          "slotType": {
+            "enum": [
+              "text",
+              "image",
+              "shape"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "slotKey",
+          "name",
+          "slotType"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "templateId": {
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "type": "string"
+    },
+    "templateVersion": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "userOverrides": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "draftId",
+    "templateId",
+    "name",
+    "category",
+    "description",
+    "layers",
+    "provenance"
+  ],
+  "title": "TinixCutTemplateDraft",
+  "type": "object"
+}
