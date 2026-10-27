@@ -1,8 +1,8 @@
 # Phase Status Tracking — Tinix Animated Text Templates (Phases 27–36)
 
-**Last Updated:** 2026-10-26
+**Last Updated:** 2026-10-27
 **Active Roadmap:** `Plans/plan_animated_text_templates.md`  
-**Overall Program Status:** PHASES 27–33 FUNCTIONALLY COMPLETE (NATIVE QUALIFICATION ITEMS DEFERRED); PHASE 34 IMPLEMENTED, AC-09 NATIVE QUALIFICATION OPEN
+**Overall Program Status:** Phases 27-36 implemented; Gate T5 passed for automated/static/package scope; native GUI, clean-VM, and hardware qualification remain deferred.
 
 ---
 
@@ -73,11 +73,9 @@
 
 ---
 
-## 6. Next Implementation Step
+## 6. Remaining Qualification Work
 
-Proceed to **Phase 31 - Text Animation Engine & Native Sample** (`Plans/plan_phase31_text_animation.md`):
-1. Evaluate the Phase 29 `text_animation` (in/loop/out, grapheme stagger, transforms) on the canonical timeline and feed the shared renderer per frame.
-2. Preserve the Phase 30 preview/export parity seam; do not add a second renderer or mutation path.
-3. Recreate the user's CapCut sample as an editable Tinix template (Milestone T1) with Vietnamese diacritics intact.
-4. Keep the Phase 30 W1 packet transport limit and Phase 26 native qualification gaps explicit.
-
+1. Run the native desktop checklist, including the P34-AC-09 importer apply/save/reopen and undo/redo flow in a disposable project.
+2. Qualify the installer on a clean Windows VM without development toolchains.
+3. Run NVENC/QSV/AMF qualification when suitable hardware is available; do not infer hardware support from software-encoding results.
+4. Keep deferred embedded provider and native agent staging UI in future scope unless product scope changes.

@@ -53,10 +53,10 @@
       "gapId": "GAP-06",
       "originPhase": "Phase 15 / Phase 35",
       "category": "Documentation & Test Count Reconciliation",
-      "item": "ADR-005 & phase15_mcp_acceptance.rs tool count mismatch (8 vs 12)",
-      "description": "Phase 35 added 4 new template tools, bringing total MCP tools to 12. phase15_mcp_acceptance.rs lines 247, 280, 1834 assert tools.len() == 8.",
-      "status": "DOCUMENTED FOR RECONCILIATION",
-      "remediation": "Product Owner / Boss to update ADR-005 text and phase15 assertions to reflect the expanded 12-tool MCP surface."
+      "item": "MCP tool surface documentation and test count reconciliation",
+      "description": "ADR-005 and Phase 15 acceptance coverage now match the current 12-tool MCP surface.",
+      "status": "RESOLVED",
+      "remediation": "No further action."
     }
   ]
 }

@@ -1,0 +1,60 @@
+{
+  "phase": "Phase 36",
+  "generatedAt": "2026-10-27T05:27:00Z",
+  "builder": "pnpm tauri build (Tauri 2.x, Rust 1.98.0, MSVC toolchain)",
+  "packageArtifacts": [
+    {
+      "type": "windows_installer",
+      "path": "src-tauri/target/release/bundle/nsis/TinixCut_0.1.0_x64-setup.exe",
+      "fileName": "TinixCut_0.1.0_x64-setup.exe",
+      "sizeBytes": 60339874,
+      "sizeMiB": 57.54,
+      "sha256": "1D0121A41C8D1188D37D36CFF3C46198DD6B87448D5F11B441811828ACE80ABC",
+      "format": "NSIS x64",
+      "installMode": "currentUser"
+    },
+    {
+      "type": "application_executable",
+      "path": "src-tauri/target/release/tinixcut.exe",
+      "fileName": "tinixcut.exe",
+      "sizeBytes": 11335680,
+      "sizeMiB": 10.81,
+      "sha256": "93F44BD8FD2A9845EBC0661FAAD0D08A8951C18A75B6BDAC0CCD7BA75B57801C",
+      "profile": "release (lto=true, opt-level=3, codegen-units=1, strip=true)"
+    }
+  ],
+  "bundledResources": [
+    {
+      "name": "ffmpeg.exe",
+      "relativePath": "resources/bin/ffmpeg.exe",
+      "source": "Gyan Release Essentials 9.0.2",
+      "purpose": "Audio/video rendering, transcoding, stream decoding, filtergraph composition"
+    },
+    {
+      "name": "ffprobe.exe",
+      "relativePath": "resources/bin/ffprobe.exe",
+      "source": "Gyan Release Essentials 9.0.2",
+      "purpose": "Media stream inspection, duration probing, stream metadata extraction"
+    },
+    {
+      "name": "ffmpeg_provenance.json",
+      "relativePath": "resources/ffmpeg_provenance.json",
+      "purpose": "Cryptographic hash verification and distribution provenance record"
+    },
+    {
+      "name": "Roboto-Bold.ttf",
+      "embedded": true,
+      "license": "Apache-2.0",
+      "sha256": "61F89F8DB49261C2F6106E8DCCC35DF7B2F7ED909020DB40A3FC905E95F99334",
+      "purpose": "Default bundled typography asset (zero external font dependency required)"
+    }
+  ],
+  "offlineCapability": {
+    "offlineEditor": "YES — full timeline, canvas, text rendering, template library, and export operate without internet connectivity",
+    "offlineTemplates": "YES — 12 built-in curated templates and .tinixtpl packs operate completely self-contained",
+    "offlineCapCutImport": "YES — imported drafts with local media/fonts or self-contained ZIP packages convert and render offline",
+    "offlineAgentCLI": "YES — agent CLI and local stdio MCP operate offline against local project files",
+    "cleanVmQualification": "DEFERRED — true clean-machine execution without dev environment/WebView2 prereqs preserved as deferred item P12/P26",
+    "hardwareEncoderQualification": "DEFERRED — direct hardware encoder (NVENC/AMF/QSV) runtime qualification preserved as open item from P26"
+  }
+}

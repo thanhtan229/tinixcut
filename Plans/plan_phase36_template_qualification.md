@@ -1,6 +1,6 @@
 # Phase 36 — Integration, Performance và Release Qualification
 
-**Status:** PLANNED — chưa triển khai.
+**Status:** IMPLEMENTED WITH DEFERRED QUALIFICATION - Gate T5 passed for automated/static/package scope; native GUI, clean-VM, and hardware encoder qualification remain deferred.
 **Dependency:** P27–P35 gates đạt, coverage gaps có owner rõ.
 **Gate T5:** Bộ công cụ template đủ điều kiện sử dụng ổn định, với support matrix và evidence đúng.
 
