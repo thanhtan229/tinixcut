@@ -43,3 +43,7 @@ src-tauri/gen/schemas/
 /artifacts/capcut-user-sample-20261011/*-tinix-export.mp4
 /artifacts/capcut-user-sample-20261011/*contact-sheet.png
 /artifacts/capcut-user-sample-20261011/editable-text-partial.png
+
+# Python bytecode from qualification scripts
+__pycache__/
+*.pyc
