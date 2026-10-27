@@ -1,0 +1,133 @@
+{
+  "sample": "recreated_sample_project.json",
+  "item_id": "clip_eb1a8e188e3e4965b70e1002f94369c4",
+  "original_text": "Tinix — Thử nghiệm tiếng Việt",
+  "variants": [
+    {
+      "variant": "original",
+      "text": "Tinix — Thử nghiệm tiếng Việt",
+      "saved_text": "Tinix — Thử nghiệm tiếng Việt",
+      "text_persisted": true,
+      "reopen_revision": 0,
+      "render": {
+        "seconds": 19.17,
+        "bytes": 92088,
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_qvve4cys\\\\original.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 92088,\n  \"render_time_ms\": 930,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+      },
+      "frames": {
+        "t000": {
+          "frame_index": 0,
+          "full_frame_mae": 0.0,
+          "roi_mae": null,
+          "roi_bbox_ref": null,
+          "roi_pixels": 0
+        },
+        "t_mid": {
+          "frame_index": 75,
+          "full_frame_mae": 4.05,
+          "roi_mae": 49.238,
+          "roi_bbox_ref": [
+            184,
+            437,
+            1303,
+            607
+          ],
+          "roi_pixels": 64810
+        },
+        "t_end": {
+          "frame_index": 149,
+          "full_frame_mae": 0.685,
+          "roi_mae": 15.212,
+          "roi_bbox_ref": [
+            184,
+            489,
+            1738,
+            614
+          ],
+          "roi_pixels": 90798
+        }
+      }
+    },
+    {
+      "variant": "short_ascii",
+      "text": "Tinix",
+      "apply_status": "applied",
+      "saved_text": "Tinix",
+      "text_persisted": true,
+      "reopen_revision": 1,
+      "render": {
+        "seconds": 14.17,
+        "bytes": 27209,
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_qvve4cys\\\\short_ascii.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 27209,\n  \"render_time_ms\": 883,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+      },
+      "frames": {
+        "t000": {
+          "frame_index": 0,
+          "png": "t000.png"
+        },
+        "t_mid": {
+          "frame_index": 75,
+          "png": "t_mid.png"
+        },
+        "t_end": {
+          "frame_index": 149,
+          "png": "t_end.png"
+        }
+      }
+    },
+    {
+      "variant": "long_multiline",
+      "text": "Chào mừng bạn đến với TinixCut, phần mềm dựng video tự động",
+      "apply_status": "applied",
+      "saved_text": "Chào mừng bạn đến với TinixCut, phần mềm dựng video tự động",
+      "text_persisted": true,
+      "reopen_revision": 1,
+      "render": {
+        "seconds": 25.85,
+        "bytes": 114610,
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_qvve4cys\\\\long_multiline.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 114610,\n  \"render_time_ms\": 980,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+      },
+      "frames": {
+        "t000": {
+          "frame_index": 0,
+          "png": "t000.png"
+        },
+        "t_mid": {
+          "frame_index": 75,
+          "png": "t_mid.png"
+        },
+        "t_end": {
+          "frame_index": 149,
+          "png": "t_end.png"
+        }
+      }
+    },
+    {
+      "variant": "vietnamese_marks",
+      "text": "Ửng dụng ệ ế ử",
+      "apply_status": "applied",
+      "saved_text": "Ửng dụng ệ ế ử",
+      "text_persisted": true,
+      "reopen_revision": 1,
+      "render": {
+        "seconds": 16.45,
+        "bytes": 55455,
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_qvve4cys\\\\vietnamese_marks.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 55455,\n  \"render_time_ms\": 928,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+      },
+      "frames": {
+        "t000": {
+          "frame_index": 0,
+          "png": "t000.png"
+        },
+        "t_mid": {
+          "frame_index": 75,
+          "png": "t_mid.png"
+        },
+        "t_end": {
+          "frame_index": 149,
+          "png": "t_end.png"
+        }
+      }
+    }
+  ]
+}
