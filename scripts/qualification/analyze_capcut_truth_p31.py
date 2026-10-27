@@ -32,11 +32,17 @@ def box(m: np.ndarray) -> tuple[int, int, int, int]:
     return int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
 
 
+def baseline_row(m: np.ndarray, x0: int = 190, x1: int = 330) -> int:
+    """Bottom ink row of the word 'Tinix' (no descenders), i.e. the baseline."""
+    rows = np.where(m[:, x0:x1].any(1))[0]
+    return int(rows.max()) + 1
+
+
 def main() -> int:
     cap = core(h.load_rgb(CAPCUT))
     cy0, cy1, cx0, cx1 = box(cap)
     capc = cap[cy0:cy1, cx0:cx1]
-    out = {"capcut_core_box": {"y0": cy0, "y1": cy1, "x0": cx0, "x1": cx1}, "capcut_core_px": int(cap.sum()), "candidates": {}}
+    out = {"capcut_baseline_y": baseline_row(cap), "capcut_core_box": {"y0": cy0, "y1": cy1, "x0": cx0, "x1": cx1}, "capcut_core_px": int(cap.sum()), "candidates": {}}
     for name, path in CANDIDATES.items():
         m = core(h.load_rgb(path))
         y0, y1, x0, x1 = box(m)
@@ -46,6 +52,8 @@ def main() -> int:
             raw_iou = float((m & cap).sum() / max((m | cap).sum(), 1))
         norm = np.asarray(Image.fromarray((sub * 255).astype(np.uint8)).resize((capc.shape[1], capc.shape[0]), Image.NEAREST)) > 127
         out["candidates"][name] = {
+            "baseline_y": baseline_row(m),
+            "baseline_offset_vs_capcut_px": baseline_row(m) - baseline_row(cap),
             "core_px": int(m.sum()),
             "core_box": {"y0": y0, "y1": y1, "x0": x0, "x1": x1},
             "raw_core_iou_same_frame": round(raw_iou, 4) if raw_iou is not None else None,

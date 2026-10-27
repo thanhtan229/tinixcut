@@ -57,6 +57,24 @@
       "description": "ADR-005 and Phase 15 acceptance coverage now match the current 12-tool MCP surface.",
       "status": "RESOLVED",
       "remediation": "No further action."
+    },
+    {
+      "gapId": "GAP-07",
+      "originPhase": "Phase 31 / Phase 29",
+      "category": "Text Rendering Parity",
+      "item": "CapCut glow effect not represented in rich-text domain",
+      "description": "The CapCut reference adds a soft outer glow (about 92k halo pixels vs about 30k in the Tinix render at frame 31). The Phase 29 rich-text domain has no glow field, so the effect cannot be reproduced.",
+      "status": "KNOWN LIMITATION",
+      "remediation": "Decide whether glow enters the roadmap (Phase 32+ text-effect scope) or stays out of v1 template scope. Requires a new domain field and renderer work; not in scope of this record."
+    },
+    {
+      "gapId": "GAP-08",
+      "originPhase": "Phase 31",
+      "category": "Text Placement Parity",
+      "item": "Vertical baseline placement differs from CapCut",
+      "description": "Measured baseline of the word 'Tinix' at frame 31: CapCut y=571; Tinix Roboto 152 y=585 (+14 px); Tinix MPLUS1p 138 y=577 (+6 px). The difference is a placement convention offset, not a font-metric error.",
+      "status": "OPEN",
+      "remediation": "Decide the product placement convention (match CapCut baseline or keep Tinix anchor). If matched, calibrate the anchor/offset convention in the shared renderer and re-run scripts/qualification/analyze_capcut_truth_p31.py."
     }
   ]
 }

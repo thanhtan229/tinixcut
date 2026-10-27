@@ -1,4 +1,5 @@
 {
+  "capcut_baseline_y": 571,
   "capcut_core_box": {
     "y0": 488,
     "y1": 594,
@@ -8,6 +9,8 @@
   "capcut_core_px": 42765,
   "candidates": {
     "tinix_mplus1p": {
+      "baseline_y": 581,
+      "baseline_offset_vs_capcut_px": 10,
       "core_px": 51578,
       "core_box": {
         "y0": 489,
@@ -21,6 +24,8 @@
       "scale_normalised_shape_iou": 0.9363
     },
     "tinix_roboto": {
+      "baseline_y": 585,
+      "baseline_offset_vs_capcut_px": 14,
       "core_px": 49514,
       "core_box": {
         "y0": 492,
@@ -34,6 +39,8 @@
       "scale_normalised_shape_iou": 0.528
     },
     "tinix_mplus1p_fontsize138": {
+      "baseline_y": 577,
+      "baseline_offset_vs_capcut_px": 6,
       "core_px": 42614,
       "core_box": {
         "y0": 494,
