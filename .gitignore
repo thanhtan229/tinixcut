@@ -30,3 +30,16 @@ src-tauri/gen/schemas/
 *.tmp
 *.recovery
 
+
+# Reproducible animated-text renderer PoC outputs
+/artifacts/animated-text-templates/phase-28/poc_alpha_*.png
+/artifacts/animated-text-templates/phase-28/poc_export_sample.mp4
+/artifacts/animated-text-templates/phase-28/poc_overlay_*.png
+/artifacts/animated-text-templates/phase-28/runs/
+/artifacts/animated-text-templates/phase-29/phase28-benchmark-current-*.csv
+
+# Generated CapCut import proof renders and contact sheets
+/artifacts/capcut-import-poc-20261011/text-only-proof.*
+/artifacts/capcut-user-sample-20261011/*-tinix-export.mp4
+/artifacts/capcut-user-sample-20261011/*contact-sheet.png
+/artifacts/capcut-user-sample-20261011/editable-text-partial.png

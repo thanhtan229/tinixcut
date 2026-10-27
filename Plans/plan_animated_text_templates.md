@@ -1,7 +1,7 @@
 # Animated Text Templates — Roadmap Phase 27–36
 
 **Ngày lập:** 2026-10-11
-**Trạng thái:** IN PROGRESS — Phase 27, 28 & 29 COMPLETE; Phase 30 READY TO START.
+**Trạng thái:** Phases 27-36 implemented; Gate T5 passed for automated/static/package scope, with native GUI, clean-VM, and hardware qualification deferred.
 **Mục tiêu:** Text template phong phú, chỉnh sửa được, có animation; chuyển đổi những template CapCut được hỗ trợ; agent tạo template theo cùng mô hình Tinix.
 **Phạm vi:** TinixCut trên Windows, kế thừa schema/Command Service/composition hiện có.
 

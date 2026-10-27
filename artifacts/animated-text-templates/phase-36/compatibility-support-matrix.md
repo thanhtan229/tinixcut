@@ -57,7 +57,7 @@ Phase 35 introduced the **Agent Template Generation** subsystem, adding **4 new 
 
 > [!NOTE]
 > **Reconciliation Status:** The active MCP server now exposes **exactly 12 tools**.  
-> The stale "exactly 8 tools" text in `ADR-005` line 150, `Plans/plan_phase15.md` lines 37, 80, 158, and the assertions in `src-tauri/tests/phase15_mcp_acceptance.rs` (lines 247, 280, 1834) are documented as known documentation/test reconciliation items for the repository owner to update.
+> Reconciliation complete: ADR-005 and the current server contract list all 12 tools, and Phase 15 acceptance coverage checks the complete current surface.
 
 ### 3.2. CLI and MCP Operational Equivalence
 
