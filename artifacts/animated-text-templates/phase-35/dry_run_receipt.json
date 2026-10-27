@@ -1,0 +1,23 @@
+{
+  "projectId": "proj_285570dad8d64cf290838516d0929d3a",
+  "baseRevision": 0,
+  "operationsEvaluated": 3,
+  "changes": [
+    {
+      "clipModified": {
+        "item_id": "evidence_clip"
+      }
+    },
+    {
+      "clipModified": {
+        "item_id": "evidence_clip"
+      }
+    },
+    {
+      "clipModified": {
+        "item_id": "evidence_clip"
+      }
+    }
+  ],
+  "warnings": []
+}

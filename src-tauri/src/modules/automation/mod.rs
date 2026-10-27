@@ -622,20 +622,39 @@ pub fn dispatch_method(
                 .get("outputPath")
                 .and_then(|v| v.as_str())
                 .map(Path::new);
+            let timeout_ms = params.get("timeoutMs").and_then(|v| v.as_u64());
+            let cancel_requested = params
+                .get("cancelRequested")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let cancel_flag = std::sync::atomic::AtomicBool::new(cancel_requested);
+            let timeout = timeout_ms.map(std::time::Duration::from_millis);
 
             if let Some(out_p) = output_path {
                 let receipt =
-                    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
-                        &draft, out_p, time_sec, width, height,
+                    crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png_bounded(
+                        &draft,
+                        out_p,
+                        time_sec,
+                        width,
+                        height,
+                        timeout,
+                        Some(&cancel_flag),
                     )
                     .map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
                 serde_json::to_value(receipt)
                     .map_err(|e| AutomationError::Serialization(e.to_string()))
             } else {
-                let buf = crate::modules::templates::agent::AgentTemplateService::preview_draft(
-                    &draft, time_sec, width, height,
-                )
-                .map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
+                let buf =
+                    crate::modules::templates::agent::AgentTemplateService::preview_draft_bounded(
+                        &draft,
+                        time_sec,
+                        width,
+                        height,
+                        timeout,
+                        Some(&cancel_flag),
+                    )
+                    .map_err(|e| AutomationError::Cli(format!("Preview failed: {e}")))?;
                 Ok(serde_json::json!({
                     "width": buf.width,
                     "height": buf.height,

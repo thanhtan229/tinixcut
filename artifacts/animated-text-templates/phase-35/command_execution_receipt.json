@@ -1,0 +1,31 @@
+{
+  "receipt": {
+    "projectId": "proj_285570dad8d64cf290838516d0929d3a",
+    "priorRevision": 0,
+    "newRevision": 1,
+    "transactionId": "tx_apply_8f73e248bece4e688e1a6e649adb64bc",
+    "operationsApplied": 3,
+    "receipts": [
+      {
+        "operationId": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_0_apply",
+        "status": "applied",
+        "affectedItemId": "evidence_clip"
+      },
+      {
+        "operationId": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_1_rich",
+        "status": "applied",
+        "affectedItemId": "evidence_clip"
+      },
+      {
+        "operationId": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_2_anim",
+        "status": "applied",
+        "affectedItemId": "evidence_clip"
+      }
+    ],
+    "idempotencyScope": "structured"
+  },
+  "appliedDraftId": "draft_vn_title_v2_refined",
+  "templateId": "vn_hao_khi_evidence",
+  "templateVersion": 1,
+  "revision": 1
+}

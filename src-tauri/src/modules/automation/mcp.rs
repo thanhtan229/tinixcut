@@ -508,6 +508,12 @@ pub struct TemplatePreviewArgs {
     pub height: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -733,10 +739,134 @@ pub fn map_command_error(err: CommandError) -> StructuredError {
 // TinixCut MCP Server Implementation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Worker Concurrency and Capacity Management
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum CapacityError {
+    AlreadyActive(String),
+    Full,
+}
+
+#[derive(Default)]
+pub struct WorkerCapacityState {
+    pub max_workers: usize,
+    pub active_job_ids: std::collections::HashSet<String>,
+    pub live_workers: usize,
+    pub peak_live_workers: usize,
+    pub job_live_counts: std::collections::HashMap<String, usize>,
+    pub job_peak_counts: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Clone)]
+pub struct PreviewWorkerCapacity {
+    inner: Arc<std::sync::Mutex<WorkerCapacityState>>,
+}
+
+impl PreviewWorkerCapacity {
+    pub fn new(max_workers: usize) -> Self {
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(WorkerCapacityState {
+                max_workers,
+                active_job_ids: std::collections::HashSet::new(),
+                live_workers: 0,
+                peak_live_workers: 0,
+                job_live_counts: std::collections::HashMap::new(),
+                job_peak_counts: std::collections::HashMap::new(),
+            })),
+        }
+    }
+
+    /// Try to acquire capacity for `job_id`.
+    /// Returns:
+    /// - Err(CapacityError::AlreadyActive) if a worker is already running for this job_id
+    /// - Err(CapacityError::Full) if total active workers >= max_workers
+    /// - Ok(WorkerCapacityPermit) if permit is successfully acquired
+    pub fn try_acquire(&self, job_id: &str) -> Result<WorkerCapacityPermit, CapacityError> {
+        let mut state = self.inner.lock().unwrap();
+        if state.active_job_ids.contains(job_id) {
+            return Err(CapacityError::AlreadyActive(job_id.to_string()));
+        }
+        if state.live_workers >= state.max_workers {
+            return Err(CapacityError::Full);
+        }
+
+        state.active_job_ids.insert(job_id.to_string());
+        state.live_workers += 1;
+        if state.live_workers > state.peak_live_workers {
+            state.peak_live_workers = state.live_workers;
+        }
+        let new_count = {
+            let count = state.job_live_counts.entry(job_id.to_string()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        let job_peak = state.job_peak_counts.entry(job_id.to_string()).or_insert(0);
+        if new_count > *job_peak {
+            *job_peak = new_count;
+        }
+
+        Ok(WorkerCapacityPermit {
+            tracker: Arc::clone(&self.inner),
+            job_id: job_id.to_string(),
+            active: true,
+        })
+    }
+
+    pub fn live_workers(&self) -> usize {
+        self.inner.lock().unwrap().live_workers
+    }
+
+    pub fn peak_live_workers(&self) -> usize {
+        self.inner.lock().unwrap().peak_live_workers
+    }
+
+    pub fn live_for_job(&self, job_id: &str) -> usize {
+        let state = self.inner.lock().unwrap();
+        state.job_live_counts.get(job_id).copied().unwrap_or(0)
+    }
+
+    pub fn peak_for_job(&self, job_id: &str) -> usize {
+        let state = self.inner.lock().unwrap();
+        state.job_peak_counts.get(job_id).copied().unwrap_or(0)
+    }
+
+    pub fn is_active(&self, job_id: &str) -> bool {
+        self.inner.lock().unwrap().active_job_ids.contains(job_id)
+    }
+}
+
+pub struct WorkerCapacityPermit {
+    tracker: Arc<std::sync::Mutex<WorkerCapacityState>>,
+    job_id: String,
+    active: bool,
+}
+
+impl Drop for WorkerCapacityPermit {
+    fn drop(&mut self) {
+        if self.active {
+            if let Ok(mut state) = self.tracker.lock() {
+                state.active_job_ids.remove(&self.job_id);
+                if state.live_workers > 0 {
+                    state.live_workers -= 1;
+                }
+                if let Some(count) = state.job_live_counts.get_mut(&self.job_id) {
+                    if *count > 0 {
+                        *count -= 1;
+                    }
+                }
+            }
+            self.active = false;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TinixCutMcpServer {
     pub jobs: Arc<Mutex<JobManager>>,
     pub write_gate: Arc<tokio::sync::Mutex<()>>,
+    pub worker_capacity: Arc<PreviewWorkerCapacity>,
 }
 
 impl Default for TinixCutMcpServer {
@@ -750,6 +880,7 @@ impl TinixCutMcpServer {
         Self {
             jobs: Arc::new(Mutex::new(JobManager::new(4))),
             write_gate: Arc::new(tokio::sync::Mutex::new(())),
+            worker_capacity: Arc::new(PreviewWorkerCapacity::new(4)),
         }
     }
 
@@ -1162,6 +1293,7 @@ impl TinixCutMcpServer {
     )]
     async fn template_preview(
         &self,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
         Parameters(params): Parameters<TemplatePreviewArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let time_sec = params.time_seconds.unwrap_or(1.0);
@@ -1171,22 +1303,296 @@ impl TinixCutMcpServer {
                 uuid::Uuid::new_v4().simple()
             ))
         });
-        let receipt =
-            match crate::modules::templates::agent::AgentTemplateService::preview_draft_to_png(
-                &params.draft,
-                &out_path,
-                time_sec,
-                params.width,
-                params.height,
-            ) {
-                Ok(r) => r,
-                Err(e) => {
-                    return Ok(tool_error(StructuredError::new(
-                        "PREVIEW_RENDER_FAILED",
-                        e.to_string(),
-                    )));
-                }
+        let timeout = params
+            .timeout_ms
+            .map(std::time::Duration::from_millis)
+            .unwrap_or(crate::modules::templates::agent::DEFAULT_PREVIEW_TIMEOUT);
+
+        let jid = params
+            .job_id
+            .unwrap_or_else(|| format!("preview_{}", uuid::Uuid::new_v4().simple()));
+
+        // Fast path: if this exact job_id is currently being executed by a live worker, reject early
+        if self.worker_capacity.is_active(&jid) {
+            return Ok(tool_error(StructuredError::new(
+                "DUPLICATE_ACTIVE_JOB",
+                format!("Job '{}' is already running", jid),
+            )));
+        }
+
+        // Reject duplicate active IDs or deduplicate
+        {
+            let mut jm = match self.jobs.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
             };
+            if let Some(existing) = jm.get_job(&jid) {
+                match existing.status {
+                    crate::modules::job::JobStatus::Queued
+                    | crate::modules::job::JobStatus::Running => {
+                        return Ok(tool_error(StructuredError::new(
+                            "DUPLICATE_ACTIVE_JOB",
+                            format!(
+                                "Job '{}' is already active (status: {:?})",
+                                jid, existing.status
+                            ),
+                        )));
+                    }
+                    crate::modules::job::JobStatus::Cancelled => {
+                        return Ok(tool_error(StructuredError::new(
+                            "OPERATION_CANCELLED",
+                            "Template preview render was cancelled (job already cancelled in JobManager)",
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            let (_submitted_id, is_deduped) = jm.submit_job(
+                jid.clone(),
+                crate::modules::job::JobKind::Thumbnail,
+                format!("preview_{}", jid),
+                1,
+            );
+            if is_deduped {
+                return Ok(tool_error(StructuredError::new(
+                    "DUPLICATE_ACTIVE_JOB",
+                    format!("Job '{}' deduplicated to an already active job", jid),
+                )));
+            }
+        }
+
+        let start_wait = std::time::Instant::now();
+        // Wait for concurrency capacity. NEVER spawn blocking render while queued or full!
+        let (permit, cancel_flag) = loop {
+            if context.ct.is_cancelled() || params.cancel_requested == Some(true) {
+                return Ok(tool_error(StructuredError::new(
+                    "OPERATION_CANCELLED",
+                    "Template preview render was cancelled",
+                )));
+            }
+
+            if start_wait.elapsed() >= timeout {
+                if let Ok(mut jm) = self.jobs.lock() {
+                    jm.mark_failed(&jid, "Capacity wait timeout".to_string());
+                }
+                return Ok(tool_error(StructuredError::new(
+                    "OPERATION_TIMEOUT",
+                    "Template preview render timed out waiting for concurrency capacity",
+                )));
+            }
+
+            let jm_can_start = {
+                let jm = match self.jobs.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                jm.can_start()
+            };
+
+            if jm_can_start {
+                match self.worker_capacity.try_acquire(&jid) {
+                    Ok(permit) => {
+                        let mut jm = match self.jobs.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if let Some(existing) = jm.get_job(&jid) {
+                            if existing.status == crate::modules::job::JobStatus::Cancelled {
+                                drop(permit);
+                                return Ok(tool_error(StructuredError::new(
+                                    "OPERATION_CANCELLED",
+                                    "Template preview render was cancelled",
+                                )));
+                            }
+                        }
+                        match jm.start_job(&jid) {
+                            Ok(flag) => {
+                                break (permit, flag);
+                            }
+                            Err(err) => {
+                                drop(permit);
+                                if err.contains("Cannot start cancelled job") {
+                                    return Ok(tool_error(StructuredError::new(
+                                        "OPERATION_CANCELLED",
+                                        "Template preview render was cancelled",
+                                    )));
+                                }
+                                if err.contains("Job is already running") {
+                                    return Ok(tool_error(StructuredError::new(
+                                        "DUPLICATE_ACTIVE_JOB",
+                                        format!("Job '{}' is already running", jid),
+                                    )));
+                                }
+                                // Wait briefly for a running job slot to free up or for cancellation
+                            }
+                        }
+                    }
+                    Err(CapacityError::AlreadyActive(active_id)) => {
+                        return Ok(tool_error(StructuredError::new(
+                            "DUPLICATE_ACTIVE_JOB",
+                            format!("Job '{}' is already running", active_id),
+                        )));
+                    }
+                    Err(CapacityError::Full) => {}
+                }
+            }
+
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {},
+                _ = context.ct.cancelled() => {},
+            }
+        };
+
+        if params.cancel_requested == Some(true) || context.ct.is_cancelled() {
+            cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Connect request cancellation token to worker cancel flag
+        let ct_clone = context.ct.clone();
+        let cancel_flag_clone = cancel_flag.clone();
+        tokio::spawn(async move {
+            ct_clone.cancelled().await;
+            cancel_flag_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // RAII guard to flip cancel_flag if the request future is cancelled or dropped by caller
+        struct CancelOnDrop {
+            flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            completed: bool,
+        }
+        impl Drop for CancelOnDrop {
+            fn drop(&mut self) {
+                if !self.completed {
+                    self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+
+        let mut drop_guard = CancelOnDrop {
+            flag: cancel_flag.clone(),
+            completed: false,
+        };
+
+        let elapsed_wait = start_wait.elapsed();
+        let remaining_timeout = timeout.saturating_sub(elapsed_wait);
+        if remaining_timeout.is_zero() {
+            drop_guard.completed = true;
+            if let Ok(mut jm) = self.jobs.lock() {
+                jm.mark_failed(&jid, "Timeout before render start".to_string());
+            }
+            drop(permit);
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_TIMEOUT",
+                "Template preview render timed out before render start",
+            )));
+        }
+
+        let draft = params.draft;
+        let out_path_clone = out_path.clone();
+        let cancel_clone = cancel_flag.clone();
+        let width = params.width;
+        let height = params.height;
+
+        let jobs_arc_inner = std::sync::Arc::clone(&self.jobs);
+        let active_jid_inner = jid.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            // Worker-owned capacity permit holding until closure exit, independent of JobManager status.
+            let _worker_permit = permit;
+            let res = crate::modules::templates::agent::AgentTemplateService::preview_draft_to_temp_bounded(
+                &draft,
+                &out_path_clone,
+                time_sec,
+                width,
+                height,
+                Some(remaining_timeout),
+                Some(&cancel_clone),
+            );
+
+            // Update JobManager status upon worker closure completion
+            if let Ok(mut jm) = jobs_arc_inner.lock() {
+                match &res {
+                    Ok(_) => {
+                        jm.mark_completed(&active_jid_inner);
+                    }
+                    Err(crate::modules::templates::agent::AgentTemplateError::Cancelled) => {
+                        let _ = jm.cancel_job(&active_jid_inner);
+                    }
+                    Err(e) => {
+                        jm.mark_failed(&active_jid_inner, e.to_string());
+                    }
+                }
+            }
+
+            res
+        });
+
+        let spawn_res = match tokio::time::timeout(remaining_timeout, task).await {
+            Ok(join_res) => {
+                drop_guard.completed = true;
+                join_res.map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+            }
+            Err(_) => {
+                drop_guard.completed = true;
+                cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                // DO NOT decrement capacity or mark job completed/failed in JobManager here.
+                // The worker in spawn_blocking is still running and owns its capacity permit.
+                // The worker will update JobManager and release capacity when its closure exits.
+                return Ok(tool_error(StructuredError::new(
+                    "OPERATION_TIMEOUT",
+                    "Template preview render timed out before completion",
+                )));
+            }
+        };
+
+        let (mut temp_artifact, receipt) = match spawn_res {
+            Ok((artifact, r)) => (artifact, r),
+            Err(crate::modules::templates::agent::AgentTemplateError::Cancelled) => {
+                return Ok(tool_error(StructuredError::new(
+                    "OPERATION_CANCELLED",
+                    "Template preview render was cancelled",
+                )));
+            }
+            Err(crate::modules::templates::agent::AgentTemplateError::Timeout(_)) => {
+                return Ok(tool_error(StructuredError::new(
+                    "OPERATION_TIMEOUT",
+                    "Template preview render timed out before completion",
+                )));
+            }
+            Err(e) => {
+                return Ok(tool_error(StructuredError::new(
+                    "PREVIEW_RENDER_FAILED",
+                    e.to_string(),
+                )));
+            }
+        };
+
+        // Final deadline and cancellation check in MCP immediately before publication/rename
+        if context.ct.is_cancelled()
+            || cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
+            || params.cancel_requested == Some(true)
+        {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_CANCELLED",
+                "Template preview render was cancelled",
+            )));
+        }
+        if start_wait.elapsed() >= timeout {
+            return Ok(tool_error(StructuredError::new(
+                "OPERATION_TIMEOUT",
+                "Template preview render timed out before publication",
+            )));
+        }
+
+        // Coordinate publication with response completion:
+        // Response completion is already secured (outer timeout did not fire, render and pixel calculations succeeded).
+        // Atomically publish temp_artifact to out_path.
+        if let Err(e) = std::fs::rename(temp_artifact.path(), &out_path) {
+            return Ok(tool_error(StructuredError::new(
+                "PREVIEW_PUBLISH_FAILED",
+                format!("Failed to atomically publish preview: {}", e),
+            )));
+        }
+        temp_artifact.disarm();
         Ok(tool_ok(&receipt))
     }
 

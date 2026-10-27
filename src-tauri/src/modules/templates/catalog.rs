@@ -5,10 +5,19 @@
 use crate::modules::domain::id::is_valid_id;
 use crate::modules::domain::template::TemplateDefinition;
 use crate::modules::templates::curated::{curated_definitions, resolve_curated_definition};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{OnceLock, RwLock};
 use thiserror::Error;
+
+static STAGED_DEFINITIONS: OnceLock<RwLock<HashMap<(String, u32), TemplateDefinition>>> =
+    OnceLock::new();
+
+fn staged_map() -> &'static RwLock<HashMap<(String, u32), TemplateDefinition>> {
+    STAGED_DEFINITIONS.get_or_init(|| RwLock::new(HashMap::new()))
+}
 
 #[derive(Debug, Error)]
 pub enum TemplateCatalogError {
@@ -110,10 +119,29 @@ impl TemplateCatalog {
         list
     }
 
+    /// Registers a template definition in the in-memory staging registry during transaction execution.
+    pub fn stage_definition(definition: TemplateDefinition) {
+        if let Ok(mut map) = staged_map().write() {
+            map.insert((definition.id.clone(), definition.version), definition);
+        }
+    }
+
+    /// Removes a staged template definition.
+    pub fn unstage_definition(id: &str, version: u32) {
+        if let Ok(mut map) = staged_map().write() {
+            map.remove(&(id.to_string(), version));
+        }
+    }
+
     /// Resolves a template definition by exact id and version.
     pub fn get(&self, id: &str, version: u32) -> Option<TemplateDefinition> {
         if !is_valid_id(id) {
             return None;
+        }
+        if let Ok(guard) = staged_map().read() {
+            if let Some(def) = guard.get(&(id.to_string(), version)) {
+                return Some(def.clone());
+            }
         }
         if let Ok(user_path) = self.definition_file_path(id, version) {
             if user_path.exists() {

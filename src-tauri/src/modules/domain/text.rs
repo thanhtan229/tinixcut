@@ -34,6 +34,7 @@ pub enum FontStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FontReference {
     pub family: String,
     pub weight: u16,
@@ -84,6 +85,7 @@ pub enum TextWrapMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextLayout {
     #[serde(default)]
     pub max_width: Option<f32>,
@@ -174,6 +176,7 @@ pub enum GradientSpace {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GradientStop {
     pub offset: f32,
     pub color: String,
@@ -282,6 +285,7 @@ pub enum StrokeAlign {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextStroke {
     pub color: String,
     pub width: f32,
@@ -307,6 +311,7 @@ impl TextStroke {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextShadow {
     pub color: String,
     #[serde(default)]
@@ -340,6 +345,7 @@ impl TextShadow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextBackgroundBox {
     #[serde(default)]
     pub fill: TextFill,
@@ -393,6 +399,7 @@ impl TextBackgroundBox {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TextSpanStyle {
     #[serde(default)]
     pub fill: Option<TextFill>,
@@ -431,6 +438,7 @@ impl TextSpanStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RichTextSpan {
     pub start: u32,
     pub end: u32,
@@ -463,6 +471,7 @@ impl RichTextSpan {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TextRichStyle {
     #[serde(default)]
     pub font: Option<FontReference>,
@@ -594,6 +603,7 @@ pub enum DurationConflictPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnimationTransform {
     pub translate_x: f32,
     pub translate_y: f32,
@@ -638,6 +648,7 @@ impl AnimationTransform {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextAnimationSegment {
     pub duration: RationalTime,
     #[serde(default)]
@@ -668,6 +679,7 @@ impl TextAnimationSegment {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextAnimation {
     #[serde(default)]
     pub unit: AnimationUnit,

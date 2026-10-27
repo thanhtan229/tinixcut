@@ -114,6 +114,7 @@ impl TemplateParameterValue {
 
 /// A parameter definition declared in a template definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateParameterDefinition {
     pub key: String,
     pub name: String,
@@ -149,6 +150,7 @@ impl TemplateParameterDefinition {
 
 /// Binding between a parameter and a target layer's property.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateParameterBinding {
     pub parameter_key: String,
     pub target_layer_id: String,
@@ -216,6 +218,7 @@ impl TemplateParameterBinding {
 
 /// User override of a specific layer property.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateOverride {
     pub target_layer_id: String,
     pub property: TemplatePropertyPath,
@@ -233,6 +236,7 @@ pub enum TemplateShapeKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateShapeLayerData {
     pub shape_kind: TemplateShapeKind,
     pub width: f32,
@@ -288,6 +292,7 @@ impl TemplateShapeLayerData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateTextLayerData {
     /// If true, this is the primary slot and reuses the owning TimelineItem's
     /// text_content, text_rich, and text_animation (no duplicate authority!).
@@ -338,6 +343,7 @@ impl TemplateTextLayerData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateImageLayerData {
     pub asset_id: Option<String>,
     #[serde(default)]
@@ -384,6 +390,7 @@ pub enum TemplateLayerKind {
 
 /// A layer within a template definition or instance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateLayer {
     pub layer_id: String,
     pub name: String,
@@ -506,6 +513,7 @@ pub fn is_safe_resource_filename(name: &str) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateResourceReference {
     pub resource_id: String,
     pub kind: TemplateResourceKind,
@@ -542,6 +550,7 @@ impl TemplateResourceReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateResourceManifest {
     #[serde(default)]
     pub resources: Vec<TemplateResourceReference>,
@@ -564,6 +573,7 @@ impl TemplateResourceManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResponsivePolicy {
     #[serde(default = "default_ref_width")]
     pub reference_width: u32,

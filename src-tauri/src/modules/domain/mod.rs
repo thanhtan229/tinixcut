@@ -159,6 +159,7 @@ pub enum TextAnchor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TextStyle {
     pub font_family: String,
     pub font_size: f32,
@@ -274,6 +275,7 @@ pub(crate) fn is_hex_color(value: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Transform {
     pub position_x: f32, // Pixel offset or normalized (-1920 to +1920)
     pub position_y: f32,
@@ -295,6 +297,7 @@ impl Default for Transform {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Crop {
     pub top: f32, // 0.0 to 1.0
     pub bottom: f32,

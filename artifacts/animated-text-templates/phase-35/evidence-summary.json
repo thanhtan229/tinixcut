@@ -1,11 +1,21 @@
 {
-  "gate": "T4 PASS",
+  "adr005_tool_count_mismatch_note": "ADR-005 defines 8 tools for Phase 10; Phase 35 adds 4 template tools (tinixcut_template_validate, tinixcut_template_preview, tinixcut_template_apply, tinixcut_template_save) totaling 12 tools. ADR-005 document update recommended.",
+  "evaluation": "VERIFIED_BY_EVIDENCE",
+  "genuine_receipts": {
+    "catalog_save": "catalog_save_receipt.json",
+    "command_execution": "command_execution_receipt.json",
+    "dry_run": "dry_run_receipt.json",
+    "export": "export_receipt.json",
+    "preview": "preview_receipt.json",
+    "staging": "client_staging_receipt.json"
+  },
   "mcp_tools_added": [
     "tinixcut_template_validate",
     "tinixcut_template_preview",
     "tinixcut_template_apply",
     "tinixcut_template_save"
   ],
+  "mcp_tools_documented_in_adr005": 8,
   "mcp_tools_total": 12,
   "phase": 35,
   "quote_card_preview": {
@@ -14,6 +24,7 @@
     "nonZeroPixels": 128368,
     "width": 1280
   },
+  "status": "COMPLETED",
   "title": "Agent Template Generation & Refinement via CLI/MCP",
   "verified_features": [
     "Typed declarative draft contract with strict schema validation",

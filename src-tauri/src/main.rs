@@ -44,6 +44,7 @@ fn main() {
             || subcmd == "render"
             || subcmd == "session"
             || subcmd == "--stdio"
+            || subcmd == "template"
             || subcmd == "help"
             || subcmd == "--help"
             || subcmd == "-h"

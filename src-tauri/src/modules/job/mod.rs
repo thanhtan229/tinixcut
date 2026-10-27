@@ -131,6 +131,9 @@ impl JobManager {
             if job.status == JobStatus::Cancelled {
                 return Err("Cannot start cancelled job".to_string());
             }
+            if job.status == JobStatus::Running {
+                return Err("Job is already running".to_string());
+            }
             job.status = JobStatus::Running;
             job.cancel_flag.clone()
         };

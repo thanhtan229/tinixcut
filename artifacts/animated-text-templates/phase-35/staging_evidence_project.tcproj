@@ -1,0 +1,461 @@
+{
+  "schema_version": 11,
+  "project_id": "proj_285570dad8d64cf290838516d0929d3a",
+  "name": "EvidenceStageProject",
+  "revision": 1,
+  "settings": {
+    "width": 1920,
+    "height": 1080,
+    "canvas_background_color": "#000000",
+    "frame_rate": {
+      "numerator": 30,
+      "denominator": 1
+    },
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "assets": [],
+  "tracks": [
+    {
+      "track_id": "trk_a1e21248a87940c9b0c7f39dd9ecc1dd",
+      "name": "Video Track 1",
+      "kind": "Video",
+      "muted": false,
+      "locked": false,
+      "items": [
+        {
+          "item_id": "evidence_clip",
+          "asset_id": null,
+          "name": "Clip_evidence_clip",
+          "kind": "Text",
+          "timeline_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 90,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            }
+          },
+          "source_range": {
+            "start": {
+              "value": 0,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "duration": {
+              "value": 90,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            }
+          },
+          "transform": {
+            "position_x": 0.0,
+            "position_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0
+          },
+          "crop": {
+            "top": 0.0,
+            "bottom": 0.0,
+            "left": 0.0,
+            "right": 0.0
+          },
+          "placement_mode": "Fit",
+          "visual_effect": "None",
+          "speed": "Normal",
+          "opacity": 1.0,
+          "volume": 1.0,
+          "text_content": "Tiêu Đề Bằng Chứng",
+          "text_style": {
+            "font_family": "Roboto",
+            "font_size": 80.0,
+            "font_weight": 700,
+            "font_color": "#FFD700",
+            "accent_color": null,
+            "background_color": null,
+            "background_opacity": 0.0,
+            "padding_x": 0.0,
+            "padding_y": 0.0,
+            "alignment": "Center",
+            "line_height": 1.0,
+            "anchor": "Center"
+          },
+          "text_template": {
+            "template_id": "vn_hao_khi_evidence",
+            "template_version": 1
+          },
+          "text_rich": {
+            "font": {
+              "family": "Roboto",
+              "weight": 700,
+              "style": "Normal",
+              "asset_id": null
+            },
+            "font_size": 80.0,
+            "layout": {
+              "max_width": null,
+              "alignment": "Center",
+              "line_height": 1.0,
+              "letter_spacing": 0.0,
+              "wrap_mode": "None",
+              "min_font_size": null,
+              "max_font_size": null
+            },
+            "fill": {
+              "kind": "Gradient",
+              "gradient_kind": "Linear",
+              "angle_deg": 90.0,
+              "radius": null,
+              "space": "All",
+              "stops": [
+                {
+                  "offset": 0.0,
+                  "color": "#00FFFF"
+                },
+                {
+                  "offset": 1.0,
+                  "color": "#0077FF"
+                }
+              ]
+            },
+            "strokes": [
+              {
+                "color": "#8B0000",
+                "width": 4.0,
+                "align": "Outside"
+              }
+            ],
+            "shadows": [
+              {
+                "color": "#00000088",
+                "offset_x": 3.0,
+                "offset_y": 3.0,
+                "blur": 3.0
+              }
+            ],
+            "background": null,
+            "spans": []
+          },
+          "text_animation": {
+            "unit": "Grapheme",
+            "order": "Forward",
+            "seed": null,
+            "pivot_x": 0.5,
+            "pivot_y": 0.5,
+            "in_anim": {
+              "duration": {
+                "value": 18,
+                "rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              },
+              "easing": "EaseOut",
+              "stagger_ratio": 0.2,
+              "from": {
+                "translate_x": 0.0,
+                "translate_y": 40.0,
+                "scale_x": 0.8,
+                "scale_y": 0.8,
+                "rotation": 0.0,
+                "opacity": 0.0
+              },
+              "to": {
+                "translate_x": 0.0,
+                "translate_y": 0.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation": 0.0,
+                "opacity": 1.0
+              }
+            },
+            "loop_anim": null,
+            "out_anim": {
+              "duration": {
+                "value": 12,
+                "rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              },
+              "easing": "EaseIn",
+              "stagger_ratio": 0.2,
+              "from": {
+                "translate_x": 0.0,
+                "translate_y": 0.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation": 0.0,
+                "opacity": 1.0
+              },
+              "to": {
+                "translate_x": 0.0,
+                "translate_y": -30.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation": 0.0,
+                "opacity": 0.0
+              }
+            },
+            "loop_mode": "None",
+            "conflict_policy": "ProportionalScale",
+            "phase_origin": {
+              "value": 0,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "phase_end": {
+              "value": 90,
+              "rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            }
+          },
+          "template_instance": {
+            "template_id": "vn_hao_khi_evidence",
+            "template_version": 1,
+            "layers": [
+              {
+                "layer_id": "accent_bar",
+                "name": "Accent Underline",
+                "z_index": 0,
+                "visible": true,
+                "opacity": 0.85,
+                "transform": {
+                  "position_x": 0.0,
+                  "position_y": 70.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0
+                },
+                "anchor": "Center",
+                "pivot": [
+                  0.5,
+                  0.5
+                ],
+                "motion": null,
+                "kind": {
+                  "type": "Shape",
+                  "data": {
+                    "shape_kind": "RoundedRectangle",
+                    "width": 400.0,
+                    "height": 8.0,
+                    "fill_color": "#00FFFF",
+                    "stroke_color": null,
+                    "stroke_width": 0.0,
+                    "corner_radius": 4.0
+                  }
+                }
+              },
+              {
+                "layer_id": "title_layer",
+                "name": "Main Title",
+                "z_index": 1,
+                "visible": true,
+                "opacity": 1.0,
+                "transform": {
+                  "position_x": 0.0,
+                  "position_y": 0.0,
+                  "scale_x": 1.0,
+                  "scale_y": 1.0,
+                  "rotation": 0.0
+                },
+                "anchor": "Center",
+                "pivot": [
+                  0.5,
+                  0.5
+                ],
+                "motion": {
+                  "unit": "Grapheme",
+                  "order": "Forward",
+                  "seed": null,
+                  "pivot_x": 0.5,
+                  "pivot_y": 0.5,
+                  "in_anim": {
+                    "duration": {
+                      "value": 18,
+                      "rate": {
+                        "numerator": 30,
+                        "denominator": 1
+                      }
+                    },
+                    "easing": "EaseOut",
+                    "stagger_ratio": 0.2,
+                    "from": {
+                      "translate_x": 0.0,
+                      "translate_y": 40.0,
+                      "scale_x": 0.8,
+                      "scale_y": 0.8,
+                      "rotation": 0.0,
+                      "opacity": 0.0
+                    },
+                    "to": {
+                      "translate_x": 0.0,
+                      "translate_y": 0.0,
+                      "scale_x": 1.0,
+                      "scale_y": 1.0,
+                      "rotation": 0.0,
+                      "opacity": 1.0
+                    }
+                  },
+                  "loop_anim": null,
+                  "out_anim": {
+                    "duration": {
+                      "value": 12,
+                      "rate": {
+                        "numerator": 30,
+                        "denominator": 1
+                      }
+                    },
+                    "easing": "EaseIn",
+                    "stagger_ratio": 0.2,
+                    "from": {
+                      "translate_x": 0.0,
+                      "translate_y": 0.0,
+                      "scale_x": 1.0,
+                      "scale_y": 1.0,
+                      "rotation": 0.0,
+                      "opacity": 1.0
+                    },
+                    "to": {
+                      "translate_x": 0.0,
+                      "translate_y": -30.0,
+                      "scale_x": 1.0,
+                      "scale_y": 1.0,
+                      "rotation": 0.0,
+                      "opacity": 0.0
+                    }
+                  },
+                  "loop_mode": "None",
+                  "conflict_policy": "ProportionalScale",
+                  "phase_origin": null,
+                  "phase_end": null
+                },
+                "kind": {
+                  "type": "Text",
+                  "data": {
+                    "is_primary": true,
+                    "slot_key": "title",
+                    "text_content": null,
+                    "text_style": null,
+                    "text_rich": null,
+                    "text_animation": null
+                  }
+                }
+              }
+            ],
+            "parameters": {
+              "bar_width": {
+                "kind": "Number",
+                "value": 400.0
+              },
+              "accent_color": {
+                "kind": "Color",
+                "value": "#00FFFF"
+              }
+            },
+            "initial_parameters": {
+              "bar_width": {
+                "kind": "Number",
+                "value": 400.0
+              },
+              "accent_color": {
+                "kind": "Color",
+                "value": "#00FFFF"
+              }
+            },
+            "overrides": [],
+            "responsive_policy": {
+              "reference_width": 1920,
+              "reference_height": 1080,
+              "supported_aspect_ratios": [
+                "16:9",
+                "9:16",
+                "1:1",
+                "4:5"
+              ],
+              "auto_wrap": true,
+              "auto_fit": false,
+              "safe_margin": 80.0
+            }
+          },
+          "fade_in": null,
+          "fade_out": null,
+          "transition": null,
+          "keyframes": []
+        }
+      ],
+      "transitions": [],
+      "audio_transitions": []
+    }
+  ],
+  "created_at": "2026-10-27T05:08:25.125023800+00:00",
+  "updated_at": "2026-10-27T05:08:25.140119500+00:00",
+  "client_registry": {
+    "min_accepted_epoch": 0,
+    "current_epoch": 1,
+    "max_active_clients": 64,
+    "clients": {
+      "evidence_agent": {
+        "client_epoch": 1,
+        "highest_sequence": 1,
+        "last_active_revision": 1,
+        "registered_at_revision": 1
+      }
+    }
+  },
+  "command_ledger": [
+    {
+      "operation_id": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_0_apply",
+      "transaction_id": "tx_apply_8f73e248bece4e688e1a6e649adb64bc",
+      "client_id": "evidence_agent",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_6410d376a0f7614c94292ef4715ebb4d9dafdc7e66f48e23f5072037cdc86bd0",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "evidence_clip",
+      "affected_track_id": null
+    },
+    {
+      "operation_id": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_1_rich",
+      "transaction_id": "tx_apply_8f73e248bece4e688e1a6e649adb64bc",
+      "client_id": "evidence_agent",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_29917a8ba0956336eee7b25e47de69942326fd3776254f1621d2bb7271cfec45",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "evidence_clip",
+      "affected_track_id": null
+    },
+    {
+      "operation_id": "tx_apply_8f73e248bece4e688e1a6e649adb64b_op_2_anim",
+      "transaction_id": "tx_apply_8f73e248bece4e688e1a6e649adb64bc",
+      "client_id": "evidence_agent",
+      "client_epoch": 1,
+      "sequence_number": 1,
+      "fingerprint": "fp_sha256_8f4dbf61bfdbe0c08e23db19b3c7b57e6cf4407095a4302674d3c297d3ccb2e5",
+      "status": "applied",
+      "applied_at_revision": 1,
+      "affected_item_id": "evidence_clip",
+      "affected_track_id": null
+    }
+  ]
+}

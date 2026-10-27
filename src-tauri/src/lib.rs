@@ -1560,39 +1560,182 @@ fn template_draft_save(
     .map_err(|e| e.to_string())
 }
 
+pub fn template_draft_apply_engine(
+    engine: &mut EditorEngine,
+    item_id: &str,
+    draft: &crate::modules::templates::agent::TemplateDraft,
+    base_revision: Option<u64>,
+) -> Result<crate::modules::templates::agent::TemplateApplyReceipt, String> {
+    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
+
+    // 1. Validate draft before mutating project or catalog
+    let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(
+        draft,
+        None,
+        Some(&catalog),
+    );
+    if !report.valid {
+        let first_err = report
+            .issues
+            .iter()
+            .find(|i| i.severity == crate::modules::templates::agent::ValidationSeverity::Error)
+            .map(|i| i.message.clone())
+            .unwrap_or_else(|| "Validation error".to_string());
+        return Err(format!("Validation failed: {first_err}"));
+    }
+
+    // 2. Validate target item exists and is text in the active project
+    let current_project = engine.service.project();
+    let mut target_found = false;
+    for track in &current_project.tracks {
+        if let Some(item) = track.items.iter().find(|i| i.item_id == item_id) {
+            target_found = true;
+            if item.kind != ItemKind::Text {
+                return Err(format!(
+                    "Item '{item_id}' is not a text item and cannot receive a template"
+                ));
+            }
+            break;
+        }
+    }
+    if !target_found {
+        return Err(format!("Item '{item_id}' not found in project"));
+    }
+
+    // 3. Staged base revision check: reject candidate if base_revision is stale
+    if let Some(rev) = base_revision {
+        if rev != current_project.revision {
+            return Err(format!(
+                "Stale revision: expected {}, received {}",
+                current_project.revision, rev
+            ));
+        }
+    }
+
+    // 4. Check catalog conflict beforehand WITHOUT irreversible publication
+    let def = draft.to_template_definition();
+    catalog.ensure_dirs().map_err(|e| e.to_string())?;
+    let existed_in_catalog = catalog.get(&def.id, def.version);
+    if let Some(ref existing) = existed_in_catalog {
+        if existing != &def {
+            return Err(format!(
+                "Immutable version conflict: template '{}' v{} already exists with different definition",
+                def.id, def.version
+            ));
+        }
+    }
+    let def_existed_before = existed_in_catalog.is_some();
+
+    // Stage in memory during transaction so CommandOperation::TemplateApply can resolve definition
+    // without prematurely writing to catalog directory on disk
+    crate::modules::templates::catalog::TemplateCatalog::stage_definition(def.clone());
+    struct StagedGuard {
+        id: String,
+        version: u32,
+    }
+    impl Drop for StagedGuard {
+        fn drop(&mut self) {
+            crate::modules::templates::catalog::TemplateCatalog::unstage_definition(
+                &self.id,
+                self.version,
+            );
+        }
+    }
+    let _staged_guard = StagedGuard {
+        id: def.id.clone(),
+        version: def.version,
+    };
+
+    // 5. Build envelope routed through GUI client registry
+    let cid = "gui_agent".to_string();
+    let cepoch = engine.service.project().client_registry.current_epoch;
+    let seq = engine
+        .service
+        .project()
+        .client_registry
+        .clients
+        .get(&cid)
+        .map(|c| c.highest_sequence + 1)
+        .unwrap_or(1);
+    let tx_id = format!("tx_{}", uuid::Uuid::new_v4().simple());
+    let base_tx = if tx_id.len() > 40 {
+        &tx_id[..40]
+    } else {
+        &tx_id
+    };
+
+    let operations = crate::modules::templates::agent::AgentTemplateService::build_apply_operations(
+        draft, item_id, base_tx,
+    );
+
+    let envelope = CommandEnvelope {
+        schema_version: crate::modules::domain::CURRENT_SCHEMA_VERSION,
+        project_id: engine.service.project().project_id.clone(),
+        base_revision: base_revision.unwrap_or(engine.service.project().revision),
+        client_id: Some(cid),
+        client_epoch: Some(cepoch),
+        sequence_number: Some(seq),
+        dry_run: false,
+        transaction_id: Some(tx_id.clone()),
+        operations,
+    };
+
+    let prior_snapshot = engine.service.project().clone();
+    let receipt = engine
+        .service
+        .execute(envelope)
+        .map_err(|e| e.to_string())?;
+
+    // 6. Propagate persistence failure atomically and rollback memory state
+    if let Some(path) = &engine.current_file_path {
+        if let Err(e) = save_project_atomic(engine.service.project(), path) {
+            engine.service.set_project(prior_snapshot);
+            return Err(format!("Persistence failure: {e}"));
+        }
+    }
+
+    // Publish to catalog on disk ONLY after command transaction and persistence succeed
+    if !def_existed_before {
+        if let Err(e) = catalog.save_user_definition(&def) {
+            if let Some(path) = &engine.current_file_path {
+                let _ = save_project_atomic(&prior_snapshot, path);
+            }
+            engine.service.set_project(prior_snapshot);
+            return Err(format!("Catalog publish failure: {e}"));
+        }
+    }
+
+    if receipt.operations_applied > 0 {
+        let resulting_snapshot = engine.service.project().clone();
+        engine.history.record_edit(HistoryEntry {
+            description: format!(
+                "Apply template '{}' v{}",
+                draft.template_id, draft.template_version
+            ),
+            transaction_id: Some(tx_id),
+            prior_snapshot,
+            resulting_snapshot,
+        });
+    }
+
+    Ok(crate::modules::templates::agent::TemplateApplyReceipt {
+        receipt: receipt.clone(),
+        applied_draft_id: draft.draft_id.clone(),
+        template_id: draft.template_id.clone(),
+        template_version: draft.template_version,
+        revision: receipt.new_revision,
+    })
+}
+
 #[tauri::command]
 fn template_draft_apply(
     state: State<'_, AppState>,
     item_id: String,
     draft: crate::modules::templates::agent::TemplateDraft,
+    base_revision: Option<u64>,
 ) -> Result<crate::modules::templates::agent::TemplateApplyReceipt, String> {
-    let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
     let mut engine_guard = state.0.lock().map_err(|e| e.to_string())?;
-    let engine = &mut *engine_guard;
-    let project_path = engine
-        .current_file_path
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join("active_session.tcproj"));
-
-    save_project_atomic(engine.service.project(), &project_path).map_err(|e| e.to_string())?;
-
-    let receipt = crate::modules::templates::agent::AgentTemplateService::apply_draft_to_project(
-        &project_path,
-        &item_id,
-        &draft,
-        Some("gui_agent".to_string()),
-        None,
-        None,
-        None,
-        None,
-        &catalog,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let reloaded = load_project(&project_path).map_err(|e| e.to_string())?;
-    engine.service = CommandService::new(reloaded);
-
-    Ok(receipt)
+    template_draft_apply_engine(&mut engine_guard, &item_id, &draft, base_revision)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
