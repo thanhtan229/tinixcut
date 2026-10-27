@@ -1,0 +1,33 @@
+{
+  "reference": "frame_t_end.png",
+  "candidate": "D:\\___TOOLS\\__TINIX\\TinixCut\\artifacts\\animated-text-templates\\phase-31\\automated\\font-experiment\\t_end_mplus1p_xb_fs138.png",
+  "mask_pixels_ref": 90798,
+  "mask_pixels_candidate": 77316,
+  "mask_iou": 0.6733,
+  "best_shift_iou": {
+    "iou": 0.6909,
+    "dy": -1,
+    "dx": 4
+  },
+  "glyph_interior_px": 83525,
+  "glyph_interior_mae": 70.492,
+  "glyph_edge_px": 7273,
+  "glyph_edge_mae": 78.27,
+  "word_starts_ref": [
+    184,
+    473,
+    585,
+    823,
+    1234,
+    1525
+  ],
+  "word_starts_candidate": [
+    184,
+    467,
+    596,
+    831,
+    1222,
+    1520
+  ],
+  "interpretation_note": "High interior agreement with lower edge agreement and shifted word starts indicates glyph-shape/advance differences (font), not fill/colour errors."
+}

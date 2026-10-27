@@ -1,3 +1,11 @@
+> **CORRECTION (2026-10-27, supersedes earlier reference claims in this file).**
+> The frames `frame_t000.png`, `frame_t_mid.png`, `frame_t_end.png` in this folder are **Tinix renders** (Roboto geometry), not CapCut frames. The true ground truth is the CapCut video `C:\Users\Admin\AppData\Local\CapCut\Videos\1011.mp4`. Measured against CapCut frame 31:
+> - Font: the sample's `MPLUS1p-ExtraBold.ttf` (SHA-256 `24993b...`, matches `capcut-sample-index.json`) matches glyph shape (scale-normalised core IoU 0.936 vs 0.528 for Roboto). The earlier "font is the main difference" conclusion is withdrawn.
+> - Size: at `font_size` 138 (instead of 152) the core box matches CapCut (106 px high, 1545 vs 1536 px wide); core IoU rises 0.218 -> 0.524 (shape 0.954). A ~6 px vertical offset remains and is not yet analysed.
+> - Glow: CapCut has ~92k halo pixels vs ~30k in Tinix. The Phase 29 domain has no glow field, so this is a feature gap.
+> Evidence: `automated/capcut-truth/font-shape-analysis.json`, `automated/font-experiment/`.
+> Sections below that cite these frames as "reference" are superseded by this correction.
+
 # Phase 31 Native Recreated Sample — Differences vs CapCut Reference
 
 ## 1. Overview & Provenance

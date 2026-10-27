@@ -326,5 +326,6 @@
       "peak_frame": 26,
       "peak_ink_px": 6028
     }
-  }
+  },
+  "_correction": "2026-10-27: frames in this folder are Tinix renders, not CapCut. Invalid as reference. See differences_vs_reference.md and automated/capcut-truth/font-shape-analysis.json."
 }

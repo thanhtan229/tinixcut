@@ -15,7 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import headless_p31 as h
 import analyze_font_roi as afr
 
-FONT = Path(r"C:\Windows\Fonts\BeVietnamPro-ExtraBold.ttf")
+import os
+FONT = Path(os.environ.get("P31_FONT", r"C:\Windows\Fonts\BeVietnamPro-ExtraBold.ttf"))
+FONT_LABEL = os.environ.get("P31_FONT_LABEL", "bevietnam_xb")
+FONT_FAMILY = os.environ.get("P31_FONT_FAMILY", "Be Vietnam Pro")
+_fs = os.environ.get("P31_FONT_SIZE")
+FONT_SIZE = float(_fs) if _fs else None
 OUT_DIR = h.OUT_DIR / "font-experiment"
 
 
@@ -26,13 +31,15 @@ def main() -> int:
     item_id, _ = h.find_text_item(base)
     asset_id = "asset_font_bevietnam_xb"
     base["assets"] = [{
-        "asset_id": asset_id, "name": "Be Vietnam Pro ExtraBold", "path": str(FONT),
+        "asset_id": asset_id, "name": FONT_LABEL, "path": str(FONT),
         "media_kind": "Image", "duration": None, "file_size": FONT.stat().st_size, "dimensions": None,
     }]
     for track in base["tracks"]:
         for it in track["items"]:
             if it.get("kind") == "Text" and it.get("text_rich"):
-                it["text_rich"]["font"] = {"family": "Be Vietnam Pro", "weight": 800, "style": "Normal", "asset_id": asset_id}
+                it["text_rich"]["font"] = {"family": FONT_FAMILY, "weight": 800, "style": "Normal", "asset_id": asset_id}
+                if FONT_SIZE is not None:
+                    it["text_rich"]["font_size"] = FONT_SIZE
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="p31_font_"))
@@ -41,11 +48,11 @@ def main() -> int:
         proj.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
         mp4 = work / "font_exp.mp4"
         r = h.render(proj, mp4)
-        frame = OUT_DIR / "t_end_bevietnam_xb.png"
+        frame = OUT_DIR / f"t_end_{FONT_LABEL}.png"
         h.extract_frame(mp4, 31, frame)
-        report_path = OUT_DIR / "font-roi-analysis-bevietnam-xb.json"
+        report_path = OUT_DIR / f"font-roi-analysis-{FONT_LABEL}.json"
         afr.main(candidate=frame, out=report_path)
-        (OUT_DIR / "render.json").write_text(json.dumps(r, indent=2), encoding="utf-8")
+        (OUT_DIR / f"render-{FONT_LABEL}.json").write_text(json.dumps(r, indent=2), encoding="utf-8")
     finally:
         import shutil; shutil.rmtree(work, ignore_errors=True)
     return 0

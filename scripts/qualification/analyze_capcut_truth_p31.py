@@ -19,6 +19,7 @@ CAPCUT = O / "capcut-truth/capcut_f31.png"
 CANDIDATES = {
     "tinix_mplus1p": O / "font-experiment/t_end_mplus1p_xb.png",
     "tinix_roboto": O / "work/original_frames/t_end.png",
+    "tinix_mplus1p_fontsize138": O / "font-experiment/t_end_mplus1p_xb_fs138.png",
 }
 
 

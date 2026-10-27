@@ -32,6 +32,19 @@
       "scale_x_to_capcut": 0.9942,
       "scale_y_to_capcut": 0.9138,
       "scale_normalised_shape_iou": 0.528
+    },
+    "tinix_mplus1p_fontsize138": {
+      "core_px": 42614,
+      "core_box": {
+        "y0": 494,
+        "y1": 600,
+        "x0": 187,
+        "x1": 1732
+      },
+      "raw_core_iou_same_frame": 0.524,
+      "scale_x_to_capcut": 0.9942,
+      "scale_y_to_capcut": 1.0,
+      "scale_normalised_shape_iou": 0.9537
     }
   }
 }

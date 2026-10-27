@@ -1,3 +1,5 @@
+> **CORRECTION (2026-10-27).** The `frame_*.png` files in this folder are Tinix renders, not CapCut output, so the comparison numbers below that use them as the reference are invalid. Ground truth is `C:\Users\Admin\AppData\Local\CapCut\Videos\1011.mp4`. See `differences_vs_reference.md` (correction block) and `automated/capcut-truth/font-shape-analysis.json`.
+
 # Phase 31 — Reference MP4 Comparison
 
 **Reference:** `C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1011.mp4`  
