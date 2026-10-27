@@ -10,9 +10,9 @@
       "text_persisted": true,
       "reopen_revision": 0,
       "render": {
-        "seconds": 18.49,
+        "seconds": 20.33,
         "bytes": 92088,
-        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_wbo_50s4\\\\original.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 92088,\n  \"render_time_ms\": 936,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_67ns3t9_\\\\original.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 92088,\n  \"render_time_ms\": 1084,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
       },
       "frames": {
         "t000": {
@@ -24,27 +24,27 @@
         },
         "t_mid": {
           "frame_index": 15,
-          "full_frame_mae": 0.86,
-          "roi_mae": 27.225,
+          "full_frame_mae": 3.843,
+          "roi_mae": 71.451,
           "roi_bbox_ref": [
-            184,
-            437,
-            1303,
-            607
+            175,
+            475,
+            1285,
+            716
           ],
-          "roi_pixels": 64810
+          "roi_pixels": 99987
         },
         "t_end": {
           "frame_index": 31,
-          "full_frame_mae": 0.687,
-          "roi_mae": 15.251,
+          "full_frame_mae": 5.192,
+          "roi_mae": 72.384,
           "roi_bbox_ref": [
-            184,
-            489,
-            1738,
-            614
+            175,
+            471,
+            1746,
+            612
           ],
-          "roi_pixels": 90798
+          "roi_pixels": 147239
         }
       }
     },
@@ -56,9 +56,9 @@
       "text_persisted": true,
       "reopen_revision": 1,
       "render": {
-        "seconds": 13.5,
+        "seconds": 14.6,
         "bytes": 27209,
-        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_wbo_50s4\\\\short_ascii.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 27209,\n  \"render_time_ms\": 931,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_67ns3t9_\\\\short_ascii.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 27209,\n  \"render_time_ms\": 1032,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
       },
       "frames": {
         "t000": {
@@ -83,9 +83,9 @@
       "text_persisted": true,
       "reopen_revision": 1,
       "render": {
-        "seconds": 24.47,
+        "seconds": 27.23,
         "bytes": 114610,
-        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_wbo_50s4\\\\long_multiline.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 114610,\n  \"render_time_ms\": 929,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_67ns3t9_\\\\long_multiline.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 114610,\n  \"render_time_ms\": 1092,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
       },
       "frames": {
         "t000": {
@@ -110,9 +110,9 @@
       "text_persisted": true,
       "reopen_revision": 1,
       "render": {
-        "seconds": 16.26,
+        "seconds": 16.95,
         "bytes": 55455,
-        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_wbo_50s4\\\\vietnamese_marks.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 55455,\n  \"render_time_ms\": 928,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+        "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_headless_67ns3t9_\\\\vietnamese_marks.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 55455,\n  \"render_time_ms\": 1135,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
       },
       "frames": {
         "t000": {

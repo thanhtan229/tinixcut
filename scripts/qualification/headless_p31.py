@@ -34,7 +34,9 @@ CURRENT_SCHEMA_VERSION = 11
 
 # Indices come from phase-31/timing_frame_report.json (t_mid_frame_15, t_end_frame_31;
 # in-animation = 31 frames). Do not change without updating that report.
-MILESTONES = {"t000": ("frame_t000.png", 0), "t_mid": ("frame_t_mid.png", 15), "t_end": ("frame_t_end.png", 31)}
+# Ground truth is the real CapCut video (1011.mp4); frames extracted into automated/capcut-truth.
+CAPCUT_TRUTH_DIR = OUT_DIR / "capcut-truth"
+MILESTONES = {"t000": ("capcut_f0.png", 0), "t_mid": ("capcut_f15.png", 15), "t_end": ("capcut_f31.png", 31)}
 
 VARIANTS = {
     "original": None,  # unchanged sample text; compared against reference frames
@@ -221,7 +223,7 @@ def run_variant(name: str, text: str | None, base_project: dict, item_id: str, w
         out_png = frames_dir / f"{key}.png"
         extract_frame(mp4, idx, out_png)
         if name == "original":
-            result["frames"][key] = {"frame_index": idx, **compare(out_png, REF_DIR / ref_name)}
+            result["frames"][key] = {"frame_index": idx, **compare(out_png, CAPCUT_TRUTH_DIR / ref_name)}
         else:
             result["frames"][key] = {"frame_index": idx, "png": str(out_png.name)}
     return result
