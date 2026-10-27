@@ -147,7 +147,7 @@ Phase 15 is strictly **Tools-only**.
 
 ### 3.6 Authoritative MCP Tool Surface
 
-The MCP server exposes exactly eight (8) authoritative tools:
+The MCP server initially exposed eight (8) authoritative tools in Phase 15. Phase 35 added four template-draft tools, so the current server exposes exactly twelve (12) authoritative tools:
 
 ```text
 1. tinixcut_inspect
@@ -181,6 +181,18 @@ The MCP server exposes exactly eight (8) authoritative tools:
 8. tinixcut_export_cancel
    Params: { jobId: string }
    Returns: { cancelled: bool }
+
+9. tinixcut_template_validate
+   Validates a typed template draft and returns validation/capability results.
+
+10. tinixcut_template_preview
+    Renders a bounded preview for a validated template draft.
+
+11. tinixcut_template_apply
+    Applies a template draft through the Command Service and persists the project.
+
+12. tinixcut_template_save
+    Saves a template draft to the template catalog.
 ```
 
 **Session Lifecycle Exclusion:**

@@ -244,7 +244,7 @@ async fn test_p15_ac03_modern_protocol_lifecycle() {
         "Must succeed without initialize"
     );
     let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 12);
 }
 
 #[tokio::test]
@@ -269,7 +269,7 @@ async fn test_p15_ac04_legacy_compatibility_smoke() {
 }
 
 #[tokio::test]
-async fn test_p15_ac05_ac06_ac07_exact_8_tools_and_no_extraneous_primitives() {
+async fn test_p15_ac05_ac06_ac07_current_12_tools_and_no_extraneous_primitives() {
     let server = TinixCutMcpServer::new();
     let mut client = DuplexMcpClient::new(server).await;
 
@@ -277,7 +277,7 @@ async fn test_p15_ac05_ac06_ac07_exact_8_tools_and_no_extraneous_primitives() {
         .send_request("tools/list", serde_json::json!({}))
         .await;
     let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 8, "Must expose exactly 8 tools");
+    assert_eq!(tools.len(), 12, "Must expose exactly 12 tools");
 
     let mut tool_names: Vec<String> = tools
         .iter()
@@ -294,6 +294,10 @@ async fn test_p15_ac05_ac06_ac07_exact_8_tools_and_no_extraneous_primitives() {
         "tinixcut_export_status".to_string(),
         "tinixcut_inspect".to_string(),
         "tinixcut_save".to_string(),
+        "tinixcut_template_apply".to_string(),
+        "tinixcut_template_preview".to_string(),
+        "tinixcut_template_save".to_string(),
+        "tinixcut_template_validate".to_string(),
     ];
     assert_eq!(tool_names, expected_tools);
 
@@ -1831,7 +1835,7 @@ fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
         serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
     assert_eq!(val1["id"], 2);
     let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 12);
 
     // 3. tinixcut_inspect via real subprocess
     let req2 = serde_json::json!({
