@@ -148,3 +148,8 @@ Tài liệu/plan-only không chạy build hoặc restart. Không commit/push t�
 ## 10. Trạng thái bàn giao hiện tại
 
 Phase 27 (Template Contract, Fixtures và Baseline), Phase 28 (Shared Text Renderer POC và Architecture Gate) và Phase 29 (Rich Text Domain, Schema v10, Commands) đã hoàn thành đạt chuẩn Gate 27, Gate 28 & Gate 29 PASS với đầy đủ bằng chứng kiểm định tại `artifacts/animated-text-templates/phase-27/`, `phase-28/` và `phase-29/`. Ứng viên B (Pure Rust Native Typography & Rasterization Stack) được chính thức chọn và lock qua ADR-007. Các Phase 30–36 tiếp tục được triển khai tuần tự theo kế hoạch. Tiếp tục bảo lưu các hạng mục qualification môi trường Phase 26 trong baseline. Lưu ý: benchmark Phase 28 chỉ đạt budget dưới profile test tối ưu đã ghi trong `phase-29/verification-log.md`.
+
+## 11. Backlog đã quyết định cho Phase 32+
+
+- **Glow (quầng sáng) của text** (GAP-07): đưa vào phạm vi Phase 32+. Cần trường glow trong domain rich-text (schema migration), render trong shared renderer và parity export/preview. CapCut frame 31 có khoảng 92k halo px so với 30k của Tinix; chỉ thêm khi có gate đo lại theo `scripts/qualification/analyze_capcut_truth_p31.py`.
+- **Vị trí đường nền theo chiều dọc** (GAP-08): giữ neo của Tinix, không khớp CapCut. Đây là khác biệt có chủ đích, không phải lỗi cần sửa.
