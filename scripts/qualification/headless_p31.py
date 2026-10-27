@@ -32,7 +32,9 @@ OUT_DIR = REPO / "artifacts" / "animated-text-templates" / "phase-31" / "automat
 # Loaded project is migrated to the current schema (v10 sample -> v11); commands must match.
 CURRENT_SCHEMA_VERSION = 11
 
-MILESTONES = {"t000": ("frame_t000.png", 0), "t_mid": ("frame_t_mid.png", 75), "t_end": ("frame_t_end.png", 149)}
+# Indices come from phase-31/timing_frame_report.json (t_mid_frame_15, t_end_frame_31;
+# in-animation = 31 frames). Do not change without updating that report.
+MILESTONES = {"t000": ("frame_t000.png", 0), "t_mid": ("frame_t_mid.png", 15), "t_end": ("frame_t_end.png", 31)}
 
 VARIANTS = {
     "original": None,  # unchanged sample text; compared against reference frames
