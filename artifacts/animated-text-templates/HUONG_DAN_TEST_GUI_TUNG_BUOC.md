@@ -21,8 +21,9 @@ Ghi chú: thao tác này chỉ **xem** kết quả kiểm tra. Không cần áp 
 
 ### G1 — Nhập draft CapCut thật của bạn
 
-1. Ở **cột bên phải** của ứng dụng, bấm tab **Templates** (có chữ "Templates").
-2. Tìm nút có tooltip **"Inspect and convert a CapCut draft"** (thường nằm cạnh các nút "Import .tinixtpl" và "Export"). Bấm vào nút đó.
+1. Ở **thanh bên trái** của ứng dụng, tab **Templates** đang được chọn (phía trên, cạnh tab Media).
+2. Trong mục **TEMPLATES** có một hàng nút nhỏ: **CapCut**, **Import**, **Export**, **Save All**.
+   Bấm nút **CapCut** (chữ xanh, nằm ngay bên trái nút Import). Đây là nút mở hộp thoại nhập CapCut.
 3. Hộp thoại **"Import CapCut template"** mở ra.
 4. Bấm nút **"Choose draft folder…"**.
 5. Trong cửa sổ chọn thư mục, đi tới:
@@ -74,7 +75,7 @@ Chụp ảnh thông báo lỗi, lưu thành `artifacts\animated-text-templates\p
 
 ### Mở project
 
-1. Trong ứng dụng TinixCut, ở thanh trên cùng, bấm **"Open Existing Project"** (biểu tượng thư mục).
+1. Trong ứng dụng TinixCut, ở thanh trên cùng, bấm nút **Open** (có biểu tượng thư mục, nằm sau nút "New").
 2. Chọn `D:\TinixTest\p31_test.tcproj` rồi bấm **Open**.
 3. Trên khung xem trước (giữa màn hình), bạn sẽ thấy chữ **"Tinix — Thử nghiệm tiếng Việt"** trên timeline.
 
@@ -104,7 +105,7 @@ Nếu không mở được file: báo lỗi nguyên văn cho trợ lý, không s
 5. Bấm nút **Redo** (mũi tên tiến, tooltip "Redo committed edit").
    - Kết quả: chữ lại thành `Sua noi dung test`.
 
-Lưu ý: hướng dẫn này chỉ dùng các nút trên thanh trên. Không dùng phím tắt vì chưa được xác minh trong ứng dụng.
+Lưu ý: hướng dẫn này chỉ dùng các nút trên thanh trên (Undo và Redo nằm ở góc phải, cạnh nút Export). Không dùng phím tắt vì chưa được xác minh trong ứng dụng.
 
 ---
 
