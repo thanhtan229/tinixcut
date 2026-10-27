@@ -18,8 +18,8 @@
 | **Phase 32** | Layered Templates & Packs | **COMPLETE** | Gate 32 PASS (QA PASS, Final Reviewer FINAL PASS) | Multilayer instances (<=16 layers), parameter bindings, `.tinixtpl` import/export |
 | **Phase 33** | Template Authoring & Library UI | **COMPLETE** | Gate T2 PASS (native qualification deferred) | Inspector customizer, animated preview cards, responsive anchor controls (Milestone T2) |
 | **Phase 34** | CapCut Template Import Adapter | **IMPLEMENTED / AC-09 OPEN** | Backend + frontend reviews LGTM; native qualification pending | Bounded/cancellable draft and ZIP inspection, resource-aware conversion, transactional save, guarded CommandService apply, CapCut importer UI; `artifacts/animated-text-templates/phase-34/` |
-| **Phase 35** | Agent Template Generation (CLI/MCP) | **IN PROGRESS** | Pending | Agent template authoring/editing via Command Service transaction (Milestone T4) |
-| **Phase 36** | Release Hardening & Qualification | **PLANNED** | Pending | Full performance benchmarks, installer integration, final user verification (Milestone T5) |
+| **Phase 35** | Agent Template Generation (CLI/MCP) | **COMPLETE** | Gate T4 PASS | Agent template authoring/editing via Command Service transaction (Milestone T4) |
+| **Phase 36** | Release Hardening & Qualification | **IN PROGRESS** | Pending | Full performance benchmarks, installer integration, final user verification (Milestone T5) |
 
 ---
 

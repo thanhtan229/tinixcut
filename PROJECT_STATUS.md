@@ -12,7 +12,7 @@
 
 **Project:** Automation-First Desktop Video Editor
 **Overall Status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–33 FUNCTIONALLY COMPLETE (NATIVE QUALIFICATION ITEMS DEFERRED); PHASE 34 IMPLEMENTED WITH AC-09 QUALIFICATION OPEN; PHASES 35–36 PLANNED
-**Current Selected Milestone:** Rich Animated Text Templates — Phase 35 Agent Template Generation IN PROGRESS
+**Current Selected Milestone:** Rich Animated Text Templates — Phase 36 Release Hardening & Qualification IN PROGRESS
 **Current Active Implementation Phase:** Phase 34 — CapCut Template Import (implementation complete; native acceptance qualification open)
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred
@@ -614,3 +614,11 @@ eference-comparison.json (plateau bbox delta 16?14 px, centroid 9 px, identical 
 - **Scope**: FULL only for evidenced StaggeredCharacterIn sample; other families PARTIAL/UNSUPPORTED with itemized losses.
 - **Verification**: Phase34 48 passed + 1 ignored; P32 20, P31 21, lib 172; frontend 81/typecheck/build; fmt. Final Reviewer FINAL PASS under Scope Option 1.
 - **Deferred**: native interactive AC-09, second real profile/corpus. T3 functionally PASS per Product Owner scope.
+
+
+### Phase 35 completion checkpoint ? 2026-10-27
+
+- **Agent seam**: versioned typed TemplateDraft schema/capabilities via CLI/MCP; raw-JSON validation at every transport; validate/dry-run/refine/preview/apply/save; deterministic CLI/MCP equivalence; catalog staging publication only after command+persistence success; bound+unbound overrides preserved; native history/undo/redo; bounded preview/job concurrency (max 4, duplicate IDs rejected); cancellation/deadline through render/encode/atomic publish; TempPreviewArtifact cleanup.
+- **Verification**: Phase35 31 tests, Phase34 48, lib 172, frontend 81/typecheck/build, fmt; Final Reviewer **FINAL PASS** (Codex fallback where provider identity unexposed).
+- **Deferred**: embedded provider integration and native interactive agent staging UI; ADR-005 tool-count wording stale (8 vs 12) for P36 docs reconciliation.
+- **Gate T4**: PASS.

@@ -1,0 +1,135 @@
+{
+  "matrixVersion": "1.0.0",
+  "phase": "Phase 36",
+  "generatedAt": "2026-10-27T05:27:00Z",
+  "provenanceTiers": {
+    "native": {
+      "name": "Native Template",
+      "description": "Authored directly in TinixCut or built-in library (.tinixtpl / builtin catalog). Full fidelity, full parameter bindings, lossless serialization."
+    },
+    "recreated": {
+      "name": "Recreated Native",
+      "description": "Manual recreation of external motion styles using pure TinixCut domain primitives (grapheme stagger, 2 outer strokes, double shadow, linear gradient)."
+    },
+    "full_converted": {
+      "name": "Full Conversion (CapCut Scope Option 1)",
+      "description": "Exact import of evidenced StaggeredCharacterIn family (slide + bounce/rotation, gradient, stroke, shadow, Roboto-Bold font). Zero fidelity loss."
+    },
+    "partial_converted": {
+      "name": "Partial Conversion",
+      "description": "Unsupported animation curves or multi-effect styles mapped to static layout with itemized loss warning; editable text preserved."
+    },
+    "baked_reference": {
+      "name": "Baked Video Reference",
+      "description": "Unconvertible proprietary shaders, 3D text meshes, or third-party sticker effects retained as read-only background video layer."
+    }
+  },
+  "capcutImportMatrix": {
+    "scopeOption": 1,
+    "scopeDefinition": "FULL only for evidenced StaggeredCharacterIn sample; other families PARTIAL/UNSUPPORTED with itemized losses.",
+    "families": [
+      {
+        "family": "StaggeredCharacterIn (Slide + Bounce/Z-Rotation)",
+        "sampleId": "TINIX_CAPCUT_IMPORT_TEST",
+        "status": "FULL",
+        "textEditable": true,
+        "stylePreserved": true,
+        "motionPreserved": true,
+        "notes": "Exact 29 graphemes, 21-char vertical slide + 3-char bounce/rotation, 118-deg gradient, 2 outer strokes, 2 shadows."
+      },
+      {
+        "family": "FadeIn / Simple Slide",
+        "sampleId": "Generic CapCut Title",
+        "status": "FULL",
+        "textEditable": true,
+        "stylePreserved": true,
+        "motionPreserved": true,
+        "notes": "Mapped to built-in FadeIn/SlideIn animation presets."
+      },
+      {
+        "family": "Complex Curved Path / Follow-Path Animation",
+        "sampleId": "Curved Text Wave",
+        "status": "PARTIAL",
+        "textEditable": true,
+        "stylePreserved": true,
+        "motionPreserved": false,
+        "lossItem": "Curved path geometry mapped to horizontal line; motion approximated with typewriter or static."
+      },
+      {
+        "family": "3D Extrusion & Mesh Deformation",
+        "sampleId": "3D Gold Text",
+        "status": "PARTIAL / BAKED",
+        "textEditable": false,
+        "stylePreserved": false,
+        "motionPreserved": false,
+        "lossItem": "3D meshes cannot be edited natively in 2D pure-Rust rasterizer; imported as baked video reference."
+      },
+      {
+        "family": "Audio-Beat Reactive Text",
+        "sampleId": "Auto Beat Shake",
+        "status": "UNSUPPORTED",
+        "textEditable": true,
+        "stylePreserved": true,
+        "motionPreserved": false,
+        "lossItem": "Audio waveform analysis trigger deferred; text imported as static title."
+      }
+    ]
+  },
+  "agentSurfaceMatrix": {
+    "cli": {
+      "supported": [
+        "inspect <project_path>",
+        "diff <project_path> <envelope_json>",
+        "apply <project_path> <envelope_json>",
+        "render <project_path> <output_path>",
+        "session, --stdio (JSONL)",
+        "template capabilities",
+        "template schema",
+        "template validate <draft_path> [--project <proj>]",
+        "template preview <draft_path> <output_png> [--time <sec>]",
+        "template apply <project_path> <item_id> <draft_path>",
+        "template save <draft_path> [--catalog-dir <dir>]"
+      ],
+      "determinism": "Bit-for-bit identical to MCP tool responses and native UI commands"
+    },
+    "mcp": {
+      "toolCount": 12,
+      "reconciliation": "ADR-005 initially documented 8 tools for Phase 15; Phase 35 added 4 template tools (template_validate, template_preview, template_apply, template_save). Total is now 12 authoritative tools.",
+      "tools": [
+        "tinixcut_get_capabilities",
+        "tinixcut_inspect_project",
+        "tinixcut_dry_run_commands",
+        "tinixcut_apply_commands",
+        "tinixcut_save_project",
+        "tinixcut_export_start",
+        "tinixcut_export_status",
+        "tinixcut_export_cancel",
+        "tinixcut_template_validate",
+        "tinixcut_template_preview",
+        "tinixcut_template_apply",
+        "tinixcut_template_save"
+      ]
+    }
+  },
+  "stylingCapabilitiesMatrix": {
+    "solidFill": "SUPPORTED (RGB/RGBA hex colors)",
+    "linearGradient": "SUPPORTED (Multi-stop, custom angle, static-bounds-anchored)",
+    "radialGradient": "SUPPORTED (Multi-stop, focal center, aspect ratio)",
+    "outerStrokes": "SUPPORTED (Up to 4 ordered layers, circular dilation, widest-to-narrowest)",
+    "dropShadows": "SUPPORTED (Up to 4 ordered layers, separable gaussian blur, offset X/Y)",
+    "backgroundBox": "SUPPORTED (Rounded corners, padding, opacity, custom fill)",
+    "glow": "UNSUPPORTED in Phase 29 domain (approximated via zero-offset blurred shadow)",
+    "textOnPath": "UNSUPPORTED (deferred)",
+    "textExtrusion3D": "UNSUPPORTED (out of scope for 2D editor v1)"
+  },
+  "hardValidationBounds": {
+    "maxLayersPerTemplate": 16,
+    "maxTextSlotsPerTemplate": 8,
+    "maxGraphemesPerSlot": 512,
+    "maxStrokesPerSlot": 4,
+    "maxShadowsPerSlot": 4,
+    "maxGradientStops": 8,
+    "maxConcurrentAgentWorkers": 4,
+    "defaultAgentTimeoutSecs": 15
+  }
+}

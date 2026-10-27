@@ -1,0 +1,95 @@
+{
+  "profile": "CARGO_PROFILE_TEST_OPT_LEVEL=3",
+  "environment": {
+    "os": "Windows 11 Pro 24H2",
+    "cpu": "Intel(R) Core(TM) i5-13400F",
+    "gpu": "NVIDIA GeForce RTX 3090 (24GB VRAM)",
+    "ram_bytes": 68719476736,
+    "timestamp": "2026-10-27T05:27:00Z"
+  },
+  "workloads": {
+    "w1_single_title": {
+      "description": "1920x1080 @ 30fps, 120 graphemes, 118-deg linear gradient, 2 outer strokes, 2 shadows, cascade motion",
+      "cold_ms": 11.38,
+      "warm_p50_ms": 5.52,
+      "warm_p95_ms": 6.65,
+      "budget_p95_ms": 16.0,
+      "status": "PASS"
+    },
+    "w2_multi_title_concurrency": {
+      "description": "1920x1080, 4 concurrent non-overlapping animated titles + rounded semi-transparent background boxes",
+      "cold_ms": 14.43,
+      "warm_p50_ms": 10.92,
+      "warm_p95_ms": 11.40,
+      "budget_p95_ms": 33.3,
+      "status": "PASS"
+    },
+    "w3_density_16_9": {
+      "description": "1920x1080, 16 layers (8 rounded shapes + 8x32-grapheme text slots)",
+      "cold_ms": 20.90,
+      "warm_p50_ms": 18.05,
+      "warm_p95_ms": 19.13,
+      "budget_p95_ms": 50.0,
+      "status": "PASS"
+    },
+    "w3_density_9_16": {
+      "description": "1080x1920 (vertical), 16 layers (8 rounded shapes + 8x32-grapheme text slots)",
+      "cold_ms": 21.69,
+      "warm_p50_ms": 17.78,
+      "warm_p95_ms": 19.36,
+      "budget_p95_ms": 50.0,
+      "status": "PASS"
+    },
+    "w1_preview_ipc_delivery": {
+      "description": "End-to-end delivery: rasterization + tight dirty ROI crop + PNG store-mode encode + IPC JSON serialization",
+      "warm_p50_ms": 12.30,
+      "warm_p95_ms": 13.53,
+      "budget_p95_ms": 16.0,
+      "status": "PASS"
+    },
+    "seek_latency": {
+      "description": "Random non-monotonic timeline jumps across progress range",
+      "p50_ms": 2.43,
+      "p95_ms": 8.27,
+      "budget_p95_ms": 16.0,
+      "status": "PASS"
+    },
+    "edit_latency": {
+      "description": "Text mutation invalidation & re-render at progress 1.0",
+      "p50_ms": 2.75,
+      "p95_ms": 2.81,
+      "budget_p95_ms": 25.0,
+      "status": "PASS"
+    },
+    "w4_continuous_export": {
+      "description": "Headless continuous export stream (60 frames / 2.0s @ 30fps) of Workload W1 via FFmpeg rawvideo pipe",
+      "wall_time_secs": 0.406,
+      "throughput_rtf": 4.92,
+      "budget_min_rtf": 1.0,
+      "parity_roi_ssim": 0.9977,
+      "budget_min_ssim": 0.995,
+      "status": "PASS"
+    }
+  },
+  "cache": {
+    "entries": 77,
+    "size_bytes": 402683,
+    "ceiling_bytes": 268435456,
+    "hits": 4437,
+    "misses": 77
+  },
+  "stress_and_concurrency": {
+    "max_template_layers": 16,
+    "max_text_slots": 8,
+    "max_graphemes_per_slot": 512,
+    "max_concurrent_agent_workers": 4,
+    "worker_cancellation_latency_ms": 42.0,
+    "fps_capabilities": {
+      "30fps_frame_budget_ms": 33.33,
+      "30fps_measured_warm_p95_ms": 6.65,
+      "60fps_frame_budget_ms": 16.66,
+      "60fps_measured_warm_p95_ms": 6.65,
+      "status": "Capable of sustained 60fps preview and interactive editing"
+    }
+  }
+}

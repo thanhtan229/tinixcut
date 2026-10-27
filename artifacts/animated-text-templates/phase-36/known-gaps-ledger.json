@@ -1,0 +1,62 @@
+{
+  "ledgerVersion": "1.0.0",
+  "phase": "Phase 36",
+  "generatedAt": "2026-10-27T05:27:00Z",
+  "overallQualificationStatus": "IMPLEMENTED WITH DEFERRED QUALIFICATION",
+  "gaps": [
+    {
+      "gapId": "GAP-01",
+      "originPhase": "Phase 12 / Phase 16 / Phase 26",
+      "category": "Native Interactive GUI Qualification",
+      "item": "Real interactive Windows GUI smoke & acceptance",
+      "description": "Manual human end-to-end interactive GUI testing in a running desktop Tauri window (clicking through canvas ratios, text inspectors, audio sliders, transitions, auto-captions dialog).",
+      "status": "DEFERRED",
+      "remediation": "Requires a interactive user desktop session with GUI display; covered by huong_dan_test_phase26_tieng_viet.md."
+    },
+    {
+      "gapId": "GAP-02",
+      "originPhase": "Phase 12 / Phase 26",
+      "category": "Clean VM Qualification",
+      "item": "Air-gapped Clean Windows VM without developer environment",
+      "description": "Validation of the NSIS installer on a completely clean physical machine or VM without Node.js, Rust, Git, Visual Studio, or developer font caches.",
+      "status": "DEFERRED",
+      "remediation": "Run TinixCut_0.1.0_x64-setup.exe on an isolated test VM and verify startup via app_health_check."
+    },
+    {
+      "gapId": "GAP-03",
+      "originPhase": "Phase 5 / Phase 17 / Phase 26",
+      "category": "Hardware Acceleration Qualification",
+      "item": "Direct GPU Hardware Encoder Qualification (NVENC / AMF / QSV)",
+      "description": "Headless software encoding (libx264) is 100% qualified; direct hardware encoder runtime qualification remains deferred.",
+      "status": "DEFERRED",
+      "remediation": "Exercise hardware encoder matrix on target GPU rigs and verify encoder fallback."
+    },
+    {
+      "gapId": "GAP-04",
+      "originPhase": "Phase 34",
+      "category": "CapCut Import UI Native Observation",
+      "item": "AC-09 Real GUI CapCut importer dialog observation",
+      "description": "Manual interactive verification of the frontend CapCut importer modal, resource inspection list, and replacement workflows in the live Tauri WebView.",
+      "status": "DEFERRED",
+      "remediation": "All backend conversion, ZIP extraction, and CommandService apply pipelines are 100% tested via automated integration tests (48 tests pass); live WebView interaction deferred to Phase 26 user session."
+    },
+    {
+      "gapId": "GAP-05",
+      "originPhase": "Phase 35",
+      "category": "AI Provider Integration",
+      "item": "Embedded AI Provider Adapter & Native Staging UI",
+      "description": "TinixCut provides headless CLI and MCP server tools for external agents (e.g. Claude, Gemini, GPT) to generate drafts. Direct in-app LLM API calling (embedded provider key management and native interactive staging UI) was deferred to keep core editor secure and model-agnostic.",
+      "status": "DEFERRED",
+      "remediation": "External AI clients interact via MCP stdio or CLI commands; native in-app chat UI planned for post-v1."
+    },
+    {
+      "gapId": "GAP-06",
+      "originPhase": "Phase 15 / Phase 35",
+      "category": "Documentation & Test Count Reconciliation",
+      "item": "ADR-005 & phase15_mcp_acceptance.rs tool count mismatch (8 vs 12)",
+      "description": "Phase 35 added 4 new template tools, bringing total MCP tools to 12. phase15_mcp_acceptance.rs lines 247, 280, 1834 assert tools.len() == 8.",
+      "status": "DOCUMENTED FOR RECONCILIATION",
+      "remediation": "Product Owner / Boss to update ADR-005 text and phase15 assertions to reflect the expanded 12-tool MCP surface."
+    }
+  ]
+}
