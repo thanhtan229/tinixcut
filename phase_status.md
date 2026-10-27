@@ -69,7 +69,7 @@
 - **Phase 18:** Complete with deferred items (Audible playback & audio crossfades verified by user; health check & cleanup observation deferred).
 - **Phase 19:** Complete (Initial 6 text template presets, schema v5 text styles).
 - **Phases 20–25:** Implemented (SRT/WebVTT captions, aspect ratio/canvas background, visual effects & dip to black, clip speed, text batch actions, auto-captions via local Whisper).
-- **Phase 26:** Open for consolidated manual desktop qualification (`Plans/phase26_manual_qualification.md`).
+- **Phase 26:** Native desktop checklist (`Plans/phase26_manual_qualification.md`) user-reported PASS on 2026-10-27; clean-VM and hardware-encoder gates remain deferred.
 
 ---
 
