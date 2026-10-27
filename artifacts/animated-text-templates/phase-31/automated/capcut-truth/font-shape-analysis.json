@@ -1,0 +1,37 @@
+{
+  "capcut_core_box": {
+    "y0": 488,
+    "y1": 594,
+    "x0": 191,
+    "x1": 1727
+  },
+  "capcut_core_px": 42765,
+  "candidates": {
+    "tinix_mplus1p": {
+      "core_px": 51578,
+      "core_box": {
+        "y0": 489,
+        "y1": 606,
+        "x0": 108,
+        "x1": 1809
+      },
+      "raw_core_iou_same_frame": 0.2179,
+      "scale_x_to_capcut": 0.903,
+      "scale_y_to_capcut": 0.906,
+      "scale_normalised_shape_iou": 0.9363
+    },
+    "tinix_roboto": {
+      "core_px": 49514,
+      "core_box": {
+        "y0": 492,
+        "y1": 608,
+        "x0": 187,
+        "x1": 1732
+      },
+      "raw_core_iou_same_frame": 0.3799,
+      "scale_x_to_capcut": 0.9942,
+      "scale_y_to_capcut": 0.9138,
+      "scale_normalised_shape_iou": 0.528
+    }
+  }
+}
