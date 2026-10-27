@@ -12,7 +12,7 @@
 
 **Project:** Automation-First Desktop Video Editor
 **Overall Status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–33 FUNCTIONALLY COMPLETE (NATIVE QUALIFICATION ITEMS DEFERRED); PHASE 34 IMPLEMENTED WITH AC-09 QUALIFICATION OPEN; PHASES 35–36 PLANNED
-**Current Selected Milestone:** Rich Animated Text Templates — Phase 36 Release Hardening & Qualification IN PROGRESS
+**Current Selected Milestone:** Rich Animated Text Templates — Phase 36 Release Hardening & Qualification COMPLETE WITH DEFERRED QUALIFICATION
 **Current Active Implementation Phase:** Phase 34 — CapCut Template Import (implementation complete; native acceptance qualification open)
 **Phase 16 Status:** COMPLETE WITH DEFERRED ITEMS
 **Deferred Acceptance Qualification:** P16-AC-56 (Real interactive Windows GUI qualification deferred), True Clean-VM qualification deferred
@@ -622,3 +622,13 @@ eference-comparison.json (plateau bbox delta 16?14 px, centroid 9 px, identical 
 - **Verification**: Phase35 31 tests, Phase34 48, lib 172, frontend 81/typecheck/build, fmt; Final Reviewer **FINAL PASS** (Codex fallback where provider identity unexposed).
 - **Deferred**: embedded provider integration and native interactive agent staging UI; ADR-005 tool-count wording stale (8 vs 12) for P36 docs reconciliation.
 - **Gate T4**: PASS.
+
+
+### Phase 36 completion checkpoint ? 2026-10-27
+
+- **Regression**: core lib 172; P29 13+12; P30 10; P31 21; P32 20; P34 48; P35 31; P28 POC 6; export/automation 8; P14 15; P16 12+30; P17 seed/structural; P18 1; frontend 81/typecheck/web build; fmt; clippy only pre-existing warnings.
+- **Performance**: W1?W4 re-measured with CARGO_PROFILE_TEST_OPT_LEVEL=3 (see rtifacts/phase-36/benchmark-metrics.*).
+- **Packaging**: pnpm tauri build produced src-tauri/target/release/bundle/nsis/TinixCut_0.1.0_x64-setup.exe (~60.3 MB); package manifest/notices/fonts recorded.
+- **Support matrix**: native/recreated/full/partial/baked provenance; CapCut Scope-1 sample FULL, other families PARTIAL/UNSUPPORTED; agent CLI/MCP supported; ADR-005 reconciled to 12 tools.
+- **Evidence**: rtifacts/animated-text-templates/phase-36/ (evidence-summary.json, erification-log.md, benchmarks, package manifest, compatibility matrix, known-gaps ledger, release notes and Vietnamese user-guide proposal).
+- **Gate T5**: PASS for static/automated/package scope; **DEFERRED** for interactive native GUI, clean Windows VM/offline install, and hardware-encoder qualification (P26 continuity). No deferred item is claimed PASS.
