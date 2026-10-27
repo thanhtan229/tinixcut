@@ -1,0 +1,5 @@
+{
+  "seconds": 36.19,
+  "bytes": 102452,
+  "stdout_tail": "{\n  \"output_path\": \"C:\\\\Users\\\\Admin\\\\AppData\\\\Local\\\\Temp\\\\p31_font_4i9q3jeg\\\\font_exp.mp4\",\n  \"duration_secs\": 5.0,\n  \"file_size_bytes\": 102452,\n  \"render_time_ms\": 1142,\n  \"encoder_used\": \"libx264\",\n  \"attempted_encoders\": [\n    \"libx264\"\n  ]\n}\n"
+}

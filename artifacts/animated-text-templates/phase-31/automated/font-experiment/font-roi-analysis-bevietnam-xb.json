@@ -1,0 +1,32 @@
+{
+  "reference": "frame_t_end.png",
+  "candidate": "D:\\___TOOLS\\__TINIX\\TinixCut\\artifacts\\animated-text-templates\\phase-31\\automated\\font-experiment\\t_end_bevietnam_xb.png",
+  "mask_pixels_ref": 90798,
+  "mask_pixels_candidate": 107404,
+  "mask_iou": 0.4194,
+  "best_shift_iou": {
+    "iou": 0.428,
+    "dy": 2,
+    "dx": -4
+  },
+  "glyph_interior_px": 83525,
+  "glyph_interior_mae": 96.958,
+  "glyph_edge_px": 7273,
+  "glyph_edge_mae": 90.662,
+  "word_starts_ref": [
+    184,
+    473,
+    585,
+    823,
+    1234,
+    1525
+  ],
+  "word_starts_candidate": [
+    62,
+    404,
+    527,
+    1258,
+    1601
+  ],
+  "interpretation_note": "High interior agreement with lower edge agreement and shifted word starts indicates glyph-shape/advance differences (font), not fill/colour errors."
+}

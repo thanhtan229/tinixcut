@@ -49,9 +49,9 @@ def word_starts(mask: np.ndarray) -> list[int]:
     return starts
 
 
-def main() -> int:
+def main(candidate: Path = CAND, out: Path = OUT) -> int:
     ref = h.load_rgb(REF)
-    cand = h.load_rgb(CAND)
+    cand = h.load_rgb(candidate)
     mr = ref.sum(axis=2) > 30
     mc = cand.sum(axis=2) > 30
     inter = (mr & mc).sum(); union = (mr | mc).sum()
@@ -74,7 +74,7 @@ def main() -> int:
 
     wr = word_starts(mr); wc = word_starts(mc)
     result = {
-        "reference": REF.name, "candidate": str(CAND.relative_to(REPO)),
+        "reference": REF.name, "candidate": str(candidate),
         "mask_pixels_ref": int(mr.sum()), "mask_pixels_candidate": int(mc.sum()),
         "mask_iou": round(iou, 4) if iou is not None else None,
         "best_shift_iou": {"iou": round(best[0], 4), "dy": best[1], "dx": best[2]},
@@ -83,7 +83,8 @@ def main() -> int:
         "word_starts_ref": wr, "word_starts_candidate": wc,
         "interpretation_note": "High interior agreement with lower edge agreement and shifted word starts indicates glyph-shape/advance differences (font), not fill/colour errors.",
     }
-    OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
