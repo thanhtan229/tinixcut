@@ -290,14 +290,10 @@ impl ParitySemanticSnapshot {
                 continue;
             }
             if layer.timeline_range.contains_time(timestamp) {
-                let clip_offset = RationalTime::new(
-                    timestamp.value - layer.timeline_range.start.value,
-                    timestamp.rate,
-                );
-                let source_time = RationalTime::new(
-                    layer.source_range.start.value + clip_offset.value,
-                    timestamp.rate,
-                );
+                let clip_offset = timestamp
+                    .sub_exact(&layer.timeline_range.start)
+                    .rescaled_to(layer.timeline_range.start.rate);
+                let source_time = layer.source_time_at(timestamp);
 
                 let pos_x = layer.evaluate_property(
                     crate::modules::domain::KeyframeProperty::PositionX,
@@ -1723,7 +1719,7 @@ pub fn render_preview_frame_rgba_with_blend_mode(
                             let input_idx =
                                 input_paths.iter().position(|p| p == &pbuf).unwrap_or(0);
                             filter_chain.push_str(&format!(
-                                "[{}:v]trim=start={:.3}:duration=0.034,setpts=PTS-STARTPTS",
+                                "[{}:v]trim=start={:.6}:duration=0.034,setpts=PTS-STARTPTS",
                                 input_idx, src_sec
                             ));
                         } else {
@@ -1833,7 +1829,7 @@ pub fn render_preview_frame_rgba_with_blend_mode(
                     let pbuf = PathBuf::from(path);
                     let input_idx = input_paths.iter().position(|p| p == &pbuf).unwrap_or(0);
                     l_filter.push_str(&format!(
-                        "[{}:v]trim=start={:.3}:duration=0.034,setpts=PTS-STARTPTS",
+                        "[{}:v]trim=start={:.6}:duration=0.034,setpts=PTS-STARTPTS",
                         input_idx, l_src_sec
                     ));
                 } else {
@@ -1896,7 +1892,7 @@ pub fn render_preview_frame_rgba_with_blend_mode(
                     let pbuf = PathBuf::from(path);
                     let input_idx = input_paths.iter().position(|p| p == &pbuf).unwrap_or(0);
                     r_filter.push_str(&format!(
-                        "[{}:v]trim=start={:.3}:duration=0.034,setpts=PTS-STARTPTS",
+                        "[{}:v]trim=start={:.6}:duration=0.034,setpts=PTS-STARTPTS",
                         input_idx, r_src_sec
                     ));
                 } else {
@@ -3121,5 +3117,51 @@ mod tests {
         );
         // Transitions array is initialized empty (migration does not invent CrossDissolve)
         assert_eq!(loaded.tracks[0].transitions.len(), 0);
+    }
+
+    #[test]
+    fn test_phase26_parity_from_export_mixed_rate_subtraction() {
+        use crate::modules::domain::MediaKind;
+
+        let fps30 = FrameRate::FPS_30;
+        let fps1000 = FrameRate::new(1000, 1);
+
+        let mut project = Project::new("Phase 26 Mixed Rate Parity".to_string());
+        project.assets.push(Asset {
+            asset_id: "clip".to_string(),
+            name: "clip.mp4".to_string(),
+            path: "clip.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::new(120, fps30)),
+            file_size: 0,
+            dimensions: None,
+        });
+
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        let item = TimelineItem::new(
+            Some("clip".to_string()),
+            "VideoItem".to_string(),
+            ItemKind::Video,
+            TimeRange::new(RationalTime::new(30, fps30), RationalTime::new(60, fps30)),
+            TimeRange::new(RationalTime::new(0, fps30), RationalTime::new(60, fps30)),
+        )
+        .unwrap();
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("plan compiles");
+
+        // Sample at 1.5s using 1000fps timebase (1500 / 1000 = 1.5s)
+        let sample_time = RationalTime::new(1500, fps1000);
+        let snapshot = ParitySemanticSnapshot::from_export(&plan, sample_time);
+
+        assert_eq!(snapshot.layers.len(), 1);
+        let layer_snap = &snapshot.layers[0];
+        // At 1.5s, with clip starting at 1.0s, source_time must be exactly 0.5s (15 frames at 30fps)
+        assert_eq!(
+            layer_snap.source_time,
+            RationalTime::new(15, fps30),
+            "Source time must reflect exact mixed-rate subtraction (1.5s - 1.0s = 0.5s = 15f@30fps)"
+        );
     }
 }

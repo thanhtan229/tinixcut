@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { findClipForSplitAtPlayhead, isFocusInInput } from "../hooks/useTimelineShortcuts";
+import {
+  findClipForSplitAtPlayhead,
+  isTimelineClipShortcutTarget,
+  shouldSuppressTimelineShortcutsForTarget,
+} from "../hooks/useTimelineShortcuts";
 import { Project } from "../types/project";
 
 describe("Phase 16 Shortcuts Helpers (P16-TP-29..31, P16-AC-44..48)", () => {
@@ -84,22 +88,31 @@ describe("Phase 16 Shortcuts Helpers (P16-TP-29..31, P16-AC-44..48)", () => {
     expect(pastAllClips).toBeNull();
   });
 
-  it("P16-AC-47: isFocusInInput detects input, textarea, and contenteditable", () => {
+  it("P16-AC-47: suppresses timeline shortcuts for editable fields and interactive controls", () => {
     // When no element or default body/null
-    expect(isFocusInInput(null)).toBe(false);
-    expect(isFocusInInput({ tagName: "DIV", isContentEditable: false })).toBe(false);
-    expect(isFocusInInput({ tagName: "BUTTON", isContentEditable: false })).toBe(false);
+    expect(shouldSuppressTimelineShortcutsForTarget(null)).toBe(false);
+    expect(shouldSuppressTimelineShortcutsForTarget({ tagName: "DIV", isContentEditable: false })).toBe(false);
 
-    // Input tag
-    expect(isFocusInInput({ tagName: "INPUT" })).toBe(true);
-    expect(isFocusInInput({ tagName: "input" })).toBe(true);
+    // Native form controls
+    for (const tagName of ["INPUT", "input", "TEXTAREA", "textarea", "SELECT", "BUTTON"]) {
+      expect(shouldSuppressTimelineShortcutsForTarget({ tagName })).toBe(true);
+    }
 
-    // Textarea tag
-    expect(isFocusInInput({ tagName: "TEXTAREA" })).toBe(true);
-    expect(isFocusInInput({ tagName: "textarea" })).toBe(true);
+    // Custom controls expose ARIA roles instead of native tags.
+    expect(shouldSuppressTimelineShortcutsForTarget({ tagName: "DIV", role: "combobox" })).toBe(true);
+    expect(shouldSuppressTimelineShortcutsForTarget({ tagName: "DIV", role: "button" })).toBe(true);
 
     // ContentEditable element
-    expect(isFocusInInput({ tagName: "DIV", isContentEditable: true })).toBe(true);
-    expect(isFocusInInput({ tagName: "SPAN", isContentEditable: true })).toBe(true);
+    expect(shouldSuppressTimelineShortcutsForTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+    expect(shouldSuppressTimelineShortcutsForTarget({ tagName: "SPAN", isContentEditable: true })).toBe(true);
+  });
+
+  it("G50 allows clipboard shortcuts on accessible timeline clips only", () => {
+    const clip = { closest: (selector: string) => selector === '[data-timeline-clip="true"]' ? {} : null };
+    const toolbarButton = { closest: (_selector: string) => null };
+
+    expect(isTimelineClipShortcutTarget(clip)).toBe(true);
+    expect(isTimelineClipShortcutTarget(toolbarButton)).toBe(false);
+    expect(isTimelineClipShortcutTarget({})).toBe(false);
   });
 });

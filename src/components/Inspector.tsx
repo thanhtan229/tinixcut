@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { dbToLinearGain, formatGainDb, linearGainToDb, MAX_AUDIO_GAIN_DB, MIN_AUDIO_GAIN_DB } from "./audioGain";
 import {
   Asset,
   AudioCrossfade,
@@ -16,12 +17,18 @@ import {
   GradientKind,
   PlacementMode,
   ClipSpeed,
+  Crop,
+  FrameRate,
+  rationalTimeToFrames,
+  rationalTimeToSeconds,
   TimelineItem,
   TransitionKind,
   VisualEffectPreset,
+  ColorAdjustments,
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
 import { TemplateInstanceInspector } from "./TemplateInstanceInspector";
+import { shouldResetInspectorDrafts } from "./inspectorDraftSync";
 
 const DEFAULT_TEXT_STYLE: TextStyle = {
   font_family: "Inter",
@@ -31,6 +38,7 @@ const DEFAULT_TEXT_STYLE: TextStyle = {
   accent_color: null,
   background_color: null,
   background_opacity: 0,
+  background_corner_radius: 0,
   padding_x: 0,
   padding_y: 0,
   alignment: "Center",
@@ -39,6 +47,8 @@ const DEFAULT_TEXT_STYLE: TextStyle = {
 };
 
 interface InspectorProps {
+  projectRevision: number;
+  displayFrameRate: FrameRate;
   selectedItem: TimelineItem | null;
   selectedTransition?: CutTransition | null;
   selectedAudioCrossfade?: AudioCrossfade | null;
@@ -53,9 +63,14 @@ interface InspectorProps {
   assets?: Asset[];
   playheadFrame?: number;
   onUpdateTransform: (x: number, y: number, scale: number, rotation: number) => void;
+  onUpdateCanvasPosition?: (itemId: string, x: number, y: number) => void;
+  onUpdateCrop?: (crop: Crop) => void;
   onUpdatePlacementMode?: (placementMode: PlacementMode) => void;
   onUpdateOpacity: (opacity: number) => void;
   onUpdateVolume?: (volume: number) => void;
+  onSetEmbeddedAudioEnabled?: (enabled: boolean) => void;
+  onDetachEmbeddedAudio?: () => void;
+  onUnlinkEmbeddedAudio?: () => void;
   onUpdateText?: (text: string) => void;
   onApplyTextTemplate?: (templateId: string, templateVersion?: number) => void;
   onApplyTextTemplateToTrack?: (
@@ -92,6 +107,7 @@ interface InspectorProps {
     durationFrames: number
   ) => void;
   onUpdateVisualEffect?: (visualEffect: VisualEffectPreset) => void;
+  onUpdateColorAdjustments?: (adjustments: ColorAdjustments) => void;
   onUpdateSpeed?: (speed: ClipSpeed) => void;
   onAddKeyframe?: (property: KeyframeProperty, offsetFrame: number, value: number) => void;
   onRemoveKeyframe?: (property: KeyframeProperty, offsetFrame: number) => void;
@@ -111,6 +127,8 @@ interface InspectorProps {
 }
 
 export const Inspector: React.FC<InspectorProps> = ({
+  projectRevision,
+  displayFrameRate,
   selectedItem,
   selectedTransition,
   selectedAudioCrossfade,
@@ -119,9 +137,14 @@ export const Inspector: React.FC<InspectorProps> = ({
   assets,
   playheadFrame = 0,
   onUpdateTransform,
+  onUpdateCanvasPosition,
+  onUpdateCrop,
   onUpdatePlacementMode,
   onUpdateOpacity,
   onUpdateVolume,
+  onSetEmbeddedAudioEnabled,
+  onDetachEmbeddedAudio,
+  onUnlinkEmbeddedAudio,
   onUpdateText,
   onApplyTextTemplate,
   onApplyTextTemplateToTrack,
@@ -142,6 +165,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateAudioFade,
   onUpdateTransition,
   onUpdateVisualEffect,
+  onUpdateColorAdjustments,
   onUpdateSpeed,
   onAddKeyframe,
   onRemoveKeyframe,
@@ -155,10 +179,16 @@ export const Inspector: React.FC<InspectorProps> = ({
 }) => {
   const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
   const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
+  const [localCrop, setLocalCrop] = useState<Crop>(selectedItem?.crop ?? { top: 0, bottom: 0, left: 0, right: 0 });
   const [applyTemplateToTrack, setApplyTemplateToTrack] = useState(false);
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
   const [animationExpanded, setAnimationExpanded] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftIdentityRef = useRef<{
+    revision: number;
+    itemId?: string;
+    canonicalText: string;
+  } | null>(null);
 
   useEffect(() => {
     setAudioCrossfadeDurationDraft(
@@ -167,8 +197,39 @@ export const Inspector: React.FC<InspectorProps> = ({
   }, [selectedAudioCrossfade?.transition_id, selectedAudioCrossfade?.duration.value]);
 
   useEffect(() => {
-    setLocalText(selectedItem?.text_content ?? "");
-  }, [selectedItem?.item_id, selectedItem?.text_content]);
+    setLocalCrop(selectedItem?.crop ?? { top: 0, bottom: 0, left: 0, right: 0 });
+  }, [selectedItem?.item_id, projectRevision]);
+
+  useEffect(() => {
+    const previous = draftIdentityRef.current;
+    if (
+      !previous ||
+      previous.canonicalText !== (selectedItem?.text_content ?? "") ||
+      shouldResetInspectorDrafts(
+        previous.revision,
+        projectRevision,
+        previous.itemId,
+        selectedItem?.item_id
+      )
+    ) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      setLocalText(selectedItem?.text_content ?? "");
+    }
+    draftIdentityRef.current = {
+      revision: projectRevision,
+      itemId: selectedItem?.item_id,
+      canonicalText: selectedItem?.text_content ?? "",
+    };
+  }, [projectRevision, selectedItem?.item_id, selectedItem?.text_content]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     setApplyTemplateToTrack(false);
@@ -566,7 +627,10 @@ export const Inspector: React.FC<InspectorProps> = ({
               )}
             </div>
             <div>Start: {timeline_range.start.value}f | Dur: {timeline_range.duration.value}f</div>
-            <div>Source Start: {source_range.start.value}f</div>
+            <div>
+              Source Start: {rationalTimeToSeconds(source_range.start).toFixed(3)}s
+              {` (${rationalTimeToFrames(source_range.start, displayFrameRate)}f at project fps)`}
+            </div>
             {isInside && (
               <div style={{ color: "var(--accent-warning)", fontSize: "11px", marginTop: "2px" }}>
                 Playhead at clip offset: +{currentOffset}f
@@ -695,6 +759,7 @@ export const Inspector: React.FC<InspectorProps> = ({
         {selectedItem.kind === "Text" && (
           <TemplateInstanceInspector
             item={selectedItem}
+            projectRevision={projectRevision}
             onParameterSet={onTemplateParameterSet}
             onReset={onTemplateReset || onResetTextTemplate}
             onDetach={onTemplateDetach}
@@ -778,6 +843,9 @@ export const Inspector: React.FC<InspectorProps> = ({
                         update({
                           background_color: enabled ? (style.background_color ?? "#000000") : null,
                           background_opacity: enabled ? Math.max(style.background_opacity, 0.72) : 0,
+                          background_corner_radius: enabled
+                            ? (style.background_corner_radius ?? 0) || 14
+                            : (style.background_corner_radius ?? 0),
                         });
                       }}
                     />
@@ -789,6 +857,20 @@ export const Inspector: React.FC<InspectorProps> = ({
                       onChange={(event) => update({ background_color: event.target.value.toUpperCase() })}
                       style={{ marginLeft: "auto", width: "72px", height: "24px", padding: "1px" }}
                     />
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
+                    Bo góc nền
+                    <input
+                      type="range"
+                      min={0}
+                      max={48}
+                      step={1}
+                      value={style.background_corner_radius ?? 0}
+                      disabled={!style.background_color || style.background_opacity <= 0}
+                      onChange={(event) => update({ background_corner_radius: Number(event.target.value) })}
+                      style={{ flex: 1, accentColor: "var(--accent)" }}
+                    />
+                    <span style={{ minWidth: "32px", textAlign: "right" }}>{Math.round(style.background_corner_radius ?? 0)} px</span>
                   </label>
                   {textTrack && textTrack.textItemCount > 1 && onApplyTextStyleToTrack && (
                     <button
@@ -1242,6 +1324,46 @@ export const Inspector: React.FC<InspectorProps> = ({
             </label>
           )}
 
+          <button
+            type="button"
+            className="btn-secondary"
+            aria-label="Center selected clip position"
+            onClick={() => onUpdateCanvasPosition?.(selectedItem.item_id, 0, 0)}
+            disabled={!onUpdateCanvasPosition}
+          >
+            Center position
+          </button>
+
+          {selectedItem.kind === "Video" && onSetEmbeddedAudioEnabled && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px" }}>
+                <input
+                  type="checkbox"
+                  aria-label="Use embedded video audio"
+                  checked={selectedItem.embedded_audio_enabled !== false}
+                  disabled={!!selectedItem.linked_item_id}
+                  onChange={(event) => onSetEmbeddedAudioEnabled(event.target.checked)}
+                />
+                Use embedded audio
+              </label>
+              {onDetachEmbeddedAudio && selectedItem.embedded_audio_enabled !== false && (
+                <button type="button" className="btn-secondary" onClick={onDetachEmbeddedAudio}>
+                  Detach audio to track
+                </button>
+              )}
+              {selectedItem.linked_item_id && onUnlinkEmbeddedAudio && (
+                <button type="button" className="btn-secondary" onClick={onUnlinkEmbeddedAudio}>
+                  Unlink detached audio
+                </button>
+              )}
+            </div>
+          )}
+          {selectedItem.kind === "Audio" && selectedItem.linked_item_id && onUnlinkEmbeddedAudio && (
+            <button type="button" className="btn-secondary" onClick={onUnlinkEmbeddedAudio}>
+              Unlink linked video
+            </button>
+          )}
+
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <label style={{ fontSize: "12px" }}>Position X:</label>
             <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
@@ -1326,6 +1448,61 @@ export const Inspector: React.FC<InspectorProps> = ({
           {renderKeyframeEasingControl("Rotation")}
         </section>
 
+        {onUpdateCrop && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>CROP</div>
+              <button
+                type="button"
+                className="btn-secondary"
+                aria-label="Reset crop"
+                onClick={() => {
+                  const reset = { top: 0, bottom: 0, left: 0, right: 0 };
+                  setLocalCrop(reset);
+                  onUpdateCrop(reset);
+                }}
+              >
+                Reset
+              </button>
+            </div>
+            {(["top", "right", "bottom", "left"] as const).map((edge) => {
+              const opposite = edge === "top" ? "bottom" : edge === "bottom" ? "top" : edge === "left" ? "right" : "left";
+              const maxPercent = Math.max(0, 99 - localCrop[opposite] * 100);
+              return (
+                <label key={edge} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", fontSize: "12px" }}>
+                  {edge[0].toUpperCase() + edge.slice(1)}:
+                  <input
+                    type="number"
+                    aria-label={`Crop ${edge}`}
+                    min={0}
+                    max={maxPercent}
+                    step={1}
+                    value={Math.round(localCrop[edge] * 100)}
+                    onChange={(event) => {
+                      const percent = Math.min(maxPercent, Math.max(0, Number(event.target.value) || 0));
+                      setLocalCrop((previous) => ({ ...previous, [edge]: percent / 100 }));
+                    }}
+                    onBlur={() => {
+                      const canonicalCrop = selectedItem.crop ?? { top: 0, bottom: 0, left: 0, right: 0 };
+                      if ((["top", "bottom", "left", "right"] as const).some((key) => localCrop[key] !== canonicalCrop[key])) {
+                        onUpdateCrop(localCrop);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                    }}
+                    style={{ width: "74px", padding: "4px", fontSize: "12px" }}
+                  />
+                  <span style={{ color: "var(--text-muted)" }}>%</span>
+                </label>
+              );
+            })}
+            <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+              Crop values apply to the source frame before transform.
+            </div>
+          </section>
+        )}
+
         {/* Opacity control with keyframing */}
         <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1376,6 +1553,49 @@ export const Inspector: React.FC<InspectorProps> = ({
               <option value="Vivid">Vivid</option>
               <option value="Muted">Muted</option>
             </select>
+          </section>
+        )}
+
+        {onUpdateColorAdjustments && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              SDR COLOR ADJUSTMENTS
+            </div>
+            {([
+              ["brightness", "Brightness", -1, 1, 0.01, 0],
+              ["contrast", "Contrast", 0, 2, 0.01, 1],
+              ["saturation", "Saturation", 0, 2, 0.01, 1],
+              ["temperature", "Temperature", -1, 1, 0.01, 0],
+            ] as const).map(([key, label, min, max, step, defaultValue]) => {
+              const adjustments = selectedItem.color_adjustments ?? {
+                brightness: 0, contrast: 1, saturation: 1, temperature: 0,
+              };
+              return (
+                <label key={key} style={{ display: "grid", gridTemplateColumns: "82px 1fr 38px", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                  <span>{label}</span>
+                  <input
+                    aria-label={label}
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={adjustments[key] ?? defaultValue}
+                    onChange={(event) => onUpdateColorAdjustments({
+                      ...adjustments,
+                      [key]: Number(event.currentTarget.value),
+                    })}
+                  />
+                  <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    {(adjustments[key] ?? defaultValue).toFixed(2)}
+                  </span>
+                </label>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => onUpdateColorAdjustments({ brightness: 0, contrast: 1, saturation: 1, temperature: 0 })}
+              style={{ alignSelf: "flex-end", fontSize: "11px" }}
+            >Reset color</button>
           </section>
         )}
 
@@ -1570,18 +1790,18 @@ export const Inspector: React.FC<InspectorProps> = ({
           <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
-                VOLUME ({Math.round((selectedItem.volume ?? 1.0) * 100)}%)
+                VOLUME ({formatGainDb(selectedItem.volume ?? 1.0)})
               </div>
               {renderKeyframeControl("Volume", selectedItem.volume ?? 1.0)}
             </div>
             <input
               type="range"
-              min="0"
-              max="2"
-              step="0.05"
-              value={selectedItem.volume ?? 1.0}
+              min={MIN_AUDIO_GAIN_DB}
+              max={MAX_AUDIO_GAIN_DB}
+              step="0.5"
+              value={linearGainToDb(selectedItem.volume ?? 1.0)}
               onChange={(e) => {
-                const val = parseFloat(e.target.value);
+                const val = dbToLinearGain(parseFloat(e.target.value));
                 onUpdateVolume(val);
                 if (hasKfAtOffset("Volume") && onAddKeyframe) {
                   onAddKeyframe("Volume", currentOffset, val);

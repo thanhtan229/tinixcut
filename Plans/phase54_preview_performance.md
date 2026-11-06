@@ -1,0 +1,203 @@
+# Phase 54 — Preview performance and resource budgets
+
+**Status:** Implementation and deterministic CLI workload inspection complete; native seek and playback transport sampled; performance/resource acceptance remains OPEN.
+**Updated:** 2026-11-04
+**Plan:** [Product completion, Phases 48–57](plan_product_completion_phases48_57.md)
+
+## Objective
+
+Validate that preview remains responsive and resource use remains bounded on disclosed representative projects. A single seek result is functional evidence only and must not be presented as a latency percentile or performance qualification.
+
+## Existing automated evidence
+
+- 10-minute/100-clip and 30-minute/300-clip disposable project fixtures are inspected via CLI; five runs per fixture passed with median 23.61 ms and 46.60 ms for parse/validate/inspect.
+- A 30-second H.264/AAC fixture decoded fully five times in 399–431 ms.
+- Derived media-cache status/clear behavior and seven cache tests are recorded in the Phase 54 baseline evidence under `artifacts/phase54/`.
+
+## Remaining acceptance
+
+- Repeat the 30-sample native seek set with all inputs accepted; current run synchronized 29/30 targets and had one stale-input timeout.
+- Confirm rendered video and audio playback, then measure dropped frames and GPU use; the current fixture remains partly offline in native preview.
+- Measure playback CPU/GPU, proxy generation/regeneration and process-tree memory over 30 open/close cycles.
+- Keep separate functional seek evidence from performance budgets.
+### Native exact-frame seek smoke — 2026-11-04
+
+- On isolated candidate PID 28840 with the disposable Phase 44 video on Video Track 1 (project revision 24), set the accessible `Go to frame` field to 30 and invoked `Go`.
+- Native preview/timecode showed `00:00:01:00 (30f)` and the preview frame changed to the corresponding source image; the seek overlay reported 13.0 ms for this single sample. The project revision stayed 24.
+- Final Undo removed the preceding `+ Timeline` transaction, returning to an empty timeline while keeping the media-library asset. The project remains unsaved.
+- This proves one exact-frame seek path works; it does not establish latency p95, dropped frames, playback resource use, proxy behavior or memory-cycle budgets. Screenshot/evidence: `../artifacts/phase54/native_ui/phase54_seek_frame30.png` and `.json`.
+
+### 100-clip native seek and playback sample — 2026-11-04
+
+- On isolated candidate PID 39116, a UI Automation run submitted 30 frame targets spanning the 10-minute/100-clip disposable project. Preview and timeline timecodes synchronized for 29/30 submissions. The remaining attempt targeted frame 8100, but the input still contained 7500 and timed out at 3579.61 ms; the automation did not receive that edit. Across all 30 attempts, UI response median was 176.61 ms and p95 was 206.88 ms; the single timeout is retained in the sample. This is a measured sample, not a pass against a latency budget (none is specified here).
+- After exact-row relink of the disposable video source, a 10.94-second UIA playback observation advanced from 00:09:50:09 to 00:09:59:18 over 9.36 seconds between first/last samples (about 29.8 timeline frames/s). Candidate PID 39116 Working Set stayed 96.2 MiB; CPU increased 0.125 s (about 1.3% of one logical CPU over the sampled interval). Process-tree discovery found only the TinixCut PID, so these are root-process values, not complete WebView/GPU totals.
+- Native screenshot then showed `Preparing a compatible video preview…` and `Offline / Missing Media` for `Video 2 clip 1`, even though the library row reported the video source relinked. The audio asset remained `Media access required`; its common picker filter omits `.m4a`. A filename-navigation attempt opened the Windows “Select an app to open this .m4a file” chooser; no app was selected and no media/project source file was modified. A recovery sidecar was created for the disposable open project; the canonical `.tinix` fixture remains unchanged on disk.
+- Reversibility check: UIA toggled `Mute Video 2` (revision 2); the canvas then reported `Offline / Missing Media: Video 1 clip 1` with one layer. Undo restored Video 2 to unmuted (revision 3). The on-disk project hash still matches the baseline `0F78B8C91251E1A91DA2C2419C4022E4C70CD2828E20642D1A34F419D294DA68`; the app recovery sidecar is retained. Screenshot: [`phase54_video2_muted_preview.png`](../artifacts/phase54/native_ui/phase54_video2_muted_preview.png).
+- Evidence: [`phase54_seek_100clip_30sample_evidence.json`](../artifacts/phase54/native_ui/phase54_seek_100clip_30sample_evidence.json), [`phase54_playback_10s_evidence.json`](../artifacts/phase54/native_ui/phase54_playback_10s_evidence.json), [`phase54_after_openwith_dismissed.png`](../artifacts/phase54/native_ui/phase54_after_openwith_dismissed.png), and [`phase54_playback_candidate_window.png`](../artifacts/phase54/native_ui/phase54_playback_candidate_window.png).
+- G54 remains OPEN: frame-drop count, displayed-frame rendering, audio playback, GPU use, proxy regeneration, and 30-cycle complete process-tree RAM are unqualified. Timeline transport and root-process sampling alone do not establish those gates.
+
+### Controlled retry of the stale frame-field sample — 2026-11-04
+
+- Retried only the prior failed target (frame 8100) on candidate PID 39116 using the seek spinner's UI Automation `ValuePattern.SetValue("8100")`, then invoked the exact accessible `Go` button. UIA read the field back as `8100`; timeline/playhead timecode became `00:04:30:00`, matching the target. No project revision or source file changed.
+- This supports the hypothesis that the earlier mismatch was caused by text-entry delivery, but it is not a replacement 30-sample run. The displayed source video frame remains unverified because native preview still reports the compatibility/error state; do not treat the seek overlay/timecode alone as decoded-frame proof.
+- The synthetic H.264 High/yuv420p video independently passes a 2-second FFmpeg decode probe. The audio fixture is AAC-LC/48 kHz in `.m4a`, but the current relink filter omits that extension. A controlled preview/audio result therefore remains open.
+- Evidence: [`phase54_seek_timeout_recovery_evidence.json`](../artifacts/phase54/native_ui/phase54_seek_timeout_recovery_evidence.json).
+### Same-asset Source Viewer versus timeline preview — 2026-11-04
+
+- Invoked the unique accessible `Preview` button for the relinked Phase 54 video asset. The native Source Viewer displayed an actual Hoi An video frame from `phase54_synthetic_source_30m.mp4`; screenshot: [`phase54_source_viewer_check.png`](../artifacts/phase54/native_ui/phase54_source_viewer_check.png), SHA-256 `F3B04A5FD0449F6274358246D51337CFF85B83E7592001F15DDB3EC1276AD1A7`.
+- Closed the Source Viewer through its unique accessible `Close` button. The project returned to the same disposable timeline at frame 8100; Core Healthy remained, and the timeline still displayed `Preparing a compatible video preview…` plus the earlier layer error. No project edit or save occurred.
+- Since the same file renders in Source Viewer and passes FFmpeg decode, a global file/codec/path failure is not supported by this evidence. The timeline-layer/compatibility-proxy path (possibly under the 100-clip/two-layer workload) remains the narrower unconfirmed fault area. Source Viewer evidence does not close timeline preview, playback or dropped-frame acceptance.
+### UI Automation seek delivery recheck — 2026-11-04
+
+- A no-wait spinner probe used `ValuePattern.SetValue` and immediate readback. Only 1 of 30 desired field values was confirmed before Go; the other 29 were skipped and not submitted. Evidence: [`phase54_seek_100clip_uia_valueduration_retry_evidence.json`](../artifacts/phase54/native_ui/phase54_seek_100clip_uia_valueduration_retry_evidence.json). This is input-delivery evidence, not a seek sample.
+- A controlled follow-up waited for each exact field readback before invoking Go. All 30 values were accepted by that criterion, but only 25/30 produced two matching preview/timeline timecode labels within 2.5 seconds; 5 timed out. For the 30 attempts, median was 287.04 ms, p95 2556.53 ms and maximum 2572.54 ms (timeout samples are retained). Evidence: [`phase54_seek_100clip_confirmed_readback_evidence.json`](../artifacts/phase54/native_ui/phase54_seek_100clip_confirmed_readback_evidence.json).
+- The field often read back an earlier value after Go while the UI updated asynchronously. This confirms the 30-sample native seek path is not stable under this UIA interaction method. The initial 29/30 sample, the isolated frame-8100 retry, and these two follow-ups are separate runs and must not be combined into a single latency distribution or used to claim a pass.
+- No project data was edited; the seek changed playhead only. Do not continue repetitive seek input until there is a stable semantic control/acknowledgement. G54 remains OPEN for seek reliability as well as rendered-frame, audio, frame-drop, GPU, proxy and complete process-tree resource measurements.
+### M4A import and audio-transport follow-up — 2026-11-04
+
+- On isolated candidate PID 36992, UI Automation confirmed the disposable 30-minute AAC-LC fixture `phase54_synthetic_audio_30m.m4a` was visible in Media Library (48 kHz stereo, 1800.0 s) after importing through the native picker. This also confirms the earlier media-filter omission for `.m4a` is fixed in the current candidate.
+- Invoked the row's `+ Timeline` control; the UI created `Audio Track 1` with the audio clip at frame 0 for 54,001 frames and reported revision 2. No project was saved; source fixture SHA-256 is `1A6EE8F58904F54B84F2D7CDF12DA1F8D343085DCE6AEFECA0F7A6EB2461A525`.
+- Invoked Play. The native control changed to Pause, the WebView pane indicated audio playing, and the timeline advanced from frame 0 to `00:01:31:02` while the clip stayed on the audio track. Invoking Pause returned the transport control to Play. This is functional transport/UI evidence only; no loopback or external audio capture was available to prove audible output or clock accuracy.
+- The live Playback peak level stayed at `-60 dBFS`. FFmpeg measured the same source's first five seconds at mean `-40.5 dBFS`, max `-32.8 dBFS`; therefore the native peak meter is not qualified and appears inconsistent with the source signal. The UI Automation tree briefly retained an “Audio playing” pane title after pause even though the control returned to Play, so that title is treated as stale metadata.
+- G54 remains OPEN for timeline video rendering/frame drops, reliable seek acknowledgment, calibrated audio output/meter, GPU/proxy behavior, and 30-cycle full process-tree memory. The repeated 30-target seek runs already recorded above are not repeated here.
+- Evidence: `../artifacts/phase54/native_ui/phase54_m4a_audio_transport_evidence.json`.
+### Short single-clip native render comparison — 2026-11-04
+
+- The installed Phase 57 candidate displayed a decoded Hoi An frame from a one-second, 1920×1080 MP4 on Video Track 1 with one preview layer. The screenshot matches FFmpeg frame 0 of the imported green test export: `../artifacts/phase57/native_ui/phase57_installed_manual_timeline.png`.
+- This confirms a basic single-clip timeline render path on the recorded installed candidate. It does not qualify the 10-minute/100-clip Phase 54 workload, which previously showed an offline preview layer; the M4A transport peak meter also remains inconsistent.
+### G54 continuation checkpoint — 2026-11-05
+
+- Computer Use is not exposed in this session (`ALL_TOOLS` discovery returned no Computer Use/CUA tool). The prior native runs remain the latest evidence: 29/30 first-run synchronization with one stale-field timeout; the readback-gated run had 25/30 synchronized and five timeouts. Do not merge those runs or repeat blind UIA seek input; the earlier evidence explicitly found the current acknowledgement/input route unstable.
+- No new native seek, timeline-render, audio-output, GPU, proxy-regeneration or 30-cycle process-tree-memory measurement was produced in this continuation. These gates remain OPEN. The same-source Source Viewer pass and short single-clip render do not close the 100-clip timeline-preview/offline finding.
+- The standard app, installed candidate and isolated development candidate were left running (PIDs 33680, 12172 and 37972); workspace Vite PID 34408 returned HTTP 200. No UI/runtime process was restarted or stopped.
+- This is an input-tool availability blocker, not evidence that the application behavior passed or failed. Resume native qualification only when a reliable native input/capture path is available; keep the existing fixture and recovery sidecar intact.
+### G54 preview failure classification fix — 2026-11-05
+
+- The 100-clip fixture paths and both referenced source files were checked on disk; video source SHA-256 and project fixture evidence remain unchanged. Earlier native evidence shows the same video can render in Source Viewer, while the 100-clip timeline displayed a generic offline card and “Preparing a compatible video preview…” after decode/proxy fallback.
+- Updated `PreviewCanvas` to keep actual missing files (`is_missing_media`) separate from video decode/proxy failure. An unavailable proxy now shows “Video preview unavailable” with the native reason; a proxy decode failure is labeled separately; a pending request stops showing the preparing banner once it has failed. Image decode errors also have their own label.
+- Added focused presentation/pending-state tests: **7/7 passed**. Full frontend suite: **28 files / 162 tests passed**; typecheck and production build passed. Build retains the existing >500 kB chunk advisory. `git diff --check` passed.
+- This improves the accuracy of failure reporting; it does not establish why the native 100-clip preview failed, make that preview render, or qualify seek, dropped-frame, audio, GPU, proxy throughput or process-tree memory. Native requalification remains OPEN because Computer Use is absent and prior UIA acknowledgement was unstable. Source project/media fixtures were not modified.
+- Runtime action: restarted only the workspace Vite frontend server after the final frontend change; preserved the standard TinixCut, installed candidate, isolated Tauri window and Paseo. See the 2026-11-05 runtime checkpoint in `PROJECT_STATUS.md`.
+**Final runtime verification:** after the last source change, workspace Vite PID 38544 was replaced by PID 37908. PID 37908 serves `http://localhost:1420/` with HTTP 200; its transformed `PreviewCanvas.tsx` imports the new source-bound failure handling and its helper module contains both missing-file and preview-failure labels. TinixCut PID 33680, isolated Tauri candidate PID 37972, installed candidate PID 12172 and Paseo remain running. This verifies dev-server source delivery, not native-window rendering; Computer Use is unavailable.
+### G54 diagnostic follow-up — 2026-11-05
+
+- The source-bound preview-failure diagnostic change is present in the workspace. Focused helper coverage is now **9/9** and the full frontend suite is **28 files / 164 tests**; TypeScript typecheck and production build pass. This supersedes the earlier 7-test/162-test checkpoint above.
+- These checks improve error classification only. They do not close the 100-clip timeline render, stable native seek, frame-drop, audio-output/meter, GPU, proxy-throughput or memory-cycle gates. No Computer Use tool is available in this session; no native input was sent.
+- Current workspace Vite PID 37908 serves HTTP 200 from the project root and the transformed PreviewCanvas module imports the latest diagnostic helper. Standard TinixCut PID 33680, isolated candidate PID 37972 and installed candidate PID 12172 remain running. No runtime restart was needed for this documentation update.
+
+### Native workspace window visual capture — 2026-11-05
+
+- Used Win32 `GetWindowRect`/`PrintWindow` read-only against the exact workspace TinixCut process PID 36608, HWND `0x590AB0`; capture succeeded at 1295×837. The screenshot visibly shows the TinixCut editor and `Core Healthy (v0.1.0)` badge. Evidence: `../artifacts/phase54/native_ui/phase54_workspace_native_window_20261105.png` (SHA-256 `42DE3A2193C1C3...`; 71,666 bytes).
+- An “Unsaved projects recovered” modal covers the editor. It lists multiple `Untitled Project` recovery copies with different revisions and timestamps. No Restore or Discard action was sent, and no project data was changed, because the intended disposable recovery copy is not identifiable from the visible list.
+- This confirms native window rendering and a visible health badge; it does not verify functional IPC, preview on the 100-clip workload, seek, audio, or recovery restoration. Those G54/G48 gates remain OPEN. The browser-tab `invoke` error is separately classified in `phase54_invoke_warning_provenance_20261105.json` and is not evidence about native IPC.
+
+### G54 fixture integrity and qualification disposition — 2026-11-05
+
+- Rechecked the saved disposable 10-minute/100-video-clip fixture on disk. Both referenced media files exist at the exact project paths. Video SHA-256 is `D3F3630EAB336D85C473F122AF1CF15A2D2BF745780B82921E636BA4DAC31D96`; audio SHA-256 is `1A6EE8F58904F54B84F2D7CDF12DA1F8D343085DCE6AEFECA0F7A6EB2461A525`. This rules out a missing source file in the canonical fixture; it does not explain the native timeline's offline/preview failure.
+- The strongest controlled seek evidence remains 25/30 exact timecode synchronizations after every spinner value was read back before submission. Five samples timed out at 2.5 seconds; p95 was 2556.53 ms, above the 500 ms target. Timecode synchronization is not decoded-frame verification. Earlier independent run (29/30) is retained separately and not pooled.
+- The native Source Viewer rendered the same source, while the timeline showed an offline/compatibility error. A 10.94-second transport sample advanced at about 29.8 timeline fps, but no decoded-frame/drop count was available. GPU, proxy regeneration/throughput, audible output/live-meter accuracy and complete process-tree memory over 30 cycles remain unmeasured.
+- **Disposition: G54 NOT PASSED / BLOCKED for this qualification pass.** Evidence establishes failed seek budget and unresolved timeline rendering, not a clean pass. Do not repeat high-volume seek input without a stable acknowledgement and frame-readback path. The workspace still has disposable fixtures and recovery sidecars; no canonical fixture or original media was changed in this audit.
+- Independent evidence remains: `native_ui/phase54_seek_100clip_confirmed_readback_evidence.json`, `native_ui/phase54_playback_10s_evidence.json`, and `native_ui/phase54_source_viewer_check.png`.
+### Fresh native UIA retest on isolated fixture copy — 2026-11-05
+
+- Opened `phase54_10m_100clips_uia_disposable.tinix`, a separate-ID copy; TinixCut CLI accepted 100 video clips/5 tracks/600 seconds. The canonical fixture hash stayed `0F78B8C91251E1A91DA2C2419C4022E4C70CD2828E20642D1A34F419D294DA68`; the opened copy stayed `1C4441FC7F4BD99A8625E472E4BFD80D362A17C4FC28505221EDCCBF6C58DF57`.
+- At frame 0, the preview surface showed `Layers: 0` and `Empty Track Interval`. One UIA seek to frame 1 was accepted and visually rendered two layers; the native overlay showed 17.9 ms. A second controlled seek to frame 360 showed a different Hoi An/lantern scene at `00:00:12:00`.
+- A controlled seek to frame 1800 had exact spinner readback before Go, but two timecode labels did not reach `00:01:00:00` within 3000 ms. After timeout, the field and both labels were back at frame 360 / `00:00:12:00`. No retry was sent. Thus the prior blanket observation of no timeline rendering is superseded for frames 1 and 360 on this clean copy, while seek reliability remains a measured failure.
+- Visual artifacts and hashes are listed in `../artifacts/phase54/phase54_native_uia_retest_20261105.json`. No clip edit/save was made; project/source fixture files remain unchanged.
+- **G54 remains OPEN / NOT PASSED:** selected positions render, but frame-zero state and long seek fail; prior readback-gated 25/30 distribution also misses the 500 ms p95 budget. Frame-drop, proxy/GPU, audio-output/meter, and complete process-tree memory gates remain unmeasured.
+### Decode check at failed native seek target — 2026-11-05
+
+- The stalled native target was frame 1800 at 30 fps (60 s), inside two overlapping clips referencing the same 30-minute H.264 source. FFmpeg sought to 60 s and decoded one frame successfully (exit 0); extracted frame SHA-256 is 161C896B5484187412624EBEDE0336869DBDB5502CE92B8BD93AB09C7E55419E. The source file remains SHA-256 D3F3630EAB336D85C473F122AF1CF15A2D2BF745780B82921E636BA4DAC31D96.
+- This narrows the failure to the native timeline preview/seek path or its interaction with this workload. It does not identify the precise cause, measure drops/resources, or satisfy G54. See artifacts/phase54/phase54_ffmpeg_source_frame_60s_evidence_20261105.json and the extracted frame artifact.
+
+### G54 final seek disposition recheck — 2026-11-05
+
+- Reconciled the independent 29/30 initial run with the stricter readback-gated run: they are separate samples and must not be pooled. The readback-gated set accepted 30/30 field submissions, synchronized only 25/30 preview/timecode results, and measured median 287.04 ms, p95 2556.53 ms, maximum 2572.54 ms. This exceeds the 500 ms target. A later clean-copy native retest rendered frames 1 and 360 but began at an empty interval on frame 0 and failed to reach frame 1800 within 3 seconds; FFmpeg decoded the corresponding source frame successfully.
+- **Disposition: G54 NOT PASSED / OPEN.** No new 30-sample run was made in this continuation: Computer Use is not exposed in this toolset and previous UIA input acknowledgement was unstable. Frame-drop, proxy throughput, GPU, audible output/live meter and 30-cycle process-tree memory remain unmeasured. Keep the verified fixture and recovery sidecars intact.
+### Rust seek-path isolation on 100-clip workload — 2026-11-05
+
+- Loaded the disposable `phase54_10m_100clips_workload.tinix` (103 total timeline items across video/audio tracks) and measured 30 warm plan-build + exact-sample iterations across frames 1, 360, 1800, 7500 and 8100. p95 CompositionPlan build: **172 µs**; p95 `sample_preview_at`: **51 µs**.
+- This is a narrow in-process Rust measurement; it excludes Tauri IPC, WebView video decode/seek, presentation synchronization and frame-readback. It does not pass the UI seek budget and cannot replace native measurements.
+- The result makes CompositionPlan construction/sampling an unlikely explanation for the recorded 2.56 s native p95 and repeated timeout. Investigation should focus on WebView seek/decode/frame presentation and compatible-preview readiness. G54 remains **NOT PASSED / OPEN**.
+- Evidence: `artifacts/phase54/phase54_rust_preview_sample_isolation_20261105.json`.
+
+### G54 seek evidence reconciliation — 2026-11-05
+
+- Reconciled the later 30-target UIA run with the controlled exact-readback run. In the later run, frame 8100 was **not submitted** because the field still contained 7500; it is not a valid seek failure and must not be included as an accepted seek sample. The reported 206.88 ms UI-response p95 and 20.8 ms Rust/sample p95 describe different boundaries and do not replace the strict run.
+- The strict run accepted all 30 field values but only synchronized preview and timeline timecodes for 25/30, with 5 timeouts and p95 2556.53 ms against the G54 seek budget of 500 ms. A separate isolated seek to frame 1800 also timed out after 3000 ms and retained frame 360. Do not pool runs or infer decoded-frame presentation from timecode alone.
+- **Disposition: G54 OPEN / NOT PASSED.** The gate cannot advance to PASS: timeline start/long-seek behavior remains unreliable; the UI-response p95 target is also not demonstrated; decoded-frame/drop, audio output/meter, GPU/proxy throughput and complete process-tree 30-cycle memory are unmeasured.
+- Computer Use/CUA is not callable in this session, and the prior UIA input/readback route was unstable. No retry was sent and no fixture, source media or recovery sidecar was changed. Machine reconciliation: `../artifacts/phase54/phase54_gate_reconciliation_20261105.json`.
+- G54 qualification work is concluded for this pass as **blocked with concrete failed/open gates**, allowing independent later phases to continue. Reopen only when a reliable native input/capture path and the remaining measurements are available.
+
+### G54 source GOP and failed-seek diagnostic — 2026-11-05
+
+- Scanned all 360 H.264 keyframes in the unchanged 30-minute fixture with the bundled FFprobe. The maximum keyframe interval is 5.033334 s; near the failed 60 s target, keyframes occur at 55.054688 s and 60.042708 s. The source is H.264 High/yuv420p 1920×1080 at 30 fps, and its SHA-256 remains `D3F3630EAB336D85C473F122AF1CF15A2D2BF745780B82921E636BA4DAC31D96`.
+- Prior FFmpeg evidence decodes one frame at source time 60 s successfully. Prior in-process Rust measurements are p95 172 µs for plan construction and 51 µs for preview sampling, while native UI seek p95 is 2556.53 ms with five timeouts in a separate 30-sample run. This makes project-plan sampling and missing media unlikely explanations; it narrows the candidate area to WebView/media seeking or frame presentation but does not prove which component is responsible.
+- No native retest was attempted: Computer Use is not callable in this session and the prior UIA acknowledgement path was unstable. No code, project, source media, or recovery sidecar was changed.
+- **Disposition remains G54 NOT PASSED / OPEN.** The seek budget fails, and decoded-frame, dropped-frame, audio output, GPU/proxy throughput, and full process-tree memory gates remain unqualified. Evidence: `artifacts/phase54/phase54_source_gop_seek_diagnostic_20261105.json`.
+### Native workload project selection attempt — 2026-11-05
+
+- The session exposes no Computer Use tool. The exact workspace Open dialog was confirmed foreground on TinixCut PID 12440. To avoid re-running any seek without a confirmed target, I attempted to select the known 103-item disposable G54 copy through its current Windows file picker.
+- Exact address-entry readback failed through three distinct mechanisms: `SendKeys` produced `D:\___TOLS__TINIX\TinixCut\atifactsphae54diposable` (`Address text readback differs; will not navigate`); `SetWindowText` returned true but did not change readback (`Address correction readback did not match; do not navigate`); Unicode `SendInput` read back only `D:\___TOOLS\__TINIX\TinixCut\artifacts\phase54\di` (`Exact Unicode address readback failed; will not navigate`). No Enter or Open was sent. The exact picker was closed using `WindowPattern.Close`.
+- The saved current project hash stayed `5C5EA4BA6D2FEA4937A12561E6C846895AF6F662AAE3DEAB84ACC1BBF139141E`. The target copy hash is `9CE83F00B8F87E61FB196039237BC4A57B4F80930649646A1EF10F17309646E2`; its media paths were confirmed present. Neither project/media nor recovery snapshots were changed. No G54 seek/performance test was repeated.
+- **Disposition remains G54 NOT PASSED / OPEN.** Existing 25/30 seek and p95 2556.53 ms evidence stands; decoded-frame, drops, audio, GPU/proxy and full process-tree memory remain unqualified. Evidence: `../artifacts/phase54/phase54_native_fixture_open_input_blocker_20261105.json`.
+### Frame-1800 active-layer diagnostic — 2026-11-05
+
+- Read-only inspection of the canonical 100-video-clip workload shows **two** video clips active at timeline frame 1800 (60 s), on Video 1 and Video 2. Both reference the same 30-minute H.264 asset and map frame 1800 to source frame 1800. The project and source hashes are captured in `../artifacts/phase54/phase54_frame1800_duplicate_layer_diagnostic_20261105.json`; neither file was changed.
+- The previous native seek to frame 1800 retained frame 360 after 3 s; FFmpeg decodes source 60 s, while Rust plan/sample p95 are 172/51 μs. The preceding keyframe is 55.054688 s (about 4.95 s before the target), and the next is 60.042708 s. These facts define a useful native A/B: same target with one versus two active video layers, and per-element `requestVideoFrameCallback` mediaTime/presentedFrames readback.
+- This is a testable bottleneck hypothesis, not a root-cause conclusion. No decoder/proxy changes made. G54 remains OPEN / NOT PASSED pending reliable native capture and the other frame/drop/audio/GPU/proxy/resource gates.
+
+### G54 preview-source code audit — 2026-11-05
+
+- Read-only tracing of `media_get_compatible_preview_video` in `src-tauri/src/lib.rs` and the video media-error handler / synchronization effect in `src/components/PreviewCanvas.tsx` confirms that compatible H.264 proxy generation is requested after a video element reports a decode/media error. A slow or stalled seek with no media-error event does not currently request a proxy.
+- `FFmpegService::generate_proxy` transcodes the full source to a 360p H.264/AAC cache file. Applying this path to a seek stall would add a full-source background transcode and could change image/audio resource use; current evidence does not show that it improves time-to-present or reduces decoder contention.
+- No renderer, decoder, proxy, project or media changes were made. Existing measurements still show 25/30 readback-gated native seeks synchronized, p95 2556.53 ms against a 500 ms target, and a separate frame-1800 timeout retaining frame 360. The two-layer same-source correlation remains only an A/B hypothesis.
+- Disposition: **G54 NOT PASSED / OPEN**. No source-level root cause is proven; frame presentation, frame drops, reliable native seek, audio, GPU/proxy throughput and process-tree memory still require valid measurement. Native Computer Use is unavailable in this session, so no UI input was issued.
+
+### G54 sequential disposition — 2026-11-05
+
+- The 30-target readback-gated sample is a performance **FAIL**: 25/30 synchronized, 5 timeouts, p95 2556.53 ms against the 500 ms budget. The separate target at frame 1800 timed out after 3000 ms while frame 360 remained displayed. These independent runs are not combined.
+- The media decodes with FFmpeg and source GOP/keyframe scan plus Rust composition timings do not identify a root cause. Existing evidence narrows the delay to the native WebView/media seek/presentation path but does not establish why.
+- Remaining measurements (decoded-frame confirmation, dropped frames, audible output/audio clock, GPU and proxy throughput, and full process-tree memory over 30 open/close cycles) cannot be qualified from the available stable input path. Computer Use is not callable; repeating seek input would risk recording unreliable results.
+- **Disposition: G54 NOT PASSED / OPEN.** Evidence is retained in `artifacts/phase54/phase54_gate_reconciliation_20261105.json`, `phase54_source_gop_seek_diagnostic_20261105.json`, and the detailed Phase 54 plan. No code, project, media or recovery state was changed in this disposition.
+### G54 opt-in native seek diagnostics - 2026-11-05
+
+- Added a development-only, sessionStorage opt-in recorder with at most 200 events. It records per-video seek requests/events, timeout and browser frame callbacks with raw media time; no media paths or project IDs are recorded. Timers and callbacks are cancelled on replacement or detachment. `near-target` at 50 ms describes proximity only, not frame accuracy. Coalesced seeks may be attributed only to the latest request.
+- Typecheck, 171 frontend tests and production build passed; build retained the chunk-size warning. Independent review accepted the final watchdog correction; earlier review examined the opt-in and frame instrumentation. Workspace Tauri PID 30044 reports Core Healthy, Vite PID 29488 serves HTTP 200 and the new source. The previous workspace runtime was stopped for this restart; no other app or recovery copy was stopped or modified.
+- No native A/B measurement was performed in this step. G54 stays NOT PASSED / OPEN. Evidence and instructions: `artifacts/phase54/phase54_preview_video_instrumentation_20261105.json`.
+
+### G54 native two-layer diagnostic sample - 2026-11-05
+
+- On an unchanged disposable project copy, confirmed exact input readback before seeking to frames 360 and 1800. Two-layer callbacks at frame 360 reported mediaTime 12 s, with seeked at 291.7 and 297.6 ms. At frame 1800 the two elements reported seeked at 581.1 and 586.0 ms, and frame callbacks at 581.3 and 595.1 ms with mediaTime 59.988021 s (target 60 s). These are individual browser events, not physical display timestamps or a 30-sample performance result.
+- The original diagnostic event `frame-presentation-timeout` in the retained raw log denotes the observation window ending even when frames were observed. To prevent misinterpretation it was renamed `frame-observation-ended` and now records the number of callbacks observed. Typecheck/build and focused independent review pass for this correction; the frontend suite of 171 passed on the immediately preceding candidate.
+- Replaced only the workspace runtime after the correction: TinixCut PID 33584 Core Healthy; Vite PID 9440 HTTP 200 and serves the corrected event. Original G54 fixture remains unchanged. A one-layer comparison, reliable 30-sample frame presentation, audio/drop/GPU/memory checks remain open. G54 is NOT PASSED. Raw log: `artifacts/phase54/phase54_native_two_layer_diagnostics_20261105.json`.
+
+### G54 one-layer versus two-layer diagnostic sample - 2026-11-05
+
+- Created a new-ID disposable variant through `tinixcut_project_variant`, then dry-ran and applied `TrackMuteSet` for Video 2 via MCP; original project hash remained `0F78B8C91251E1A91DA2C2419C4022E4C70CD2828E20642D1A34F419D294DA68`. No recovery copy was restored or discarded.
+- On the one-layer variant at frame 1800, seeked was 394.9 ms and the frame callback was 395.3 ms, mediaTime 59.988021 s. The earlier two-layer sample measured seeked 581.1/586.0 ms and callbacks 581.3/595.1 ms with the same mediaTime. Each is a single run from a separate app session, without randomized order; they do not prove decoder contention or establish p95. Callback timing is not a physical-display measurement.
+- DevTools was closed after requesting removal of the opt-in flag. The saved variant remains available; the app did not save further project changes. G54 stays NOT PASSED / OPEN: robust repeated frame measurements, audio, dropped frames, GPU/proxy throughput and process-tree memory are outstanding. Evidence: `artifacts/phase54/phase54_native_one_vs_two_layer_evidence_20261105.json`.
+
+### G54 controlled seek batches and target 7520 - 2026-11-05
+
+- On the two-layer disposable copy, ten sequential seeks with field readback produced 10/10 matching preview/timeline timecodes. The retained compact browser log contains 20 frame callbacks, approximately 405-672 ms from the respective seek requests. These values describe browser callback timing; some mediaTime values differ from target by nearly one 30 fps frame, and no exact displayed-frame claim is made. UIA time includes expensive tree traversal.
+- A second batch synchronized the first two targets (frames 30 and 1810). Frame 7520 read back correctly before Go, but did not synchronize within the 3-second observation; UIA afterward reported spinner 1810 and two timecodes `00:01:00:10`. The recorded video summary has no seeked/frame event for the 7520 target. This suggests the failure occurred before video synchronization but does not establish why the input was not committed. Further seeks were stopped.
+- This is 12/13 timecode synchronizations across the two controlled batches, not a completed 30-target gate. Do not combine with earlier runs as one percentile sample. G54 remains NOT PASSED / OPEN. DevTools closed after requesting diagnostic opt-out; TinixCut PID 33584 remains Core Healthy. Evidence: `artifacts/phase54/phase54_native_seek_batches_evidence_20261105.json`.
+
+### G54 controlled keyboard retry for frame 7520 - 2026-11-05
+
+- After the failed ValuePattern/Go attempt, a distinct input method was tried once: foreground was verified for PID 33584, the unique frame spinner had keyboard focus, digits `7520` were typed, and exact readback was confirmed before Go. Both timecode labels became `00:04:10:20` and the spinner remained 7520.
+- This confirms one successful keyboard delivery of the target, not the root cause of the prior failure or decoded-frame correctness. The earlier 12/13 batch remains separate; no 30-sample reliability or performance pass is claimed. Evidence: `artifacts/phase54/phase54_native_seek_batches_evidence_20261105.json`.
+
+### G54 keyboard-delivery batches - 2026-11-05
+
+- With exact foreground and spinner focus verified, typed-input/readback and Go synchronized both timecodes for 10/10 targets in the first batch, with 20 browser frame callbacks. The second batch synchronized frames 30 and 1810, then the typed value for frame 7520 failed readback and Go was not invoked; afterward the spinner/timecodes remained at 1810. The helper UI JSON includes submitted targets only; this paragraph records the failed pre-submission attempt.
+- The previous isolated keyboard success at 7520 does not make this delivery method consistently reliable. Input stopped on failure; no 30-target pass or percentile claim is made. Callback timings remain browser-level measurements, not physical display proof. DevTools was closed after requesting diagnostic opt-out; source fixture was not modified. G54 remains NOT PASSED / OPEN. Evidence: `artifacts/phase54/phase54_native_seek_batches_evidence_20261105.json`.
+
+
+### G54 frame-seek DOM value synchronization correction ? 2026-11-05
+
+- The bounded seek batches showed a value of frame 7520 in the accessibility readback, followed by no video seek event and a return to frame 1810. Source inspection found that form submission parsed only `frameSeekDraft`; a native accessibility client can set the input value without causing React `onChange`, leaving that state stale.
+- Go and blur now resolve the current input element value first, and blur checks the actual value against the playhead even if React's dirty flag was not updated. Unit coverage verifies both behaviors. This fixes the identified stale-state path, but the live native failure has not been retested and no cause is claimed for other delivery failures.
+- Current frontend suite: 30 files / 174 tests PASS; production build/typecheck PASS. Runtime restarted with workspace PID 29984 (binary SHA-256 `19DC4B596B63D7749D9E48F11ABE60AE50E4CC47C7530B4D7C1BA8C5247DDF19`) and Vite PID 31764, HTTP 200.
+- Native retest is BLOCKED: Computer Use accessibility binds the workspace TinixCut window and exposes its WebView pane, but the screenshot displays Paseo conversation content. No native input was sent. G54 remains NOT PASSED until seek delivery and the measured presentation/performance criteria are retested. Evidence: `artifacts/phase54/phase54_frame_seek_dom_value_fix_20261105.json`.

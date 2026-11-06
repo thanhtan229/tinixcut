@@ -133,6 +133,7 @@ export interface TextStyle {
   accent_color?: string | null;
   background_color?: string | null;
   background_opacity: number;
+  background_corner_radius?: number;
   padding_x: number;
   padding_y: number;
   alignment: TextAlignment;
@@ -193,6 +194,12 @@ export type TransitionKind =
   | "DipToBlack";
 
 export type VisualEffectPreset = "None" | "Mono" | "Vivid" | "Muted";
+export interface ColorAdjustments {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  temperature: number;
+}
 export type ClipSpeed = "Half" | "Normal" | "Double";
 
 export interface Transition {
@@ -348,7 +355,10 @@ export interface TimelineItem {
   keyframes?: Keyframe[];
   placement_mode?: PlacementMode;
   visual_effect?: VisualEffectPreset;
+  color_adjustments?: ColorAdjustments;
   speed?: ClipSpeed;
+  embedded_audio_enabled?: boolean;
+  linked_item_id?: string | null;
 }
 
 export interface CutTransition {
@@ -373,6 +383,8 @@ export interface Track {
   name: string;
   kind: TrackKind;
   muted: boolean;
+  solo?: boolean;
+  volume?: number;
   locked: boolean;
   items: TimelineItem[];
   transitions?: CutTransition[];
@@ -423,8 +435,15 @@ export interface Project {
   settings: ProjectSettings;
   assets: Asset[];
   tracks: Track[];
+  markers?: ProjectMarker[];
   created_at: string;
   updated_at: string;
   client_registry?: ClientRegistry;
   command_ledger?: CommandLedgerEntry[];
+}
+
+export interface ProjectMarker {
+  marker_id: string;
+  label: string;
+  position: RationalTime;
 }

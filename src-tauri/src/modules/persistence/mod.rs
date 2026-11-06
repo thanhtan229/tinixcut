@@ -5,6 +5,8 @@
 
 use crate::modules::domain::{Project, TextStyle, CURRENT_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
+use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +31,12 @@ pub enum PersistenceError {
 
     #[error("Invalid project file: {0}")]
     InvalidProject(String),
+
+    #[error("Project revision conflict: expected disk revision {expected:?}, found {actual:?}; reload the project or save as a new file to preserve your edits")]
+    RevisionConflict {
+        expected: Option<u64>,
+        actual: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,10 +47,24 @@ pub enum RecoveryStatus {
         recovery_path: PathBuf,
         recovery_revision: u64,
         project_revision: u64,
+        recovery_fingerprint: String,
+    },
+    RecoveryDiffersFromProject {
+        recovery_path: PathBuf,
+        recovery_revision: u64,
+        project_revision: u64,
+        recovery_fingerprint: String,
+    },
+    RecoveryUnreadable {
+        recovery_path: PathBuf,
+        reason: String,
     },
 }
 
-/// Atomically save a project to disk.
+/// Unconditionally atomically save a project to disk.
+///
+/// Use `save_project_atomic_if_revision` for an existing authoritative project
+/// so a stale in-memory snapshot cannot replace a newer disk revision.
 /// 1. Serialize validated project.
 /// 2. Write to temporary sibling file `<path>.tmp`.
 /// 3. Flush and sync.
@@ -50,13 +72,118 @@ pub enum RecoveryStatus {
 ///
 /// If any step before rename fails, the original `<path>` remains completely intact!
 pub fn save_project_atomic(project: &Project, target_path: &Path) -> Result<(), PersistenceError> {
+    let _write_lock = acquire_project_write_lock(target_path)?;
+    save_project_atomic_unlocked(project, target_path)
+}
+
+/// Save only if the project's last observed disk revision is still current.
+/// The lock covers both the comparison and atomic replacement, including across
+/// cooperating TinixCut processes.
+pub fn save_project_atomic_if_revision(
+    project: &Project,
+    target_path: &Path,
+    expected_revision: Option<u64>,
+) -> Result<(), PersistenceError> {
+    let _write_lock = acquire_project_write_lock(target_path)?;
+    let actual_revision = if target_path.exists() {
+        Some(load_project(target_path)?.revision)
+    } else {
+        None
+    };
+
+    if actual_revision != expected_revision {
+        return Err(PersistenceError::RevisionConflict {
+            expected: expected_revision,
+            actual: actual_revision,
+        });
+    }
+
+    save_project_atomic_unlocked(project, target_path)
+}
+
+/// Remove a recovery/project file only while the caller's observed identity and revision remain current.
+pub fn remove_project_if_revision(
+    target_path: &Path,
+    expected_project_id: &str,
+    expected_revision: u64,
+) -> Result<(), PersistenceError> {
+    let _write_lock = acquire_project_write_lock(target_path)?;
+    if !target_path.exists() {
+        return Err(PersistenceError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Project file does not exist",
+        )));
+    }
+    let current = load_project(target_path)?;
+    if current.project_id != expected_project_id {
+        return Err(PersistenceError::InvalidProject(
+            "Project identity changed before removal".to_string(),
+        ));
+    }
+    if current.revision != expected_revision {
+        return Err(PersistenceError::RevisionConflict {
+            expected: Some(expected_revision),
+            actual: Some(current.revision),
+        });
+    }
+    fs::remove_file(target_path)?;
+    Ok(())
+}
+
+fn acquire_project_write_lock(target_path: &Path) -> Result<File, PersistenceError> {
+    let canonical_target = canonical_project_path(target_path)?;
+
+    let mut lock_path = OsString::from(canonical_target.as_os_str());
+    lock_path.push(".tinixcut.lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(PathBuf::from(lock_path))?;
+    lock_file.lock()?;
+    Ok(lock_file)
+}
+
+/// Resolve existing aliases to one path identity so Save As to the same project
+/// cannot bypass the revision observed when that project was opened.
+pub fn same_project_path(left: &Path, right: &Path) -> Result<bool, PersistenceError> {
+    Ok(canonical_project_path(left)? == canonical_project_path(right)?)
+}
+
+fn canonical_project_path(path: &Path) -> Result<PathBuf, PersistenceError> {
+    if path.exists() {
+        return Ok(fs::canonicalize(path)?);
+    }
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Project path must include a file name",
+        )
+    })?;
+    Ok(fs::canonicalize(parent)?.join(file_name))
+}
+
+fn save_project_atomic_unlocked(
+    project: &Project,
+    target_path: &Path,
+) -> Result<(), PersistenceError> {
     project
         .validate()
         .map_err(|e| PersistenceError::Validation(e.to_string()))?;
 
     let json_bytes = serde_json::to_vec_pretty(project)?;
 
-    if let Some(parent) = target_path.parent() {
+    if let Some(parent) = target_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
 
@@ -107,6 +234,14 @@ pub fn load_project(path: &Path) -> Result<Project, PersistenceError> {
     Ok(project)
 }
 
+/// Return the current revision for an existing project, or `None` for a new path.
+pub fn load_project_revision_if_exists(path: &Path) -> Result<Option<u64>, PersistenceError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    load_project(path).map(|project| Some(project.revision))
+}
+
 /// Save an autosave / recovery snapshot.
 /// Invariant: Autosave is NEVER saved directly over canonical user project!
 pub fn save_recovery_snapshot(
@@ -114,6 +249,38 @@ pub fn save_recovery_snapshot(
     recovery_path: &Path,
 ) -> Result<(), PersistenceError> {
     save_project_atomic(project, recovery_path)
+}
+
+/// Save a recovery snapshot without allowing a stale writer to replace newer
+/// content for the same project. The comparison and atomic replace share one lock.
+pub fn save_recovery_snapshot_if_newer(
+    project: &Project,
+    recovery_path: &Path,
+) -> Result<(), PersistenceError> {
+    let _write_lock = acquire_project_write_lock(recovery_path)?;
+    if recovery_path.exists() {
+        let current = load_project(recovery_path)?;
+        if current.project_id != project.project_id {
+            return Err(PersistenceError::InvalidProject(
+                "Recovery path belongs to a different project".to_string(),
+            ));
+        }
+        if project.revision < current.revision {
+            return Err(PersistenceError::RevisionConflict {
+                expected: Some(project.revision),
+                actual: Some(current.revision),
+            });
+        }
+        if project.revision == current.revision {
+            if project == &current {
+                return Ok(());
+            }
+            return Err(PersistenceError::InvalidProject(
+                "Different recovery content already exists at the same revision".to_string(),
+            ));
+        }
+    }
+    save_project_atomic_unlocked(project, recovery_path)
 }
 
 /// Detect whether a newer recovery file exists compared to canonical project.
@@ -126,8 +293,13 @@ pub fn check_recovery_status(
     }
 
     let recovery_proj = match load_project(recovery_path) {
-        Ok(p) => p,
-        Err(_) => return Ok(RecoveryStatus::NoRecoveryFound),
+        Ok(project) => project,
+        Err(error) => {
+            return Ok(RecoveryStatus::RecoveryUnreadable {
+                recovery_path: recovery_path.to_path_buf(),
+                reason: error.to_string(),
+            })
+        }
     };
 
     if !canonical_path.exists() {
@@ -135,20 +307,50 @@ pub fn check_recovery_status(
             recovery_path: recovery_path.to_path_buf(),
             recovery_revision: recovery_proj.revision,
             project_revision: 0,
+            recovery_fingerprint: recovery_snapshot_fingerprint(&recovery_proj)?,
         });
     }
 
     let canonical_proj = load_project(canonical_path)?;
 
-    if recovery_proj.revision > canonical_proj.revision {
+    if recovery_proj.project_id != canonical_proj.project_id {
+        return Ok(RecoveryStatus::NoRecoveryFound);
+    }
+
+    let mut recovery_content = recovery_proj.clone();
+    let mut canonical_content = canonical_proj.clone();
+    recovery_content.revision = 0;
+    canonical_content.revision = 0;
+    if recovery_content == canonical_content {
+        Ok(RecoveryStatus::RecoveryMatchesProject)
+    } else if recovery_proj.revision > canonical_proj.revision {
         Ok(RecoveryStatus::NewerRecoveryAvailable {
             recovery_path: recovery_path.to_path_buf(),
             recovery_revision: recovery_proj.revision,
             project_revision: canonical_proj.revision,
+            recovery_fingerprint: recovery_snapshot_fingerprint(&recovery_proj)?,
         })
     } else {
-        Ok(RecoveryStatus::RecoveryMatchesProject)
+        Ok(RecoveryStatus::RecoveryDiffersFromProject {
+            recovery_path: recovery_path.to_path_buf(),
+            recovery_revision: recovery_proj.revision,
+            project_revision: canonical_proj.revision,
+            recovery_fingerprint: recovery_snapshot_fingerprint(&recovery_proj)?,
+        })
     }
+}
+
+pub fn recovery_snapshot_fingerprint(project: &Project) -> Result<String, PersistenceError> {
+    use sha2::Digest;
+
+    // Serialize through serde_json::Value so object keys are canonicalized
+    // before hashing. Direct serialization of HashMap fields is order-unstable.
+    let canonical = serde_json::to_value(project)?;
+    let bytes = serde_json::to_vec(&canonical)?;
+    Ok(sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 /// Schema migration harness
@@ -202,6 +404,24 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
     }
     if version <= 10 && CURRENT_SCHEMA_VERSION >= 11 {
         val = migrate_v10_to_v11(val)?;
+    }
+    if version <= 11 && CURRENT_SCHEMA_VERSION >= 12 {
+        val = migrate_v11_to_v12(val)?;
+    }
+    if version <= 12 && CURRENT_SCHEMA_VERSION >= 13 {
+        val = migrate_v12_to_v13(val)?;
+    }
+    if version <= 13 && CURRENT_SCHEMA_VERSION >= 14 {
+        val = migrate_v13_to_v14(val)?;
+    }
+    if version <= 14 && CURRENT_SCHEMA_VERSION >= 15 {
+        val = migrate_v14_to_v15(val)?;
+    }
+    if version <= 15 && CURRENT_SCHEMA_VERSION >= 16 {
+        val = migrate_v15_to_v16(val)?;
+    }
+    if version <= 16 && CURRENT_SCHEMA_VERSION >= 17 {
+        val = migrate_v16_to_v17(val)?;
     }
 
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
@@ -515,6 +735,186 @@ pub fn migrate_v10_to_v11(
     Ok(val)
 }
 
+/// Adds an empty project-level marker list without changing existing timeline semantics.
+pub fn migrate_v11_to_v12(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    obj.entry("markers")
+        .or_insert_with(|| serde_json::json!([]));
+    obj.insert("schema_version".to_string(), serde_json::json!(12));
+    Ok(val)
+}
+
+/// Preserves existing embedded-video sound by default while allowing edits to opt out.
+pub fn migrate_v12_to_v13(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            if let Some(items) = track
+                .get_mut("items")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for item in items {
+                    item.as_object_mut()
+                        .ok_or_else(|| {
+                            PersistenceError::MigrationFailed(
+                                "Timeline item must be an object during v12 to v13 migration"
+                                    .to_string(),
+                            )
+                        })?
+                        .entry("embedded_audio_enabled")
+                        .or_insert(serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(13));
+    Ok(val)
+}
+
+/// Adds track solo state without changing the audible result of legacy projects.
+pub fn migrate_v13_to_v14(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v13 to v14 migration".to_string(),
+                    )
+                })?
+                .entry("solo")
+                .or_insert(serde_json::Value::Bool(false));
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(14));
+    Ok(val)
+}
+
+/// Adds unity track gain while preserving each existing project's audible mix.
+pub fn migrate_v14_to_v15(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v14 to v15 migration".to_string(),
+                    )
+                })?
+                .entry("volume")
+                .or_insert(serde_json::json!(1.0));
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(15));
+    Ok(val)
+}
+
+/// Adds an explicit reciprocal link reference without linking legacy clips implicitly.
+pub fn migrate_v15_to_v16(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            let items = track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v15 to v16 migration".to_string(),
+                    )
+                })?
+                .entry("items")
+                .or_insert_with(|| serde_json::json!([]));
+            for item in items.as_array_mut().ok_or_else(|| {
+                PersistenceError::MigrationFailed(
+                    "Track items must be an array during v15 to v16 migration".to_string(),
+                )
+            })? {
+                item.as_object_mut()
+                    .ok_or_else(|| {
+                        PersistenceError::MigrationFailed(
+                            "Timeline item must be an object during v15 to v16 migration"
+                                .to_string(),
+                        )
+                    })?
+                    .entry("linked_item_id")
+                    .or_insert(serde_json::Value::Null);
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(16));
+    Ok(val)
+}
+
+/// Adds neutral SDR color controls to every timeline item.
+pub fn migrate_v16_to_v17(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            let items = track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v16 to v17 migration".to_string(),
+                    )
+                })?
+                .entry("items")
+                .or_insert_with(|| serde_json::json!([]));
+            for item in items.as_array_mut().ok_or_else(|| {
+                PersistenceError::MigrationFailed(
+                    "Track items must be an array during v16 to v17 migration".to_string(),
+                )
+            })? {
+                item.as_object_mut()
+                    .ok_or_else(|| PersistenceError::MigrationFailed("Timeline item must be an object during v16 to v17 migration".to_string()))?
+                    .entry("color_adjustments")
+                    .or_insert_with(|| serde_json::json!({"brightness":0.0,"contrast":1.0,"saturation":1.0,"temperature":0.0}));
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(17));
+    Ok(val)
+}
+
 /// Example migration for tests: Migrates hypothetical legacy format to v1
 pub fn migrate_legacy_fixture(raw_json: &str) -> Result<String, PersistenceError> {
     let mut val: serde_json::Value = serde_json::from_str(raw_json)?;
@@ -534,9 +934,9 @@ mod tests {
     use super::*;
     use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
     use crate::modules::domain::{
-        Asset, AssetDimensions, ClipSpeed, CutTransition, ItemKind, Keyframe, KeyframeProperty,
-        MediaKind, PlacementMode, TextStyle, TimelineItem, Track, TrackKind, TransitionKind,
-        VisualEffectPreset,
+        Asset, AssetDimensions, ClientRecord, ClipSpeed, CutTransition, ItemKind, Keyframe,
+        KeyframeProperty, MediaKind, PlacementMode, TextStyle, TimelineItem, Track, TrackKind,
+        TransitionKind, VisualEffectPreset,
     };
     use crate::modules::history::{HistoryEntry, HistoryManager};
     use crate::modules::media::{AssetOnlineStatus, MediaCatalog};
@@ -601,7 +1001,26 @@ mod tests {
         let _ = fs::create_dir_all(&temp_dir);
 
         let initial_media_path = temp_dir.join("original_footage.mp4");
-        fs::write(&initial_media_path, b"MOCK_VIDEO_DATA").unwrap();
+        let generated = crate::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
+            .unwrap()
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=2:size=320x240:rate=30",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&initial_media_path)
+            .status()
+            .unwrap();
+        assert!(generated.success());
 
         let mut project = Project::new("Relink Project".to_string());
         let asset_id = MediaCatalog::register_asset(
@@ -680,6 +1099,7 @@ mod tests {
 
         let mut p_recovery = p_saved.clone();
         p_recovery.revision = 7; // Newer un-saved recovery!
+        p_recovery.name = "Recovered edits".to_string();
         save_recovery_snapshot(&p_recovery, &rec_path).unwrap();
 
         let status = check_recovery_status(&proj_path, &rec_path).unwrap();
@@ -695,7 +1115,111 @@ mod tests {
             _ => panic!("Expected NewerRecoveryAvailable"),
         }
 
+        let mut unrelated_recovery = Project::new("Different project".to_string());
+        unrelated_recovery.revision = 8;
+        save_recovery_snapshot(&unrelated_recovery, &rec_path).unwrap();
+        assert_eq!(
+            check_recovery_status(&proj_path, &rec_path).unwrap(),
+            RecoveryStatus::NoRecoveryFound
+        );
+
+        let mut same_content = p_saved.clone();
+        same_content.revision = 9;
+        save_recovery_snapshot(&same_content, &rec_path).unwrap();
+        assert_eq!(
+            check_recovery_status(&proj_path, &rec_path).unwrap(),
+            RecoveryStatus::RecoveryMatchesProject
+        );
+
+        let mut older_divergent = p_saved.clone();
+        older_divergent.revision = 2;
+        older_divergent.name = "Older recovery copy".to_string();
+        save_recovery_snapshot(&older_divergent, &rec_path).unwrap();
+        assert!(matches!(
+            check_recovery_status(&proj_path, &rec_path).unwrap(),
+            RecoveryStatus::RecoveryDiffersFromProject {
+                recovery_revision: 2,
+                project_revision: 3,
+                ..
+            }
+        ));
+
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn corrupt_recovery_is_reported_without_blocking_saved_project_or_changing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_corrupt_recovery_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let canonical = dir.join("saved.tinix");
+        let recovery = dir.join("saved.tinix.recovery");
+        save_project_atomic(&Project::new("Saved project".into()), &canonical).unwrap();
+        let corrupt = b"{not a valid project";
+        fs::write(&recovery, corrupt).unwrap();
+
+        let status = check_recovery_status(&canonical, &recovery).unwrap();
+        assert!(matches!(status, RecoveryStatus::RecoveryUnreadable { .. }));
+        assert_eq!(fs::read(&recovery).unwrap(), corrupt);
+        assert_eq!(load_project(&canonical).unwrap().name, "Saved project");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recovery_snapshot_compare_and_swap_rejects_stale_or_conflicting_writer() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_recovery_cas_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.recovery");
+        let mut current = Project::new("Current recovery".into());
+        current.revision = 8;
+        save_recovery_snapshot_if_newer(&current, &path).unwrap();
+
+        let mut stale = current.clone();
+        stale.revision = 7;
+        stale.name = "Stale recovery".into();
+        assert!(save_recovery_snapshot_if_newer(&stale, &path).is_err());
+
+        let mut conflicting = current.clone();
+        conflicting.name = "Different content at same revision".into();
+        assert!(save_recovery_snapshot_if_newer(&conflicting, &path).is_err());
+        assert_eq!(load_project(&path).unwrap(), current);
+
+        save_recovery_snapshot_if_newer(&current, &path).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recovery_fingerprint_is_stable_across_loads_with_hash_map_registry() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_recovery_fingerprint_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.recovery");
+        let mut project = Project::new("Fingerprint fixture".into());
+        for client_id in ["client-z", "client-a", "client-m", "client-b"] {
+            project.client_registry.clients.insert(
+                client_id.to_string(),
+                ClientRecord {
+                    client_epoch: 1,
+                    highest_sequence: 3,
+                    last_active_revision: 4,
+                    registered_at_revision: 0,
+                },
+            );
+        }
+        save_project_atomic(&project, &path).unwrap();
+        let expected = recovery_snapshot_fingerprint(&project).unwrap();
+        for _ in 0..8 {
+            let loaded = load_project(&path).unwrap();
+            assert_eq!(recovery_snapshot_fingerprint(&loaded).unwrap(), expected);
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1276,8 +1800,10 @@ mod tests {
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
         let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
         let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
-        let loaded: Project =
-            serde_json::from_value(migrated).expect("deserialize current project");
+        let migrated_json =
+            serde_json::to_string(&migrated).expect("serialize migrated v11 project");
+        let migrated = run_migrations_if_needed(&migrated_json).expect("migrate v11 to current");
+        let loaded: Project = serde_json::from_str(&migrated).expect("deserialize current project");
 
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(loaded.assets[0].dimensions, None);
@@ -1301,7 +1827,10 @@ mod tests {
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
         let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
         let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
-        let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
+        let migrated_json =
+            serde_json::to_string(&migrated).expect("serialize migrated v11 project");
+        let migrated = run_migrations_if_needed(&migrated_json).expect("migrate v11 to current");
+        let loaded: Project = serde_json::from_str(&migrated).expect("deserialize current project");
 
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(loaded.settings.canvas_background_color, "#000000");
@@ -1342,7 +1871,10 @@ mod tests {
         let migrated_v9 = migrate_v8_to_v9(migrated_v8).expect("v8 to v9 migration");
         let migrated_v10 = migrate_v9_to_v10(migrated_v9).expect("v9 to v10 migration");
         let migrated = migrate_v10_to_v11(migrated_v10).expect("v10 to v11 migration");
-        let loaded: Project = serde_json::from_value(migrated).expect("deserialize v8 project");
+        let migrated_json =
+            serde_json::to_string(&migrated).expect("serialize migrated v11 project");
+        let migrated = run_migrations_if_needed(&migrated_json).expect("migrate v11 to current");
+        let loaded: Project = serde_json::from_str(&migrated).expect("deserialize current project");
 
         assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(
@@ -1398,18 +1930,301 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_11_rejected() {
-        let raw_json = r#"{"schema_version": 12, "name": "Future Project"}"#;
+    fn test_schema_17_rejected() {
+        let raw_json = r#"{"schema_version": 17, "name": "Future Project"}"#;
         let err = run_migrations_if_needed(raw_json).unwrap_err();
         match err {
             PersistenceError::UnsupportedSchemaVersion {
                 found,
                 max_supported,
             } => {
-                assert_eq!(found, 12);
+                assert_eq!(found, 17);
                 assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
             }
             other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_schema_11_migrates_to_current_with_empty_markers() {
+        let mut project = Project::new("marker migration".to_string());
+        project.schema_version = 11;
+        let mut value = serde_json::to_value(project).expect("serialize legacy project");
+        value.as_object_mut().unwrap().remove("markers");
+        let raw = serde_json::to_string(&value).expect("serialize v11 JSON");
+        let migrated_json = run_migrations_if_needed(&raw).expect("run v11 to v12 migration");
+        let migrated: serde_json::Value = serde_json::from_str(&migrated_json).unwrap();
+        assert_eq!(migrated["schema_version"], CURRENT_SCHEMA_VERSION);
+        assert_eq!(migrated["markers"], serde_json::json!([]));
+        let loaded: Project =
+            serde_json::from_value(migrated).expect("deserialize current project");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(loaded.markers.is_empty());
+        loaded.validate().expect("current project validates");
+    }
+
+    #[test]
+    fn test_schema_12_migrates_embedded_audio_to_enabled_by_default() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("embedded audio migration".to_string());
+        project.assets.push(Asset {
+            asset_id: "asset_video".to_string(),
+            name: "video.mp4".to_string(),
+            path: "D:/media/video.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(30, rate)),
+            file_size: 1,
+            dimensions: None,
+        });
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(
+            TimelineItem::new(
+                Some("asset_video".to_string()),
+                "Video clip".to_string(),
+                ItemKind::Video,
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+                TimeRange::new(
+                    RationalTime::zero(rate),
+                    RationalTime::from_frames(30, rate),
+                ),
+            )
+            .expect("video item"),
+        );
+        project.tracks.push(track);
+        let mut value = serde_json::to_value(project).expect("serialize fixture");
+        value["schema_version"] = serde_json::json!(12);
+        value["tracks"][0]["items"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("embedded_audio_enabled");
+
+        let migrated = run_migrations_if_needed(&serde_json::to_string(&value).unwrap())
+            .expect("migrate v12 project");
+        let loaded: Project =
+            serde_json::from_str(&migrated).expect("deserialize migrated project");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(loaded.tracks[0].items[0].embedded_audio_enabled);
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_schema_13_migrates_track_solo_to_off_by_default() {
+        let mut project = Project::new("track solo migration".to_string());
+        project
+            .tracks
+            .push(Track::new("Voice".to_string(), TrackKind::Audio));
+        let mut value = serde_json::to_value(project).expect("serialize fixture");
+        value["schema_version"] = serde_json::json!(13);
+        value["tracks"][0].as_object_mut().unwrap().remove("solo");
+        let migrated = run_migrations_if_needed(&serde_json::to_string(&value).unwrap())
+            .expect("migrate v13 project");
+        let loaded: Project =
+            serde_json::from_str(&migrated).expect("deserialize migrated project");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert!(!loaded.tracks[0].solo);
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_schema_14_migrates_track_gain_to_unity_by_default() {
+        let mut project = Project::new("track gain migration".to_string());
+        project
+            .tracks
+            .push(Track::new("Voice".to_string(), TrackKind::Audio));
+        let mut value = serde_json::to_value(project).expect("serialize fixture");
+        value["schema_version"] = serde_json::json!(14);
+        value["tracks"][0].as_object_mut().unwrap().remove("volume");
+        let migrated = run_migrations_if_needed(&serde_json::to_string(&value).unwrap())
+            .expect("migrate v14 project");
+        let loaded: Project =
+            serde_json::from_str(&migrated).expect("deserialize migrated project");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.tracks[0].volume, 1.0);
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_schema_15_migrates_linked_item_ids_to_none() {
+        let rate = crate::modules::domain::time::FrameRate::FPS_30;
+        let mut project = Project::new("link migration".to_string());
+        project.assets.push(crate::modules::domain::Asset {
+            asset_id: "asset_v".to_string(),
+            name: "video.mp4".to_string(),
+            path: "D:/media/video.mp4".to_string(),
+            media_kind: crate::modules::domain::MediaKind::Video,
+            duration: Some(crate::modules::domain::time::RationalTime::from_frames(
+                30, rate,
+            )),
+            file_size: 1,
+            dimensions: None,
+        });
+        let mut video = crate::modules::domain::Track::new(
+            "Video".to_string(),
+            crate::modules::domain::TrackKind::Video,
+        );
+        video.items.push(
+            crate::modules::domain::TimelineItem::new(
+                Some("asset_v".to_string()),
+                "Video".to_string(),
+                crate::modules::domain::ItemKind::Video,
+                crate::modules::domain::time::TimeRange::new(
+                    crate::modules::domain::time::RationalTime::zero(rate),
+                    crate::modules::domain::time::RationalTime::from_frames(30, rate),
+                ),
+                crate::modules::domain::time::TimeRange::new(
+                    crate::modules::domain::time::RationalTime::zero(rate),
+                    crate::modules::domain::time::RationalTime::from_frames(30, rate),
+                ),
+            )
+            .expect("video item"),
+        );
+        project.tracks.push(video);
+        let mut value = serde_json::to_value(project).expect("serialize v15 fixture");
+        value["schema_version"] = serde_json::json!(15);
+        value["tracks"][0]["items"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("linked_item_id");
+
+        let migrated = run_migrations_if_needed(&serde_json::to_string(&value).unwrap())
+            .expect("migrate v15 project");
+        let loaded: Project = serde_json::from_str(&migrated).expect("deserialize v16 project");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.tracks[0].items[0].linked_item_id, None);
+        assert_eq!(
+            loaded.tracks[0].items[0].color_adjustments,
+            Default::default()
+        );
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_schema_16_migrates_color_adjustments_to_neutral() {
+        let mut project = Project::new("color migration".to_string());
+        let mut track = crate::modules::domain::Track::new(
+            "Video".to_string(),
+            crate::modules::domain::TrackKind::Video,
+        );
+        track.items.push(
+            crate::modules::domain::TimelineItem::new(
+                None,
+                "Generated".to_string(),
+                crate::modules::domain::ItemKind::Image,
+                crate::modules::domain::time::TimeRange::new(
+                    crate::modules::domain::time::RationalTime::zero(
+                        crate::modules::domain::time::FrameRate::FPS_30,
+                    ),
+                    crate::modules::domain::time::RationalTime::from_frames(
+                        30,
+                        crate::modules::domain::time::FrameRate::FPS_30,
+                    ),
+                ),
+                crate::modules::domain::time::TimeRange::new(
+                    crate::modules::domain::time::RationalTime::zero(
+                        crate::modules::domain::time::FrameRate::FPS_30,
+                    ),
+                    crate::modules::domain::time::RationalTime::from_frames(
+                        30,
+                        crate::modules::domain::time::FrameRate::FPS_30,
+                    ),
+                ),
+            )
+            .unwrap(),
+        );
+        project.tracks.push(track);
+        let mut value = serde_json::to_value(project).unwrap();
+        value["schema_version"] = serde_json::json!(16);
+        value["tracks"][0]["items"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("color_adjustments");
+        let migrated = run_migrations_if_needed(&serde_json::to_string(&value).unwrap()).unwrap();
+        let loaded: Project = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            loaded.tracks[0].items[0].color_adjustments,
+            Default::default()
+        );
+        loaded.validate().expect("migrated project validates");
+    }
+
+    #[test]
+    fn test_revision_guard_rejects_stale_writer_and_preserves_newer_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_revision_guard_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shared.tinix");
+        let initial = Project::new("Initial".to_string());
+        save_project_atomic(&initial, &path).unwrap();
+
+        let mut mcp_update = initial.clone();
+        mcp_update.revision = 1;
+        mcp_update.name = "MCP update".to_string();
+        save_project_atomic_if_revision(&mcp_update, &path, Some(0)).unwrap();
+
+        let mut stale_ui_update = initial;
+        stale_ui_update.revision = 1;
+        stale_ui_update.name = "Stale UI update".to_string();
+        let error = save_project_atomic_if_revision(&stale_ui_update, &path, Some(0))
+            .expect_err("stale UI save must be rejected");
+        assert!(matches!(
+            error,
+            PersistenceError::RevisionConflict {
+                expected: Some(0),
+                actual: Some(1)
+            }
+        ));
+
+        let saved = load_project(&path).unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.name, "MCP update");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_revision_guard_serializes_concurrent_writers_across_file_handles() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_revision_race_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shared.tinix");
+        let initial = Project::new("Initial".to_string());
+        save_project_atomic(&initial, &path).unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = ["Writer A", "Writer B"].map(|name| {
+            let barrier = Arc::clone(&barrier);
+            let path = path.clone();
+            let mut project = initial.clone();
+            project.revision = 1;
+            project.name = name.to_string();
+            std::thread::spawn(move || {
+                barrier.wait();
+                save_project_atomic_if_revision(&project, &path, Some(0))
+            })
+        });
+
+        barrier.wait();
+        let results = handles.map(|handle| handle.join().unwrap());
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(PersistenceError::RevisionConflict { .. })))
+                .count(),
+            1
+        );
+        let saved = load_project(&path).unwrap();
+        assert_eq!(saved.revision, 1);
+        assert!(saved.name == "Writer A" || saved.name == "Writer B");
+        fs::remove_dir_all(dir).unwrap();
     }
 }

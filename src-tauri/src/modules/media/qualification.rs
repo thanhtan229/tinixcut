@@ -1155,15 +1155,33 @@ pub mod tests {
             report.total_tests, 16,
             "POC 5 matrix must contain all 16 cases P5-M01..P5-M16"
         );
-        assert_eq!(report.passed_tests, 15, "15 non-hardware cases must pass");
-        assert_eq!(
-            report.failed_tests, 1,
-            "P5-M09 hardware case must fail due to driver version mismatch"
-        );
+        let hardware_case = report
+            .results
+            .iter()
+            .find(|case| case.id == "P5-M09")
+            .expect("matrix includes hardware encoder case");
+        let other_cases_pass = report
+            .results
+            .iter()
+            .filter(|case| case.id != "P5-M09")
+            .all(|case| case.passed);
         assert!(
-            report.gate_f_verdict.contains("INCOMPLETE"),
-            "Gate F verdict must reflect INCOMPLETE hardware qualification"
+            other_cases_pass,
+            "all non-hardware qualification cases must pass"
         );
+        if hardware_case.passed {
+            assert!(matches!(
+                hardware_case.selected_encoder.as_deref(),
+                Some("h264_nvenc" | "h264_qsv" | "h264_amf")
+            ));
+            assert_eq!(report.passed_tests, 16);
+            assert_eq!(report.failed_tests, 0);
+            assert_eq!(report.gate_f_verdict, "PASS");
+        } else {
+            assert_eq!(report.passed_tests, 15);
+            assert_eq!(report.failed_tests, 1);
+            assert!(report.gate_f_verdict.contains("INCOMPLETE"));
+        }
         assert!(!report.gpu_adapters.is_empty());
     }
 }

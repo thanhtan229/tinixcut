@@ -1,0 +1,16 @@
+export const MEDIA_FILE_EXTENSIONS = [
+  "mp4",
+  "mov",
+  "avi",
+  "mkv",
+  "mp3",
+  "wav",
+  "aac",
+  "flac",
+  "ogg",
+  "m4a",
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+] as const;

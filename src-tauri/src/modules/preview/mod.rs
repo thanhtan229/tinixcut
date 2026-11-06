@@ -167,8 +167,7 @@ impl PreviewBackend for WebViewProxyPreviewBackend {
                 for item in &track.items {
                     if item.timeline_range.contains_time(time) {
                         active_item_id = Some(item.item_id.clone());
-                        let offset = time - item.timeline_range.start;
-                        source_time = Some(item.source_range.start + offset);
+                        source_time = map_timeline_to_source_time(item, time);
                         is_gap = false;
                         break;
                     }
@@ -347,8 +346,16 @@ pub fn map_timeline_to_source_time(
     if !clip.timeline_range.contains_time(timeline_time) {
         return None;
     }
-    let offset = timeline_time - clip.timeline_range.start;
-    Some(clip.source_range.start + offset)
+    let offset = timeline_time.sub_exact(&clip.timeline_range.start);
+    let src_offset = clip.speed.source_offset_for(offset);
+    let src_time = clip.source_range.start.add_exact(&src_offset);
+    let rescaled = src_time.rescaled_to(clip.source_range.start.rate);
+    let final_time = if rescaled.semantic_eq(&src_time) {
+        rescaled
+    } else {
+        src_time
+    };
+    Some(final_time)
 }
 
 #[cfg(test)]
@@ -482,5 +489,67 @@ mod tests {
         assert!(!res_clip.is_gap);
         assert_eq!(res_clip.active_item_id, Some(clip_id));
         assert_eq!(res_clip.source_time, Some(RationalTime::new(10, rate)));
+    }
+
+    #[test]
+    fn test_speed_aware_timeline_to_source_mapping() {
+        let rate = FrameRate::FPS_30;
+        let mut double_clip = TimelineItem::new(
+            Some("ast_vid1".to_string()),
+            "Double Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(2461, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+        )
+        .unwrap();
+        double_clip.speed = crate::modules::domain::ClipSpeed::Double;
+        double_clip.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(508, rate),
+        );
+
+        // At start (2461f) -> source frame 0
+        assert_eq!(
+            map_timeline_to_source_time(&double_clip, RationalTime::from_frames(2461, rate)),
+            Some(RationalTime::from_frames(0, rate))
+        );
+
+        // At +90 frames (2551f) -> source frame 180 (Double: 90 * 2 = 180)
+        assert_eq!(
+            map_timeline_to_source_time(&double_clip, RationalTime::from_frames(2551, rate)),
+            Some(RationalTime::from_frames(180, rate))
+        );
+
+        let mut half_clip = TimelineItem::new(
+            Some("ast_vid1".to_string()),
+            "Half Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(180, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(180, rate),
+            ),
+        )
+        .unwrap();
+        half_clip.speed = crate::modules::domain::ClipSpeed::Half;
+        half_clip.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(90, rate),
+        );
+
+        // At +90 frames (90f) -> source frame 45 (Half: 90 * 0.5 = 45)
+        assert_eq!(
+            map_timeline_to_source_time(&half_clip, RationalTime::from_frames(90, rate)),
+            Some(RationalTime::from_frames(45, rate))
+        );
     }
 }

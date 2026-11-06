@@ -8,11 +8,21 @@ interface TopBarProps {
   health: HealthStatus | null;
   onNewProject: () => void;
   onOpenProject: () => void;
+  onOpenMediaCache: () => void;
   onSaveProject: () => void;
   onExportProject: () => void;
+  onCancelExport: () => void;
+  exportJob: { progress: number; cancelling: boolean } | null;
   onImportCaptions: () => void;
   onExportCaptions: () => void;
+  onOpenCaptionEditor: () => void;
   onAutoCaptions: () => void;
+  onCreateDraft: () => void;
+  onCreateAudioMix: () => void;
+  onCreateReorder: () => void;
+  onCreateTrim: () => void;
+  onCreateVariant: () => void;
+  canTrimSelection: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onAddTrack: () => void;
@@ -37,11 +47,21 @@ export const TopBar: React.FC<TopBarProps> = ({
   health,
   onNewProject,
   onOpenProject,
+  onOpenMediaCache,
   onSaveProject,
   onExportProject,
+  onCancelExport,
+  exportJob,
   onImportCaptions,
   onExportCaptions,
+  onOpenCaptionEditor,
   onAutoCaptions,
+  onCreateDraft,
+  onCreateAudioMix,
+  onCreateReorder,
+  onCreateTrim,
+  onCreateVariant,
+  canTrimSelection,
   onUndo,
   onRedo,
   onAddTrack,
@@ -76,7 +96,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <select
             aria-label="Canvas aspect ratio"
             className="canvas-preset-select"
-            disabled={!project}
+            disabled={!project || exportJob !== null}
             value={currentCanvasValue}
             onChange={(event) => {
               const preset = canvasPresets.find((candidate) => candidate.value === event.target.value);
@@ -118,6 +138,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button className="btn-action" onClick={onOpenProject} title="Open Existing Project">
           📂 Open
         </button>
+        <button className="btn-action" onClick={onOpenMediaCache} title="View and clear rebuildable media cache">Cache</button>
+        <button className="btn-action" onClick={onCreateVariant} disabled={!project} title="Create an isolated editable copy">Variant</button>
         <button className="btn-action" onClick={onAddTrack} title="Add Video Track">
           + Track
         </button>
@@ -143,6 +165,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button className="btn-action" onClick={onExportCaptions} title="Export text items as SRT or WebVTT captions">
           📝 Export captions
         </button>
+        <button className="btn-action" onClick={onOpenCaptionEditor} disabled={!project} title="Review, search and edit caption clips">
+          ✍ Caption editor
+        </button>
         <button
           className="btn-action"
           onClick={onAutoCaptions}
@@ -150,6 +175,18 @@ export const TopBar: React.FC<TopBarProps> = ({
           title="Generate text captions from the selected audio or video clip"
         >
           ✨ Auto captions
+        </button>
+        <button className="btn-action" onClick={onCreateDraft} disabled={!project} title="Create a reviewable video draft from selected media">
+          ✨ Draft
+        </button>
+        <button className="btn-action" onClick={onCreateAudioMix} disabled={!project} title="Review normalization and voice ducking for timeline audio">
+          Audio mix
+        </button>
+        <button className="btn-action" onClick={onCreateReorder} disabled={!project} title="Preview and reorder clips on a video track">
+          ↕ Reorder
+        </button>
+        <button className="btn-action" onClick={onCreateTrim} disabled={!canTrimSelection} title="Preview a tail trim for the selected video clip">
+          ✂ Shorten
         </button>
         <button className="btn-action" onClick={onSaveProject} title="Save Project (Atomic)">
           💾 Save
@@ -174,11 +211,28 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           className="btn-action"
           onClick={onExportProject}
+          disabled={exportJob !== null}
           title="Export Project to MP4 (FFmpeg)"
           style={{ backgroundColor: "var(--accent-primary)", color: "#fff", fontWeight: 600 }}
         >
           🎬 Export
         </button>
+        {exportJob && (
+          <div className="export-job-status" role="status" aria-live="polite">
+            <div className="export-job-status-line">
+              <span>Exporting video</span>
+              <span>{Math.round(exportJob.progress * 100)}%</span>
+            </div>
+            <progress aria-label="Export progress" max={1} value={exportJob.progress} />
+            <button
+              className="btn-action"
+              onClick={onCancelExport}
+              disabled={exportJob.cancelling}
+            >
+              {exportJob.cancelling ? "Cancelling…" : "Cancel export"}
+            </button>
+          </div>
+        )}
         <button className="btn-action" onClick={onUndo} title="Undo committed edit">
           ↩ Undo
         </button>

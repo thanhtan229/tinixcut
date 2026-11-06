@@ -147,7 +147,7 @@ Phase 15 is strictly **Tools-only**.
 
 ### 3.6 Authoritative MCP Tool Surface
 
-The MCP server initially exposed eight (8) authoritative tools in Phase 15. Phase 35 added four template-draft tools, so the current server exposes exactly twelve (12) authoritative tools:
+The MCP server initially exposed eight (8) authoritative tools in Phase 15. Phase 35 added four template-draft tools. Phase 39 added explicit project bootstrap and read-only media probing, so the current server exposes exactly fourteen (14) authoritative tools:
 
 ```text
 1. tinixcut_inspect
@@ -193,6 +193,16 @@ The MCP server initially exposed eight (8) authoritative tools in Phase 15. Phas
 
 12. tinixcut_template_save
     Saves a template draft to the template catalog.
+
+13. tinixcut_project_create
+   Params: { projectPath: string, name: string }
+   Returns: { projectPath, projectId, name, revision }
+   Creates a canonical empty Project through atomic persistence and refuses to overwrite an existing file.
+
+14. tinixcut_media_probe
+   Params: { mediaPath: string }
+   Returns: MediaProbeReport
+   Uses the media abstraction to inspect streams and file size without mutating a project.
 ```
 
 **Session Lifecycle Exclusion:**
@@ -373,3 +383,18 @@ When Phase 15 implementation is planned and executed, the acceptance suite must 
 13. **Concurrent Mutation Serialization**: Two concurrent `tinixcut_apply` calls for the same project path serialize safely without file corruption.
 14. **Process Stdout Purity**: Real spawned `tinixcut mcp` process outputs 100% valid JSON-RPC frames to stdout; all logs and diagnostics appear exclusively on stderr.
 15. **Clean Process Termination**: Process terminates cleanly upon stdin EOF or SIGINT without orphaned child processes or temp file leaks.
+## Phase 37 Amendment — Cross-Process Project Write Protection (2026-11-03)
+
+The original Phase 15 decision covered only MCP calls within one process. Phase 37 manual qualification reproduced a lost update when an MCP process wrote revision 8 while the UI still held revision 7 and subsequently saved its own revision 8. The prior assumption that base-revision checks plus atomic replacement protected cross-process writes was incorrect.
+
+**Decision:** Preserve the MCP process-local gate and add a persistence-level compare-and-save contract shared by all TinixCut authoritative writers:
+
+1. Acquire an OS file lock on a sidecar derived from the canonical project path.
+2. Read the on-disk revision while holding the lock and compare it with the writer's expected persisted revision (or require the target to remain absent for a new file).
+3. Reject mismatches with a structured project-revision conflict; do not replace the newer file.
+4. Keep the lock through atomic replacement and release it when the handle closes. The zero-byte sidecar may remain so separate processes resolve a stable lock object.
+5. Native UI keeps its last persisted revision separately from in-memory edit revisions. A conflict leaves UI edits in memory and tells the user to reload or save as a new project.
+
+This is conflict prevention, not live collaboration: TinixCut does not merge external edits or push them into an open UI session. All TinixCut canonical-project write paths must use the guarded persistence API; unconditional atomic saves are limited to initial creation, recovery files, and test artifacts. External programs that ignore the sidecar lock are outside the cross-process guarantee.
+
+**Qualification:** Persistence tests cover stale-writer rejection, simultaneous writers, and a stale writer in a separate child process. The original native UI/MCP reproduction fixture remains preserved in `artifacts/phase37/reference_fixture/`. Computer Use could not obtain an accessibility state across the guarded-build restarts (`Accessibility state unavailable for windows 184951336, 35918644, and 71768400`), so visible UI conflict handling and unsaved-edit retention still require a native retest before closing Phase 37.

@@ -397,6 +397,61 @@ mod tests {
     }
 
     #[test]
+    fn srt_and_vtt_round_trip_vietnamese_multiline_text_within_one_frame() {
+        let cue = CaptionCue {
+            start: RationalTime::from_frames(31, FrameRate::FPS_30),
+            duration: RationalTime::from_frames(20, FrameRate::FPS_30),
+            text: "Xin chào Việt Nam\nDựng video thật dễ".to_string(),
+        };
+        for format in [CaptionFormat::Srt, CaptionFormat::Vtt] {
+            let encoded = serialize_captions(std::slice::from_ref(&cue), format)
+                .expect("serialize Unicode caption");
+            let decoded = parse_caption_bytes(encoded.as_bytes(), format, FrameRate::FPS_30)
+                .expect("parse serialized Unicode caption");
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].text, cue.text);
+            assert!((decoded[0].start.value - cue.start.value).abs() <= 1);
+            assert!((decoded[0].duration.value - cue.duration.value).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn srt_and_vtt_nonzero_offsets_quantize_to_2997_fps_in_both_directions() {
+        let rate = FrameRate::FPS_29_97;
+        let start_millis = 62_017u128;
+        let end_millis = 63_044u128;
+        let expected_frame = |total_millis: u128| {
+            let numerator = total_millis * rate.numerator as u128;
+            let denominator = 1_000u128 * rate.denominator as u128;
+            ((numerator + denominator / 2) / denominator) as i64
+        };
+        let expected_start = expected_frame(start_millis);
+        let expected_end = expected_frame(end_millis);
+
+        for (format, separator, header) in [
+            (CaptionFormat::Srt, ',', ""),
+            (CaptionFormat::Vtt, '.', "WEBVTT\n\n"),
+        ] {
+            let input =
+                format!("{header}00:01:02{separator}017 --> 00:01:03{separator}044\nXin chào\n");
+            let parsed = parse_caption_bytes(input.as_bytes(), format, rate).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].start.value, expected_start);
+            assert_eq!((parsed[0].start + parsed[0].duration).value, expected_end);
+
+            let serialized = serialize_captions(&parsed, format).unwrap();
+            let reparsed = parse_caption_bytes(serialized.as_bytes(), format, rate).unwrap();
+            assert_eq!(reparsed.len(), 1);
+            assert_eq!(reparsed[0].text, parsed[0].text);
+            assert!((reparsed[0].start.value - parsed[0].start.value).abs() <= 1);
+            assert!(
+                (reparsed[0].duration.value - parsed[0].duration.value).abs() <= 1,
+                "round-trip duration changed by more than one 29.97 fps frame for {format:?}"
+            );
+        }
+    }
+
+    #[test]
     fn accepts_case_insensitive_extensions() {
         assert_eq!(
             CaptionFormat::from_path(Path::new("captions.SRT")).unwrap(),

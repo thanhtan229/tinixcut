@@ -18,7 +18,7 @@ use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 11;
+pub const CURRENT_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -168,6 +168,8 @@ pub struct TextStyle {
     pub accent_color: Option<String>,
     pub background_color: Option<String>,
     pub background_opacity: f32,
+    #[serde(default)]
+    pub background_corner_radius: f32,
     pub padding_x: f32,
     pub padding_y: f32,
     pub alignment: TextAlignment,
@@ -185,6 +187,7 @@ impl Default for TextStyle {
             accent_color: None,
             background_color: None,
             background_opacity: 0.0,
+            background_corner_radius: 0.0,
             padding_x: 0.0,
             padding_y: 0.0,
             alignment: TextAlignment::Center,
@@ -214,6 +217,11 @@ impl TextStyle {
         if !self.background_opacity.is_finite() || !(0.0..=1.0).contains(&self.background_opacity) {
             return Err(DomainError::Validation(
                 "Text background opacity must be between 0 and 1".to_string(),
+            ));
+        }
+        if !self.background_corner_radius.is_finite() || self.background_corner_radius < 0.0 {
+            return Err(DomainError::Validation(
+                "Text background corner radius must be finite and non-negative".to_string(),
             ));
         }
         if !self.padding_x.is_finite()
@@ -531,6 +539,46 @@ pub enum VisualEffectPreset {
     Muted,
 }
 
+/// Non-destructive SDR color controls. Values are normalized and renderer-independent.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorAdjustments {
+    pub brightness: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    pub temperature: f32,
+}
+
+impl Default for ColorAdjustments {
+    fn default() -> Self {
+        Self {
+            brightness: 0.0,
+            contrast: 1.0,
+            saturation: 1.0,
+            temperature: 0.0,
+        }
+    }
+}
+
+impl ColorAdjustments {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if !self.brightness.is_finite()
+            || !(-1.0..=1.0).contains(&self.brightness)
+            || !self.contrast.is_finite()
+            || !(0.0..=2.0).contains(&self.contrast)
+            || !self.saturation.is_finite()
+            || !(0.0..=2.0).contains(&self.saturation)
+            || !self.temperature.is_finite()
+            || !(-1.0..=1.0).contains(&self.temperature)
+        {
+            return Err(DomainError::Validation(
+                "Color adjustments must be finite and within their supported SDR ranges".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Fixed clip speeds supported by the first non-destructive speed-control
 /// release. The source duration is always derived from timeline duration.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -740,7 +788,13 @@ pub struct TimelineItem {
     #[serde(default)]
     pub visual_effect: VisualEffectPreset,
     #[serde(default)]
+    pub color_adjustments: ColorAdjustments,
+    #[serde(default)]
     pub speed: ClipSpeed,
+    #[serde(default = "default_true")]
+    pub embedded_audio_enabled: bool,
+    #[serde(default)]
+    pub linked_item_id: Option<String>,
     pub opacity: f32,
     pub volume: f32,
     pub text_content: Option<String>,
@@ -780,7 +834,10 @@ impl TimelineItem {
             crop: Crop::default(),
             placement_mode: PlacementMode::Fit,
             visual_effect: VisualEffectPreset::None,
+            color_adjustments: ColorAdjustments::default(),
             speed: ClipSpeed::Normal,
+            embedded_audio_enabled: true,
+            linked_item_id: None,
             opacity: 1.0,
             volume: 1.0,
             text_content: None,
@@ -799,8 +856,17 @@ impl TimelineItem {
     }
 
     pub fn validate(&self) -> Result<(), DomainError> {
+        self.color_adjustments.validate()?;
         if !is_valid_id(&self.item_id) {
             return Err(DomainError::InvalidId(self.item_id.clone()));
+        }
+        if let Some(linked_item_id) = &self.linked_item_id {
+            if linked_item_id == &self.item_id || !is_valid_id(linked_item_id) {
+                return Err(DomainError::Validation(format!(
+                    "Timeline item '{}' has an invalid linked item ID",
+                    self.item_id
+                )));
+            }
         }
         if self.timeline_range.duration.value <= 0 {
             return Err(DomainError::NonPositiveDuration);
@@ -930,12 +996,20 @@ impl TimelineItem {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Track {
     pub track_id: String,
     pub name: String,
     pub kind: TrackKind,
     pub muted: bool,
+    #[serde(default)]
+    pub solo: bool,
+    #[serde(default = "default_track_volume")]
+    pub volume: f32,
     pub locked: bool,
     pub items: Vec<TimelineItem>,
     #[serde(default)]
@@ -951,6 +1025,8 @@ impl Track {
             name,
             kind,
             muted: false,
+            solo: false,
+            volume: 1.0,
             locked: false,
             items: Vec::new(),
             transitions: Vec::new(),
@@ -961,6 +1037,12 @@ impl Track {
     pub fn validate(&self) -> Result<(), DomainError> {
         if !is_valid_id(&self.track_id) {
             return Err(DomainError::InvalidId(self.track_id.clone()));
+        }
+        if !self.volume.is_finite() || !(0.0..=2.0).contains(&self.volume) {
+            return Err(DomainError::Validation(format!(
+                "Track '{}' volume must be finite and between 0.0 and 2.0",
+                self.track_id
+            )));
         }
 
         for item in &self.items {
@@ -1191,6 +1273,10 @@ impl Track {
     }
 }
 
+fn default_track_volume() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientRecord {
     pub client_epoch: u64,
@@ -1236,6 +1322,29 @@ pub struct CommandLedgerEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectMarker {
+    pub marker_id: String,
+    pub label: String,
+    pub position: RationalTime,
+}
+
+impl ProjectMarker {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if !is_valid_id(&self.marker_id) {
+            return Err(DomainError::InvalidId(self.marker_id.clone()));
+        }
+        let label_len = self.label.chars().count();
+        if label_len == 0 || label_len > 64 || self.position.value < 0 {
+            return Err(DomainError::Validation(
+                "Project marker needs a 1 to 64 character label and non-negative position"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Project {
     pub schema_version: u32,
     pub project_id: String,
@@ -1244,6 +1353,8 @@ pub struct Project {
     pub settings: ProjectSettings,
     pub assets: Vec<Asset>,
     pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub markers: Vec<ProjectMarker>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
@@ -1263,6 +1374,7 @@ impl Project {
             settings: ProjectSettings::default(),
             assets: Vec::new(),
             tracks: Vec::new(),
+            markers: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
             client_registry: ClientRegistry::default(),
@@ -1292,12 +1404,57 @@ impl Project {
             track.validate()?;
         }
 
+        if self.markers.len() > 10_000 {
+            return Err(DomainError::Validation(
+                "Project cannot contain more than 10000 markers".to_string(),
+            ));
+        }
+        let mut marker_ids = std::collections::HashSet::new();
+        for marker in &self.markers {
+            marker.validate()?;
+            if !marker_ids.insert(marker.marker_id.as_str()) {
+                return Err(DomainError::Validation(format!(
+                    "Duplicate project marker ID '{}'",
+                    marker.marker_id
+                )));
+            }
+        }
+
         // Validate asset references in clips
         for track in &self.tracks {
             for item in &track.items {
                 if let Some(ref asset_id) = item.asset_id {
                     if !self.assets.iter().any(|a| &a.asset_id == asset_id) {
                         return Err(DomainError::AssetNotFound(asset_id.clone()));
+                    }
+                }
+                if let Some(linked_item_id) = &item.linked_item_id {
+                    let (linked_track, linked_item) = self
+                        .find_item_and_track(linked_item_id)
+                        .ok_or_else(|| DomainError::ItemNotFound(linked_item_id.clone()))?;
+                    if linked_item.linked_item_id.as_deref() != Some(item.item_id.as_str())
+                        || !matches!(
+                            (item.kind, linked_item.kind),
+                            (ItemKind::Video, ItemKind::Audio) | (ItemKind::Audio, ItemKind::Video)
+                        )
+                        || item.asset_id != linked_item.asset_id
+                        || item.timeline_range != linked_item.timeline_range
+                        || item.source_range != linked_item.source_range
+                        || item.speed != linked_item.speed
+                        || (item.kind == ItemKind::Video && item.embedded_audio_enabled)
+                        || (linked_item.kind == ItemKind::Video
+                            && linked_item.embedded_audio_enabled)
+                    {
+                        return Err(DomainError::Validation(format!(
+                            "Linked items '{}' and '{}' must be reciprocal Video/Audio clips with matching media and ranges",
+                            item.item_id, linked_item.item_id
+                        )));
+                    }
+                    if linked_track.track_id == track.track_id {
+                        return Err(DomainError::Validation(
+                            "Linked video and detached audio must be on separate tracks"
+                                .to_string(),
+                        ));
                     }
                 }
             }
@@ -1330,8 +1487,8 @@ impl Project {
                 let right_asset = self
                     .find_asset(right_asset_id)
                     .ok_or_else(|| DomainError::AssetNotFound(right_asset_id.to_string()))?;
-                if left_asset.media_kind != MediaKind::Audio
-                    || right_asset.media_kind != MediaKind::Audio
+                if !matches!(left_asset.media_kind, MediaKind::Audio | MediaKind::Video)
+                    || !matches!(right_asset.media_kind, MediaKind::Audio | MediaKind::Video)
                 {
                     return Err(DomainError::UnsupportedAudioCrossfadeMedia);
                 }
@@ -1452,6 +1609,23 @@ mod tests {
         assert_eq!(project.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(project.revision, 0);
         assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn text_style_defaults_and_validates_background_corner_radius() {
+        let mut value = serde_json::to_value(TextStyle::default()).expect("serialize style");
+        value
+            .as_object_mut()
+            .expect("style object")
+            .remove("background_corner_radius");
+        let legacy: TextStyle = serde_json::from_value(value).expect("legacy style deserializes");
+        assert_eq!(legacy.background_corner_radius, 0.0);
+
+        let mut rounded = TextStyle::default();
+        rounded.background_corner_radius = 14.0;
+        assert!(rounded.validate().is_ok());
+        rounded.background_corner_radius = -1.0;
+        assert!(rounded.validate().is_err());
     }
 
     #[test]

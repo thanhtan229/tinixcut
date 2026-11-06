@@ -1,9 +1,113 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Project, TimelineItem } from "../types/project";
+import { Crop, Project, TimelineItem, Transform, rationalTimeToFrames } from "../types/project";
 import { PreviewFrameState, PreviewSampledLayer, BenchmarkReport, ParitySuiteReport } from "../types/preview";
 import { editorApi } from "../services/editorApi";
-import { getPendingPreviewVideoSeekTarget } from "./previewVideoSync";
+import { getPendingPreviewVideoSeekTarget, shouldSeekPreviewAudio } from "./previewVideoSync";
+import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./frameSeek";
+import { getPlaybackMeterElement, hasAudioCaptureTrack, peakDbfs, peakMeterPercent, playbackMeterStatus, playbackMeterValueText } from "./audioMeter";
+import { formatPreviewPlaybackFailure } from "./previewPlaybackErrors";
+import { currentVideoPreviewFailure, hasPendingCompatiblePreview, previewMediaFailurePresentation, VideoPreviewFailure } from "./previewMediaFailure";
+import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorAdjustments";
+import {
+  canvasCropFromPointerDelta,
+  CanvasCropEdge,
+  canvasPositionFromPointerDelta,
+  canvasRotationFromPointerDelta,
+  canvasScaleFromPointerDelta,
+  canvasTransformFromKeyboard,
+} from "./canvasDrag";
+
+const VIDEO_SYNC_DIAGNOSTICS_STORAGE_KEY = "tinix.previewVideoDiagnostics";
+const VIDEO_SYNC_DIAGNOSTIC_CAPACITY = 200;
+// Opt in from DevTools with sessionStorage.setItem("tinix.previewVideoDiagnostics", "1"), then reload.
+// Read the bounded buffer with window.__tinixPreviewVideoDiagnostics?.read().
+
+type VideoSyncDiagnosticType =
+  | "seek-request"
+  | "seeking"
+  | "seeked"
+  | "seeking-timeout"
+  | "seeked-timeout"
+  | "frame-presented"
+  | "frame-observation-ended"
+  | "rvfc-unavailable";
+
+type VideoSyncSeekContext = {
+  seekId: number;
+  targetTimeSec: number;
+  requestedAtMs: number;
+  seekedAtMs: number | null;
+};
+
+type PendingVideoSeek = {
+  seekId: number;
+  targetTimeSec: number;
+  requestedAtMs: number;
+  seekingAtMs?: number;
+  seekedAtMs?: number;
+};
+
+type RecordVideoDiagnostic = (
+  video: HTMLVideoElement,
+  event: VideoSyncDiagnosticType,
+  details?: Record<string, number | boolean | string | null>
+) => VideoSyncSeekContext | null;
+
+type VideoSyncDiagnosticEvent = {
+  atMs: number;
+  videoKey: string;
+  event: VideoSyncDiagnosticType;
+  currentTimeSec: number;
+  targetTimeSec: number | null;
+  targetDeltaSec: number | null;
+  seeking: boolean;
+  readyState: number;
+  paused: boolean;
+  playbackRate: number;
+  [key: string]: number | boolean | string | null;
+};
+
+declare global {
+  interface Window {
+    __tinixPreviewVideoDiagnostics?: {
+      events: VideoSyncDiagnosticEvent[];
+      read: () => VideoSyncDiagnosticEvent[];
+      clear: () => void;
+    };
+  }
+}
+
+type VideoWithFrameCallbacks = HTMLVideoElement & {
+  requestVideoFrameCallback?: (
+    callback: (
+      now: number,
+      metadata: {
+        mediaTime: number;
+        presentedFrames: number;
+        expectedDisplayTime: number;
+      }
+    ) => void
+  ) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+};
+
+function videoSyncDiagnosticsEnabled(): boolean {
+  if (typeof window === "undefined" || !import.meta.env.DEV) return false;
+  try {
+    return window.sessionStorage.getItem(VIDEO_SYNC_DIAGNOSTICS_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+interface AudioMeterTap {
+  analyser: AnalyserNode;
+  samples: Float32Array<ArrayBuffer>;
+  source: MediaStreamAudioSourceNode;
+  silentGain: GainNode;
+  stream: MediaStream;
+}
 
 interface PreviewVideoLayerProps {
   layer: PreviewSampledLayer;
@@ -11,7 +115,9 @@ interface PreviewVideoLayerProps {
   scaleRatio: number;
   mixBlendMode?: React.CSSProperties["mixBlendMode"];
   videoRefs: React.MutableRefObject<Record<string, HTMLVideoElement | null>>;
+  cancelVideoSeekWatchdog: (video: HTMLVideoElement) => void;
   syncVideoToLatestTarget: (itemId: string, video: HTMLVideoElement) => void;
+  recordVideoDiagnostic: RecordVideoDiagnostic;
   onMediaError: (layer: PreviewSampledLayer) => void;
 }
 
@@ -21,11 +127,20 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
   scaleRatio,
   mixBlendMode,
   videoRefs,
+  cancelVideoSeekWatchdog,
   syncVideoToLatestTarget,
+  recordVideoDiagnostic,
   onMediaError,
 }: PreviewVideoLayerProps) {
   const elementRef = useRef<HTMLVideoElement | null>(null);
   const hasDecodedFrameRef = useRef(false);
+  const frameCallbackRef = useRef<number | null>(null);
+  const frameCallbackTimeoutRef = useRef<number | null>(null);
+  const frameCallbackVideoRef = useRef<VideoWithFrameCallbacks | null>(null);
+  const frameObservationSeekIdRef = useRef<number | null>(null);
+  const frameObservationSeekedAtMsRef = useRef<number | null>(null);
+  const seekedTimeoutRef = useRef<number | null>(null);
+  const rvfcUnavailableLoggedRef = useRef(false);
   const visibleWidth = Math.max(0.001, 1 - layer.crop.left - layer.crop.right);
   const visibleHeight = Math.max(0.001, 1 - layer.crop.top - layer.crop.bottom);
   const contentWidth = Math.max(1, layer.content_size[0] * scaleRatio);
@@ -59,6 +174,128 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
     video.preservesPitch = true;
   }, [layer.playback_rate]);
 
+  const clearFrameObservation = () => {
+    const video = frameCallbackVideoRef.current;
+    if (video && frameCallbackRef.current !== null) {
+      video.cancelVideoFrameCallback?.(frameCallbackRef.current);
+    }
+    if (frameCallbackTimeoutRef.current !== null) {
+      window.clearTimeout(frameCallbackTimeoutRef.current);
+    }
+    frameCallbackRef.current = null;
+    frameCallbackTimeoutRef.current = null;
+    frameCallbackVideoRef.current = null;
+    frameObservationSeekIdRef.current = null;
+    frameObservationSeekedAtMsRef.current = null;
+  };
+
+  useEffect(
+    () => () => {
+      clearFrameObservation();
+      if (seekedTimeoutRef.current !== null) {
+        window.clearTimeout(seekedTimeoutRef.current);
+        seekedTimeoutRef.current = null;
+      }
+    },
+    []
+  );
+
+  const observeSeeking = (video: HTMLVideoElement) => {
+    const seek = recordVideoDiagnostic(video, "seeking");
+    clearFrameObservation();
+    if (seekedTimeoutRef.current !== null) {
+      window.clearTimeout(seekedTimeoutRef.current);
+      seekedTimeoutRef.current = null;
+    }
+    if (videoSyncDiagnosticsEnabled()) {
+      seekedTimeoutRef.current = window.setTimeout(() => {
+        seekedTimeoutRef.current = null;
+        recordVideoDiagnostic(video, "seeked-timeout", { timeoutMs: 5_000 });
+      }, 5_000);
+    }
+    observeSeekFrames(video, seek);
+  };
+
+  const observeSeekFrames = (video: HTMLVideoElement, seek: VideoSyncSeekContext | null) => {
+    if (!seek || !videoSyncDiagnosticsEnabled()) return;
+    if (frameObservationSeekIdRef.current === seek.seekId) {
+      frameObservationSeekedAtMsRef.current = seek.seekedAtMs;
+      return;
+    }
+    clearFrameObservation();
+    const frameVideo = video as VideoWithFrameCallbacks;
+    if (!frameVideo.requestVideoFrameCallback) {
+      if (!rvfcUnavailableLoggedRef.current) {
+        rvfcUnavailableLoggedRef.current = true;
+        recordVideoDiagnostic(video, "rvfc-unavailable");
+      }
+      return;
+    }
+
+    const deadline = seek.requestedAtMs + 5_000;
+    let observedFrameCount = 0;
+    frameCallbackVideoRef.current = frameVideo;
+    frameObservationSeekIdRef.current = seek.seekId;
+    frameObservationSeekedAtMsRef.current = seek.seekedAtMs;
+    const finishTimeout = () => {
+      if (frameObservationSeekIdRef.current !== seek.seekId) return;
+      recordVideoDiagnostic(video, "frame-observation-ended", {
+        seekId: seek.seekId,
+        targetTimeSec: seek.targetTimeSec,
+        observationDurationMs: performance.now() - seek.requestedAtMs,
+        observedFrameCount,
+        seekedObserved: frameObservationSeekedAtMsRef.current !== null,
+      });
+      clearFrameObservation();
+    };
+    const requestFrame = () => {
+      frameCallbackRef.current = frameVideo.requestVideoFrameCallback!((now, metadata) => {
+        frameCallbackRef.current = null;
+        if (frameObservationSeekIdRef.current !== seek.seekId) return;
+
+        observedFrameCount += 1;
+        const mediaTimeDeltaSec = metadata.mediaTime - seek.targetTimeSec;
+        // This is only a proximity label; it does not claim an exact source frame match.
+        const nearTarget = Math.abs(mediaTimeDeltaSec) <= 0.05;
+        recordVideoDiagnostic(
+          video,
+          "frame-presented",
+          {
+            seekId: seek.seekId,
+            targetTimeSec: seek.targetTimeSec,
+            mediaTimeSec: metadata.mediaTime,
+            mediaTimeDeltaSec,
+            targetProximity: nearTarget ? "near-target" : "away-from-target",
+            observationPhase:
+              frameObservationSeekedAtMsRef.current === null ? "before-seeked" : "after-seeked",
+            presentedFrames: metadata.presentedFrames,
+            callbackDelayMs: now - seek.requestedAtMs,
+            expectedDisplayDelayMs: metadata.expectedDisplayTime - now,
+          }
+        );
+
+        if (now >= deadline) {
+          finishTimeout();
+        } else {
+          requestFrame();
+        }
+      });
+    };
+    requestFrame();
+    frameCallbackTimeoutRef.current = window.setTimeout(() => {
+      finishTimeout();
+    }, Math.max(0, deadline - performance.now()));
+  };
+
+  const setVideoElementRef = useCallback((element: HTMLVideoElement | null) => {
+    const previousElement = elementRef.current;
+    if (element === null && previousElement) {
+      cancelVideoSeekWatchdog(previousElement);
+    }
+    elementRef.current = element;
+    videoRefs.current[layer.item_id] = element;
+  }, [cancelVideoSeekWatchdog, layer.item_id, videoRefs]);
+
   return (
     <div
       style={{
@@ -73,14 +310,12 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
         zIndex: layer.z_index,
         pointerEvents: "none",
         mixBlendMode,
-        filter: visualEffectCssFilter(layer.visual_effect),
+        filter: `url(#${colorFilterId(layer.item_id)})`,
       }}
     >
       <video
-        ref={(element) => {
-          elementRef.current = element;
-          videoRefs.current[layer.item_id] = element;
-        }}
+        ref={setVideoElementRef}
+        crossOrigin="anonymous"
         src={assetUrl}
         playsInline
         onLoadedMetadata={(event) => {
@@ -93,7 +328,14 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
         onLoadedData={() => {
           hasDecodedFrameRef.current = true;
         }}
+        onSeeking={(event) => observeSeeking(event.currentTarget)}
         onSeeked={(event) => {
+          const seek = recordVideoDiagnostic(event.currentTarget, "seeked");
+          if (seekedTimeoutRef.current !== null) {
+            window.clearTimeout(seekedTimeoutRef.current);
+            seekedTimeoutRef.current = null;
+          }
+          observeSeekFrames(event.currentTarget, seek);
           syncVideoToLatestTarget(layer.item_id, event.currentTarget);
         }}
         onError={() => onMediaError(layer)}
@@ -115,10 +357,14 @@ interface PreviewCanvasProps {
   project?: Project | null;
   playheadFrame: number;
   selectedItem: TimelineItem | null;
+  onUpdateCanvasPosition?: (itemId: string, x: number, y: number) => void;
+  onUpdateCanvasTransform?: (itemId: string, transform: Transform) => void;
+  onUpdateCanvasCrop?: (itemId: string, crop: Crop) => void;
   onPlayheadChange: (frame: number) => void;
   isPlaying?: boolean;
   onTogglePlay?: () => void;
   onRegisterAudioUnlock?: (unlock: () => void) => void;
+  onPlaybackTrackPeaksChange?: (levels: Record<string, number> | null) => void;
 }
 
 function safeConvertFileSrc(path?: string | null): string {
@@ -128,6 +374,27 @@ function safeConvertFileSrc(path?: string | null): string {
   } catch {
     return path;
   }
+}
+
+function describeAudioElementError(element: HTMLMediaElement): string {
+  const errorLabels: Record<number, string> = {
+    1: "aborted",
+    2: "network error",
+    3: "decode error",
+    4: "source not supported",
+  };
+  const mediaError = element.error;
+  const code = mediaError?.code;
+  let source = "unknown";
+  try {
+    const sourceUrl = new URL(element.currentSrc || element.src, window.location.href);
+    source = `${sourceUrl.protocol}//${sourceUrl.host}`;
+  } catch {
+    // Keep the diagnostic useful without exposing a local media path.
+  }
+
+  const error = code ? `error ${code} (${errorLabels[code] ?? "unknown"})` : "error code unavailable";
+  return `Audio could not be loaded: ${error}; readyState=${element.readyState}; networkState=${element.networkState}; source=${source}`;
 }
 
 function bytesToPngDataUrl(bytes: number[]): string {
@@ -145,6 +412,28 @@ interface RichTextOverlayEntry {
   roi: [number, number, number, number];
 }
 
+interface CanvasTransformDrag {
+  pointerId: number;
+  itemId: string;
+  clientX: number;
+  kind: "scale" | "rotation";
+  base: Transform;
+  next: Transform;
+}
+
+interface CanvasCropDrag {
+  pointerId: number;
+  itemId: string;
+  clientX: number;
+  clientY: number;
+  edge: CanvasCropEdge;
+  base: Crop;
+  next: Crop;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
 // Animated rich text needs one overlay per sampled frame; static rich text is
 // cached once per revision. Keep the playback cache bounded.
 const MAX_RICH_TEXT_CACHE_ENTRIES = 96;
@@ -159,40 +448,55 @@ function richTextCacheKey(
     : `${revision}:${layer.item_id}`;
 }
 
-function visualEffectCssFilter(effect?: PreviewSampledLayer["visual_effect"]): string | undefined {
-  switch (effect) {
-    case "Mono":
-      return "saturate(0%)";
-    case "Vivid":
-      return "contrast(112%) saturate(125%)";
-    case "Muted":
-      return "contrast(96%) saturate(70%)";
-    default:
-      return undefined;
-  }
-}
-
 export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   project,
   playheadFrame,
   selectedItem,
+  onUpdateCanvasPosition,
+  onUpdateCanvasTransform,
+  onUpdateCanvasCrop,
   onPlayheadChange,
   isPlaying: externalIsPlaying,
   onTogglePlay,
   onRegisterAudioUnlock,
+  onPlaybackTrackPeaksChange,
 }) => {
   const [sampledState, setSampledState] = useState<PreviewFrameState | null>(null);
   const [internalIsPlaying, setInternalIsPlaying] = useState<boolean>(false);
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
   const [audioPlaybackError, setAudioPlaybackError] = useState<string | null>(null);
+  const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
+  const [playbackPeakDbfs, setPlaybackPeakDbfs] = useState<number | null>(null);
+  const [audioMeterStatus, setAudioMeterStatus] = useState<"idle" | "available" | "unsupported">("idle");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioMeterTapsRef = useRef(new Map<string, AudioMeterTap>());
+  const lastMeterCaptureAttemptRef = useRef(new Map<string, number>());
+  const unsupportedMeterSourcesRef = useRef(new Set<string>());
+  const activeAudioRef = useRef(sampledState?.active_audio ?? []);
+  activeAudioRef.current = sampledState?.active_audio ?? [];
+  const activeAudioMeterKey = (sampledState?.active_audio ?? []).map((audio) => audio.item_id).join("|");
+  const ensureAudioMeterContext = useCallback(() => {
+    if (typeof window === "undefined" || !window.AudioContext) return null;
+    try {
+      if (!audioContextRef.current) audioContextRef.current = new window.AudioContext();
+    } catch {
+      setAudioMeterStatus("unsupported");
+      return null;
+    }
+    if (audioContextRef.current.state === "suspended") {
+      void audioContextRef.current.resume().catch(() => setAudioMeterStatus("unsupported"));
+    }
+    return audioContextRef.current;
+  }, []);
   const unlockAudioPlayback = useCallback(() => {
+    ensureAudioMeterContext();
     for (const element of Object.values(audioRefs.current)) {
       if (!element) continue;
       void element.play().then(() => setAudioPlaybackError(null)).catch((error: unknown) => {
-        setAudioPlaybackError(error instanceof Error ? error.message : "Audio playback could not be started.");
+        setAudioPlaybackError(formatPreviewPlaybackFailure("audio", error));
       });
     }
-  }, []);
+  }, [ensureAudioMeterContext]);
   useEffect(() => {
     onRegisterAudioUnlock?.(unlockAudioPlayback);
     return () => onRegisterAudioUnlock?.(() => {});
@@ -213,7 +517,12 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [showParityModal, setShowParityModal] = useState<boolean>(false);
   const [parityReport, setParityReport] = useState<ParitySuiteReport | null>(null);
   const [isRunningParity, setIsRunningParity] = useState<boolean>(false);
+  const [frameSeekDraft, setFrameSeekDraft] = useState<string | null>(null);
+  const [frameSeekError, setFrameSeekError] = useState<string | null>(null);
+  const [isFrameSeekDirty, setIsFrameSeekDirty] = useState(false);
+  const frameSeekInputRef = useRef<HTMLInputElement | null>(null);
   const [mediaErrors, setMediaErrors] = useState<Record<string, boolean>>({});
+  const [videoPreviewErrors, setVideoPreviewErrors] = useState<Record<string, VideoPreviewFailure>>({});
   const [richTextOverlays, setRichTextOverlays] = useState<Record<string, RichTextOverlayEntry>>({});
   const [richTextErrors, setRichTextErrors] = useState<Record<string, string>>({});
   const richTextCacheRef = useRef<Record<string, RichTextOverlayEntry>>({});
@@ -240,12 +549,60 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, string>>({});
   const [proxyPollAttempt, setProxyPollAttempt] = useState(0);
   const [showSafeZones, setShowSafeZones] = useState(false);
+  const [canvasDrag, setCanvasDrag] = useState<{ itemId: string; x: number; y: number } | null>(null);
+  const [canvasTransformDrag, setCanvasTransformDrag] = useState<CanvasTransformDrag | null>(null);
+  const [canvasCropDrag, setCanvasCropDrag] = useState<CanvasCropDrag | null>(null);
+  const canvasDragStartRef = useRef<{
+    pointerId: number;
+    itemId: string;
+    clientX: number;
+    clientY: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const canvasTransformDragRef = useRef<CanvasTransformDrag | null>(null);
+  const canvasCropDragRef = useRef<CanvasCropDrag | null>(null);
+
+  const maxTimelineFrame = project
+    ? project.tracks.reduce((projectMax, track) => {
+        const trackMax = track.items.reduce((max, item) => {
+          const rate = project.settings.frame_rate;
+          const startFrame = rationalTimeToFrames(item.timeline_range.start, rate);
+          const durationFrames = rationalTimeToFrames(item.timeline_range.duration, rate);
+          return Math.max(max, startFrame + durationFrames);
+        }, projectMax);
+        return Math.max(projectMax, trackMax);
+      }, 0)
+    : 0;
+
+  const commitFrameSeek = (inputValue = frameSeekInputRef.current?.value) => {
+    const value = resolveFrameSeekInputValue(inputValue, frameSeekDraft, playheadFrame);
+    const result = parseFrameSeekInput(value, maxTimelineFrame);
+    if (result.frame === null) {
+      setFrameSeekError(result.error);
+      return false;
+    }
+
+    setFrameSeekError(null);
+    setFrameSeekDraft(null);
+    setIsFrameSeekDirty(false);
+    if (result.frame !== playheadFrame) onPlayheadChange(result.frame);
+    return true;
+  };
 
   const requestCounterRef = useRef<number>(0);
   const completedRequestCounterRef = useRef<number>(0);
   const previewSampleInFlightRef = useRef(false);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const videoSeekTargetsRef = useRef<Record<string, { targetSec: number; isPlaying: boolean }>>({});
+  const videoDiagnosticStateRef = useRef({
+    nextVideoNumber: 1,
+    nextSeekNumber: 1,
+    videoKeys: new WeakMap<HTMLVideoElement, string>(),
+    pendingTargets: new WeakMap<HTMLVideoElement, PendingVideoSeek>(),
+    seekWatchdogs: new Map<HTMLVideoElement, number>(),
+  });
+  const recordVideoDiagnosticRef = useRef<RecordVideoDiagnostic | null>(null);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
   const playheadFrameRef = useRef(playheadFrame);
   const onPlayheadChangeRef = useRef(onPlayheadChange);
@@ -300,7 +657,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     drainLatestPreviewSample();
   }, [playheadFrame, project?.revision, drainLatestPreviewSample]);
 
-  // Rich-text overlays are derived from canonical state through the shared
+  // Text overlays are derived from canonical state through the shared
   // native renderer. Static items are cached per project revision; animated
   // items are cached per sampled frame with a bounded playback cache.
   useEffect(() => {
@@ -317,7 +674,12 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     richTextRevisionRef.current = revision;
     const frame = sampledState?.timestamp.value ?? playheadFrameRef.current;
     const activeRichLayers = (sampledState?.active_layers ?? []).filter(
-      (layer) => layer.kind === "Text" && (Boolean(layer.text_rich) || Boolean(layer.has_template_instance))
+      (layer) =>
+        layer.kind === "Text" &&
+        (Boolean(layer.text_rich) ||
+          Boolean(layer.has_template_instance) ||
+          Boolean(layer.has_animation) ||
+          Boolean(layer.text_style?.background_color && layer.text_style.background_opacity > 0))
     );
 
     for (const layer of activeRichLayers) {
@@ -427,6 +789,114 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
 
   // 3. Spacebar Keyboard Shortcut is centralized in useTimelineShortcuts (P16-AC-48)
 
+  const recordVideoDiagnostic = useCallback((
+    video: HTMLVideoElement,
+    event: VideoSyncDiagnosticType,
+    details: Record<string, number | boolean | string | null> = {}
+  ): VideoSyncSeekContext | null => {
+    const state = videoDiagnosticStateRef.current;
+    const existingWatchdog = state.seekWatchdogs.get(video);
+    if (
+      existingWatchdog !== undefined &&
+      (event === "seek-request" || event === "seeking" || event === "seeked")
+    ) {
+      window.clearTimeout(existingWatchdog);
+      state.seekWatchdogs.delete(video);
+    }
+    if (!videoSyncDiagnosticsEnabled()) return null;
+
+    let videoKey = state.videoKeys.get(video);
+    if (!videoKey) {
+      videoKey = `video-${state.nextVideoNumber++}`;
+      state.videoKeys.set(video, videoKey);
+    }
+    const atMs = performance.now();
+    if (event === "seek-request" && typeof details.targetTimeSec === "number") {
+      state.pendingTargets.set(video, {
+        seekId: state.nextSeekNumber++,
+        targetTimeSec: details.targetTimeSec,
+        requestedAtMs: atMs,
+      });
+    }
+    const pending = state.pendingTargets.get(video);
+    if (pending && event === "seeking") pending.seekingAtMs = atMs;
+    if (pending && event === "seeked") pending.seekedAtMs = atMs;
+    const targetTimeSec = pending?.targetTimeSec ?? null;
+    const recorder = window.__tinixPreviewVideoDiagnostics ?? (() => {
+      const events: VideoSyncDiagnosticEvent[] = [];
+      const created = {
+        events,
+        read: () => events.slice(),
+        clear: () => {
+          events.length = 0;
+        },
+      };
+      window.__tinixPreviewVideoDiagnostics = created;
+      return created;
+    })();
+    const diagnosticEvent: VideoSyncDiagnosticEvent = {
+      atMs,
+      videoKey,
+      event,
+      currentTimeSec: video.currentTime,
+      targetTimeSec,
+      targetDeltaSec: targetTimeSec === null ? null : targetTimeSec - video.currentTime,
+      seekId: pending?.seekId ?? null,
+      seekRequestToEventMs: pending ? atMs - pending.requestedAtMs : null,
+      seekingToSeekedMs:
+        event === "seeked" && pending?.seekingAtMs !== undefined
+          ? atMs - pending.seekingAtMs
+          : null,
+      seeking: video.seeking,
+      readyState: video.readyState,
+      paused: video.paused,
+      playbackRate: video.playbackRate,
+      ...details,
+    };
+    recorder.events.push(diagnosticEvent);
+    if (recorder.events.length > VIDEO_SYNC_DIAGNOSTIC_CAPACITY) {
+      recorder.events.splice(0, recorder.events.length - VIDEO_SYNC_DIAGNOSTIC_CAPACITY);
+    }
+    if (event === "seek-request") {
+      const requestSeekId = pending?.seekId;
+      if (requestSeekId !== undefined) {
+        const watchdog = window.setTimeout(() => {
+          state.seekWatchdogs.delete(video);
+          if (state.pendingTargets.get(video)?.seekId !== requestSeekId) return;
+          recordVideoDiagnosticRef.current?.(video, "seeking-timeout", {
+            seekId: requestSeekId,
+            timeoutMs: 5_000,
+          });
+        }, 5_000);
+        state.seekWatchdogs.set(video, watchdog);
+      }
+    }
+    if ((event === "seeking" || event === "seeked") && pending) {
+      return {
+        seekId: pending.seekId,
+        targetTimeSec: pending.targetTimeSec,
+        requestedAtMs: pending.requestedAtMs,
+        seekedAtMs: pending.seekedAtMs ?? null,
+      };
+    }
+    return null;
+  }, []);
+  recordVideoDiagnosticRef.current = recordVideoDiagnostic;
+
+  const cancelVideoSeekWatchdog = useCallback((video: HTMLVideoElement) => {
+    const watchdogs = videoDiagnosticStateRef.current.seekWatchdogs;
+    const timeout = watchdogs.get(video);
+    if (timeout === undefined) return;
+    window.clearTimeout(timeout);
+    watchdogs.delete(video);
+  }, []);
+
+  useEffect(() => () => {
+    const watchdogs = videoDiagnosticStateRef.current.seekWatchdogs;
+    watchdogs.forEach((timeout) => window.clearTimeout(timeout));
+    watchdogs.clear();
+  }, []);
+
   const syncVideoToLatestTarget = useCallback((itemId: string, video: HTMLVideoElement) => {
     const desired = videoSeekTargetsRef.current[itemId];
     if (!desired || video.readyState < 1) return;
@@ -438,12 +908,34 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       video.seeking
     );
     if (seekTarget !== null) {
+      recordVideoDiagnostic(video, "seek-request", {
+        targetTimeSec: seekTarget,
+        previousTimeSec: video.currentTime,
+        requestedDeltaSec: seekTarget - video.currentTime,
+        isPlaying: desired.isPlaying,
+      });
       video.currentTime = seekTarget;
     }
-  }, []);
+  }, [recordVideoDiagnostic]);
   const handleVideoMediaError = useCallback((layer: PreviewSampledLayer) => {
-    if (!layer.asset_id || compatibleVideoSources[layer.asset_id]) {
-      setMediaErrors((previous) => ({ ...previous, [layer.item_id]: true }));
+    if (!layer.asset_id) {
+      setVideoPreviewErrors((previous) => ({
+        ...previous,
+        [layer.item_id]: {
+          sourcePath: layer.asset_path ?? null,
+          message: "This timeline clip has no linked video source.",
+        },
+      }));
+      return;
+    }
+    if (compatibleVideoSources[layer.asset_id]) {
+      setVideoPreviewErrors((previous) => ({
+        ...previous,
+        [layer.item_id]: {
+          sourcePath: layer.asset_path ?? null,
+          message: "TinixCut could not decode the compatible preview video.",
+        },
+      }));
       return;
     }
     setProxyRequestedAssetIds((previous) =>
@@ -473,15 +965,25 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             if (disposed) return;
             if (result.status === "Ready") {
               setCompatibleVideoSources((previous) => ({ ...previous, [assetId]: result.payload.path }));
+              setVideoPreviewErrors((previous) => {
+                const next = { ...previous };
+                allVideoLayers
+                  .filter((layer) => layer.asset_id === assetId)
+                  .forEach((layer) => delete next[layer.item_id]);
+                return next;
+              });
             } else if (result.status === "Pending") {
               shouldPollAgain = true;
             } else {
-              setMediaErrors((previous) => {
+              setVideoPreviewErrors((previous) => {
                 const next = { ...previous };
                 allVideoLayers
                   .filter((layer) => layer.asset_id === assetId)
                   .forEach((layer) => {
-                    next[layer.item_id] = true;
+                    next[layer.item_id] = {
+                      sourcePath: layer.asset_path ?? null,
+                      message: result.payload.reason,
+                    };
                   });
                 return next;
               });
@@ -526,9 +1028,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           v.volume = gain;
           v.muted = gain === 0;
           if (isPlaying && v.paused) {
-            v.play().catch((error: unknown) => {
-              setAudioPlaybackError(error instanceof Error ? error.message : "Video playback could not be started.");
-            });
+            v.play()
+              .then(() => setVideoPlaybackError(null))
+              .catch((error: unknown) => {
+                setVideoPlaybackError(formatPreviewPlaybackFailure("video", error));
+              });
           } else if (!isPlaying && !v.paused) {
             v.pause();
           }
@@ -548,7 +1052,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       const sourceSeconds =
         audio.source_time.value /
         (audio.source_time.rate.numerator / audio.source_time.rate.denominator);
-      if (Math.abs(element.currentTime - sourceSeconds) > 0.12) {
+      if (shouldSeekPreviewAudio(element.currentTime, sourceSeconds)) {
         element.currentTime = Math.max(0, sourceSeconds);
       }
       element.playbackRate = audio.playback_rate;
@@ -568,9 +1072,141 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
   }, [sampledState, isPlaying]);
 
+  useEffect(() => {
+    if (!isPlaying || !activeAudioMeterKey) {
+      setPlaybackPeakDbfs(null);
+      setAudioMeterStatus("idle");
+      onPlaybackTrackPeaksChange?.(null);
+      for (const tap of audioMeterTapsRef.current.values()) {
+        tap.source.disconnect();
+        tap.analyser.disconnect();
+        tap.silentGain.disconnect();
+        tap.stream.getTracks().forEach((track) => track.stop());
+      }
+      audioMeterTapsRef.current.clear();
+      lastMeterCaptureAttemptRef.current.clear();
+      unsupportedMeterSourcesRef.current.clear();
+      return;
+    }
+    const context = audioContextRef.current;
+    if (!context) {
+      setAudioMeterStatus("unsupported");
+      return;
+    }
+
+    let animationFrame = 0;
+    let lastPublish = 0;
+    let hasUnsupportedSource = false;
+    const sample = (now: number) => {
+      if (context.state !== "running") {
+        if (context.state === "closed") setAudioMeterStatus("unsupported");
+        animationFrame = requestAnimationFrame(sample);
+        return;
+      }
+      const activeAudio = activeAudioRef.current;
+      const activeIds = new Set(activeAudio.map((audio) => audio.item_id));
+      for (const [itemId, tap] of audioMeterTapsRef.current) {
+        if (!activeIds.has(itemId)) {
+          tap.source.disconnect();
+          tap.analyser.disconnect();
+          tap.silentGain.disconnect();
+          tap.stream.getTracks().forEach((track) => track.stop());
+          audioMeterTapsRef.current.delete(itemId);
+          lastMeterCaptureAttemptRef.current.delete(itemId);
+          unsupportedMeterSourcesRef.current.delete(itemId);
+        }
+      }
+
+      let peak = -60;
+      let tapCount = 0;
+      const trackPeaks: Record<string, number> = {};
+      const trackByItemId = new Map(
+        (project?.tracks ?? []).flatMap((track) => track.items.map((item) => [item.item_id, track.track_id] as const))
+      );
+      for (const audio of activeAudio) {
+        const element = getPlaybackMeterElement(audio.item_id, audioRefs.current, videoRefs.current);
+        if (!element) {
+          hasUnsupportedSource = true;
+          continue;
+        }
+        let tap = audioMeterTapsRef.current.get(audio.item_id);
+        if (!tap) {
+          const lastAttempt = lastMeterCaptureAttemptRef.current.get(audio.item_id) ?? 0;
+          if (now - lastAttempt < 500) {
+            hasUnsupportedSource ||= unsupportedMeterSourcesRef.current.has(audio.item_id);
+            continue;
+          }
+          lastMeterCaptureAttemptRef.current.set(audio.item_id, now);
+          const media = element as HTMLMediaElement & {
+            captureStream?: () => MediaStream;
+            mozCaptureStream?: () => MediaStream;
+          };
+          const capture = media.captureStream ?? media.mozCaptureStream;
+          if (!capture) {
+            hasUnsupportedSource = true;
+            unsupportedMeterSourcesRef.current.add(audio.item_id);
+            continue;
+          }
+          try {
+            const stream = capture.call(media);
+            if (!hasAudioCaptureTrack(stream)) {
+              hasUnsupportedSource = true;
+              unsupportedMeterSourcesRef.current.add(audio.item_id);
+              stream.getTracks().forEach((track) => track.stop());
+              continue;
+            }
+            unsupportedMeterSourcesRef.current.delete(audio.item_id);
+            const source = context.createMediaStreamSource(stream);
+            const analyser = context.createAnalyser();
+            analyser.fftSize = 1024;
+            const silentGain = context.createGain();
+            silentGain.gain.value = 0;
+            source.connect(analyser);
+            analyser.connect(silentGain);
+            silentGain.connect(context.destination);
+            tap = {
+              analyser,
+              samples: new Float32Array(new ArrayBuffer(analyser.fftSize)),
+              source,
+              silentGain,
+              stream,
+            };
+            audioMeterTapsRef.current.set(audio.item_id, tap);
+          } catch {
+            hasUnsupportedSource = true;
+            unsupportedMeterSourcesRef.current.add(audio.item_id);
+            continue;
+          }
+        }
+        tap.analyser.getFloatTimeDomainData(tap.samples);
+        peak = Math.max(peak, peakDbfs(tap.samples));
+        const trackId = trackByItemId.get(audio.item_id);
+        if (trackId) trackPeaks[trackId] = Math.max(trackPeaks[trackId] ?? -60, peakDbfs(tap.samples));
+        tapCount += 1;
+      }
+      if (now - lastPublish >= 50) {
+        setPlaybackPeakDbfs(tapCount > 0 ? peak : null);
+        setAudioMeterStatus(playbackMeterStatus(tapCount, hasUnsupportedSource));
+        onPlaybackTrackPeaksChange?.(tapCount > 0 ? trackPeaks : null);
+        lastPublish = now;
+      }
+      animationFrame = requestAnimationFrame(sample);
+    };
+    animationFrame = requestAnimationFrame(sample);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [activeAudioMeterKey, isPlaying, project, onPlaybackTrackPeaksChange]);
+
   useEffect(
     () => () => {
       Object.values(audioRefs.current).forEach((element) => element?.pause());
+      for (const tap of audioMeterTapsRef.current.values()) {
+        tap.source.disconnect();
+        tap.analyser.disconnect();
+        tap.silentGain.disconnect();
+        tap.stream.getTracks().forEach((track) => track.stop());
+      }
+      audioMeterTapsRef.current.clear();
+      void audioContextRef.current?.close();
     },
     []
   );
@@ -641,12 +1277,49 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       .map((layer) => layer.item_id)
   );
   const standaloneAudio = activeAudio.filter((audio) => !activeVideoItemIds.has(audio.item_id));
-  const isPreparingCompatiblePreview = Object.keys(proxyRequestedAssetIds).some(
-    (assetId) => !compatibleVideoSources[assetId]
+  const videoPreviewErrorAssetIds = new Set(
+    [...activeLayers, ...transitionGroups.flatMap((group) => [group.left_layer, group.right_layer])]
+      .filter((layer) => currentVideoPreviewFailure(videoPreviewErrors[layer.item_id], layer.asset_path))
+      .map((layer) => layer.asset_id)
+      .filter((assetId): assetId is string => Boolean(assetId))
+  );
+  const isPreparingCompatiblePreview = hasPendingCompatiblePreview(
+    Object.keys(proxyRequestedAssetIds),
+    new Set(Object.keys(compatibleVideoSources)),
+    videoPreviewErrorAssetIds
   );
 
   const renderLayer = (layer: PreviewSampledLayer, mixBlendMode?: "plus-lighter") => {
-    const hasError = mediaErrors[layer.item_id] || layer.is_missing_media;
+    if (canvasDrag?.itemId === layer.item_id) {
+      layer = { ...layer, position: [canvasDrag.x, canvasDrag.y] };
+    }
+    if (canvasCropDrag?.itemId === layer.item_id) {
+      layer = { ...layer, crop: canvasCropDrag.next };
+    }
+    if (canvasTransformDrag?.itemId === layer.item_id) {
+      const widthRatio = canvasTransformDrag.base.scale_x > 0
+        ? canvasTransformDrag.next.scale_x / canvasTransformDrag.base.scale_x
+        : 1;
+      const heightRatio = canvasTransformDrag.base.scale_y > 0
+        ? canvasTransformDrag.next.scale_y / canvasTransformDrag.base.scale_y
+        : 1;
+      layer = {
+        ...layer,
+        scale: [canvasTransformDrag.next.scale_x, canvasTransformDrag.next.scale_y],
+        rotation: canvasTransformDrag.next.rotation,
+        content_size: layer.kind === "Video"
+          ? [layer.content_size[0] * widthRatio, layer.content_size[1] * heightRatio]
+          : layer.content_size,
+      };
+    }
+    const failure = previewMediaFailurePresentation({
+      isMissingMedia: layer.is_missing_media,
+      isVideo: layer.kind === "Video",
+      sourcePath: layer.asset_path,
+      imageFailed: layer.kind === "Image" && mediaErrors[layer.item_id],
+      videoPreviewFailure: currentVideoPreviewFailure(videoPreviewErrors[layer.item_id], layer.asset_path),
+    });
+    const hasError = failure !== null;
     const assetUrl = safeConvertFileSrc(
       layer.asset_id ? compatibleVideoSources[layer.asset_id] ?? layer.asset_path : layer.asset_path
     );
@@ -654,7 +1327,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     // Rich text is rasterized once by the shared native renderer with placement
     // and transform baked into the ROI pixels. Opacity stays a consumer property
     // so a revision-scoped cache entry is not poisoned by a fade/keyframe frame.
-    if (layer.kind === "Text" && (Boolean(layer.text_rich) || Boolean(layer.has_template_instance))) {
+    if (layer.kind === "Text" && (Boolean(layer.text_rich) || Boolean(layer.has_template_instance) || Boolean(layer.has_animation) || Boolean(layer.text_style?.background_color && layer.text_style.background_opacity > 0))) {
       const revision = project?.revision ?? 0;
       const entry = richTextOverlays[richTextCacheKey(revision, layer, playheadFrame)];
       if (!entry || !entry.dataUrl) return null;
@@ -715,7 +1388,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           scaleRatio={scaleRatio}
           mixBlendMode={mixBlendMode}
           videoRefs={videoRefs}
+          cancelVideoSeekWatchdog={cancelVideoSeekWatchdog}
           syncVideoToLatestTarget={syncVideoToLatestTarget}
+          recordVideoDiagnostic={recordVideoDiagnostic}
           onMediaError={handleVideoMediaError}
         />
       );
@@ -739,12 +1414,13 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           zIndex: layer.z_index,
           pointerEvents: "none",
           mixBlendMode,
-          filter: visualEffectCssFilter(layer.visual_effect),
+          filter: `url(#${colorFilterId(layer.item_id)})`,
         }}
       >
         {hasError ? (
-          // Missing Media Fallback (Milestone 7)
+          // Keep actual missing files distinct from decode/proxy failures.
           <div
+            role="alert"
             style={{
               width: "80%",
               height: "80%",
@@ -761,10 +1437,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             }}
           >
             <span style={{ fontSize: "28px", marginBottom: "4px" }}>⚠️</span>
-            <span style={{ fontWeight: 700, fontSize: "13px" }}>Offline / Missing Media</span>
+            <span style={{ fontWeight: 700, fontSize: "13px" }}>{failure?.title}</span>
             <span style={{ fontSize: "11px", opacity: 0.9 }}>{layer.name}</span>
             <span style={{ fontSize: "9px", color: "var(--text-muted)", marginTop: "4px", wordBreak: "break-all" }}>
-              {layer.asset_path || "Unknown source path"}
+              {failure?.detail}
             </span>
           </div>
         ) : layer.kind === "Image" ? (
@@ -792,7 +1468,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
               fontWeight: textStyle?.font_weight ?? 600,
               textAlign: textStyle?.alignment?.toLowerCase() as "left" | "center" | "right" | undefined,
               lineHeight: textStyle?.line_height ?? 1,
-              backgroundColor: textStyle?.background_color ?? "transparent",
+              backgroundColor: textStyle?.background_color && textStyle.background_opacity > 0
+                ? `${textStyle.background_color.slice(0, 7)}${Math.round(textStyle.background_opacity * 255).toString(16).padStart(2, "0")}`
+                : "transparent",
+              borderRadius: `${(textStyle?.background_corner_radius ?? 0) * scaleRatio}px`,
               padding: textStyle
                 ? `${textStyle.padding_y * scaleRatio}px ${textStyle.padding_x * scaleRatio}px`
                 : undefined,
@@ -832,6 +1511,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     // occlude that surface even when visually transparent. Keep selection styling
     // on the timeline for video clips instead of drawing over their preview surface.
     if (layer.kind === "Video" || selectedItem?.item_id !== layer.item_id) return null;
+    if (canvasDrag?.itemId === layer.item_id) {
+      layer = { ...layer, position: [canvasDrag.x, canvasDrag.y] };
+    }
 
     return (
       <div
@@ -857,18 +1539,224 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     );
   };
 
+  const selectedCanvasLayer = selectedItem
+    ? activeLayers.find((layer) => layer.item_id === selectedItem.item_id)
+    : undefined;
+  const supportsTransientCanvasTransform = !!selectedCanvasLayer && (
+    selectedCanvasLayer.kind !== "Text" ||
+    (!selectedCanvasLayer.text_rich && !selectedCanvasLayer.has_template_instance &&
+      !(selectedCanvasLayer.text_style?.background_color && selectedCanvasLayer.text_style.background_opacity > 0))
+  );
+  const selectedCanvasPosition = selectedCanvasLayer
+    ? canvasDrag?.itemId === selectedCanvasLayer.item_id
+      ? { x: canvasDrag.x, y: canvasDrag.y }
+      : { x: selectedCanvasLayer.position[0], y: selectedCanvasLayer.position[1] }
+    : null;
+  const selectedCanvasTransform: Transform | null = selectedCanvasLayer
+    ? canvasTransformDrag?.itemId === selectedCanvasLayer.item_id
+      ? canvasTransformDrag.next
+      : {
+          position_x: selectedCanvasPosition?.x ?? selectedCanvasLayer.position[0],
+          position_y: selectedCanvasPosition?.y ?? selectedCanvasLayer.position[1],
+          scale_x: selectedCanvasLayer.scale[0],
+          scale_y: selectedCanvasLayer.scale[1],
+          rotation: selectedCanvasLayer.rotation,
+        }
+    : null;
+  const selectedCanvasCrop: Crop | null = selectedCanvasLayer
+    ? canvasCropDrag?.itemId === selectedCanvasLayer.item_id
+      ? canvasCropDrag.next
+      : selectedCanvasLayer.crop
+    : null;
+
+  const updateCanvasDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasDragStartRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = canvasPositionFromPointerDelta(
+      { x: drag.x, y: drag.y },
+      event.clientX - drag.clientX,
+      event.clientY - drag.clientY,
+      scaleRatio
+    );
+    setCanvasDrag({ itemId: drag.itemId, ...next });
+  };
+
+  const commitCanvasDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasDragStartRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = canvasPositionFromPointerDelta(
+      { x: drag.x, y: drag.y },
+      event.clientX - drag.clientX,
+      event.clientY - drag.clientY,
+      scaleRatio
+    );
+    canvasDragStartRef.current = null;
+    setCanvasDrag(null);
+    if (next.x !== drag.x || next.y !== drag.y) {
+      onUpdateCanvasPosition?.(drag.itemId, next.x, next.y);
+    }
+  };
+
+  const startCanvasTransformDrag = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    kind: CanvasTransformDrag["kind"]
+  ) => {
+    if (event.button !== 0 || !selectedItem || !selectedCanvasTransform) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const drag: CanvasTransformDrag = {
+      pointerId: event.pointerId,
+      itemId: selectedItem.item_id,
+      clientX: event.clientX,
+      kind,
+      base: selectedCanvasTransform,
+      next: selectedCanvasTransform,
+    };
+    canvasTransformDragRef.current = drag;
+  };
+
+  const updateCanvasTransformDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasTransformDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.clientX;
+    const next = drag.kind === "scale"
+      ? canvasScaleFromPointerDelta(drag.base, deltaX)
+      : canvasRotationFromPointerDelta(drag.base, deltaX);
+    const updated = { ...drag, next };
+    canvasTransformDragRef.current = updated;
+    setCanvasTransformDrag(updated);
+  };
+
+  const commitCanvasTransformDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasTransformDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.clientX;
+    const next = drag.kind === "scale"
+      ? canvasScaleFromPointerDelta(drag.base, deltaX)
+      : canvasRotationFromPointerDelta(drag.base, deltaX);
+    canvasTransformDragRef.current = null;
+    setCanvasTransformDrag(null);
+    if (
+      next.scale_x !== drag.base.scale_x || next.scale_y !== drag.base.scale_y ||
+      next.rotation !== drag.base.rotation
+    ) onUpdateCanvasTransform?.(drag.itemId, next);
+  };
+
+  const startCanvasCropDrag = (event: React.PointerEvent<HTMLButtonElement>, edge: CanvasCropEdge) => {
+    if (
+      event.button !== 0 || !selectedItem || !selectedCanvasLayer || !selectedCanvasTransform ||
+      !selectedCanvasCrop || (selectedCanvasLayer.kind !== "Video" && selectedCanvasLayer.kind !== "Image")
+    ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const drag: CanvasCropDrag = {
+      pointerId: event.pointerId,
+      itemId: selectedItem.item_id,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      edge,
+      base: selectedCanvasCrop,
+      next: selectedCanvasCrop,
+      width: canvasHandleHalfWidth * 2,
+      height: canvasHandleHalfHeight * 2,
+      rotation: selectedCanvasTransform.rotation,
+    };
+    canvasCropDragRef.current = drag;
+  };
+
+  const updateCanvasCropDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasCropDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = canvasCropFromPointerDelta(
+      drag.base,
+      drag.edge,
+      event.clientX - drag.clientX,
+      event.clientY - drag.clientY,
+      drag.width,
+      drag.height,
+      drag.rotation
+    );
+    const updated = { ...drag, next };
+    canvasCropDragRef.current = updated;
+    setCanvasCropDrag(updated);
+  };
+
+  const commitCanvasCropDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = canvasCropDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = canvasCropFromPointerDelta(
+      drag.base,
+      drag.edge,
+      event.clientX - drag.clientX,
+      event.clientY - drag.clientY,
+      drag.width,
+      drag.height,
+      drag.rotation
+    );
+    canvasCropDragRef.current = null;
+    setCanvasCropDrag(null);
+    if (next[drag.edge] !== drag.base[drag.edge]) onUpdateCanvasCrop?.(drag.itemId, next);
+  };
+
+  const canvasHandleHalfWidth = selectedCanvasLayer && selectedCanvasTransform
+    ? (selectedCanvasLayer.kind === "Video"
+        ? selectedCanvasLayer.content_size[0] * scaleRatio
+        : viewportWidth * selectedCanvasTransform.scale_x) / 2
+    : 0;
+  const canvasHandleHalfHeight = selectedCanvasLayer && selectedCanvasTransform
+    ? (selectedCanvasLayer.kind === "Video"
+        ? selectedCanvasLayer.content_size[1] * scaleRatio
+        : viewportHeight * selectedCanvasTransform.scale_y) / 2
+    : 0;
+  const canvasHandlePoint = (localX: number, localY: number) => {
+    const radians = ((selectedCanvasTransform?.rotation ?? 0) * Math.PI) / 180;
+    const x = localX * Math.cos(radians) - localY * Math.sin(radians);
+    const y = localX * Math.sin(radians) + localY * Math.cos(radians);
+    return {
+      left: `calc(50% + ${(selectedCanvasPosition?.x ?? 0) * scaleRatio + x}px)`,
+      top: `calc(50% + ${(selectedCanvasPosition?.y ?? 0) * scaleRatio + y}px)`,
+    };
+  };
+  const scaleHandlePoint = canvasHandlePoint(canvasHandleHalfWidth + 18, 0);
+  const rotationHandlePoint = canvasHandlePoint(0, -canvasHandleHalfHeight - 20);
+  const cropHandlePoint = (edge: CanvasCropEdge) => {
+    if (!selectedCanvasCrop) return canvasHandlePoint(0, 0);
+    const width = canvasHandleHalfWidth * 2;
+    const height = canvasHandleHalfHeight * 2;
+    if (edge === "left") return canvasHandlePoint(-canvasHandleHalfWidth + selectedCanvasCrop.left * width, 0);
+    if (edge === "right") return canvasHandlePoint(canvasHandleHalfWidth - selectedCanvasCrop.right * width, 0);
+    if (edge === "top") return canvasHandlePoint(0, -canvasHandleHalfHeight + selectedCanvasCrop.top * height);
+    return canvasHandlePoint(0, canvasHandleHalfHeight - selectedCanvasCrop.bottom * height);
+  };
+  const colorFilterLayers = [
+    ...(sampledState?.active_layers ?? []),
+    ...((sampledState?.transition_groups ?? []).flatMap((group) => [group.left_layer, group.right_layer])),
+  ].filter((layer, index, all) => all.findIndex((candidate) => candidate.item_id === layer.item_id) === index);
+
   return (
     <div className="canvas-area" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <svg aria-hidden="true" width="0" height="0" style={{ position: "absolute", overflow: "hidden" }}>
+        <defs>
+          {colorFilterLayers.map((layer) => (
+            <filter key={layer.item_id} id={colorFilterId(layer.item_id)} colorInterpolationFilters="sRGB">
+              <feColorMatrix type="matrix" values={svgColorMatrixValues(visualColorMatrix(layer.visual_effect, layer.color_adjustments))} />
+            </filter>
+          ))}
+        </defs>
+      </svg>
       {standaloneAudio.map((audio) => (
         <audio
           key={audio.item_id}
+          crossOrigin="anonymous"
           ref={(element) => {
             audioRefs.current[audio.item_id] = element;
           }}
           src={safeConvertFileSrc(audio.asset_path)}
           preload="auto"
-          onError={() => {
-            setAudioPlaybackError("Audio file could not be decoded.");
+          onError={(event) => {
+            setAudioPlaybackError(formatPreviewPlaybackFailure("audio", describeAudioElementError(event.currentTarget)));
           }}
           style={{ display: "none" }}
         />
@@ -888,9 +1776,61 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             fontSize: "12px",
           }}
         >
-          Audio playback failed: {audioPlaybackError}
+          {audioPlaybackError}
         </div>
       )}
+      {videoPlaybackError && (
+        <div
+          role="alert"
+          style={{
+            width: "min(720px, 100%)",
+            boxSizing: "border-box",
+            marginBottom: "8px",
+            padding: "6px 10px",
+            color: "#fecaca",
+            background: "rgba(127, 29, 29, 0.7)",
+            border: "1px solid #b91c1c",
+            borderRadius: "4px",
+            fontSize: "12px",
+          }}
+        >
+          {videoPlaybackError}
+        </div>
+      )}
+      <div
+        role="meter"
+        aria-label="Playback peak level"
+        aria-valuemin={-60}
+        aria-valuemax={0}
+        aria-valuenow={playbackPeakDbfs ?? -60}
+        aria-valuetext={playbackMeterValueText(playbackPeakDbfs, audioMeterStatus)}
+        style={{
+          width: "min(720px, 100%)",
+          height: "18px",
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          marginBottom: "8px",
+          padding: "2px 6px",
+          color: "var(--text-muted)",
+          fontSize: "10px",
+        }}
+        title={audioMeterStatus === "unsupported" ? "Live peak meter is unavailable in this WebView" : "Live sample peak of preview audio"}
+      >
+        <span style={{ flex: "0 0 70px" }}>Peak</span>
+        <div style={{ flex: 1, height: "8px", overflow: "hidden", background: "var(--bg-tertiary)", borderRadius: "4px" }}>
+          <div style={{
+            width: `${peakMeterPercent(playbackPeakDbfs ?? -60)}%`,
+            height: "100%",
+            transition: "width 50ms linear",
+            background: (playbackPeakDbfs ?? -60) > -3 ? "#ef4444" : (playbackPeakDbfs ?? -60) > -9 ? "#f59e0b" : "#22c55e",
+          }} />
+        </div>
+        <span style={{ flex: "0 0 86px", textAlign: "right" }}>
+          {playbackPeakDbfs === null ? (audioMeterStatus === "unsupported" ? "N/A" : "−∞ dBFS") : `${playbackPeakDbfs.toFixed(1)} dBFS`}
+        </span>
+      </div>
       {isPreparingCompatiblePreview && (
         <div
           role="status"
@@ -1014,6 +1954,202 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           ),
         ])}
 
+        {selectedItem && selectedCanvasLayer && selectedCanvasPosition && onUpdateCanvasPosition && (
+          <button
+            type="button"
+            aria-label={`Move ${selectedItem.name} on canvas`}
+            title="Drag or use arrows to move; Ctrl+arrows scale; Alt+arrows rotate"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              canvasDragStartRef.current = {
+                pointerId: event.pointerId,
+                itemId: selectedItem.item_id,
+                clientX: event.clientX,
+                clientY: event.clientY,
+                x: selectedCanvasPosition.x,
+                y: selectedCanvasPosition.y,
+              };
+            }}
+            onPointerMove={updateCanvasDrag}
+            onPointerUp={commitCanvasDrag}
+            onPointerCancel={() => {
+              canvasDragStartRef.current = null;
+              setCanvasDrag(null);
+            }}
+            onKeyDown={(event) => {
+              const arrowKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] as const;
+              if (arrowKeys.includes(event.key as (typeof arrowKeys)[number]) && (event.ctrlKey || event.altKey)) {
+                const nextTransform = selectedCanvasLayer && canvasTransformFromKeyboard(
+                  {
+                    position_x: selectedCanvasPosition.x,
+                    position_y: selectedCanvasPosition.y,
+                    scale_x: selectedCanvasLayer.scale[0],
+                    scale_y: selectedCanvasLayer.scale[1],
+                    rotation: selectedCanvasLayer.rotation,
+                  },
+                  event.key as (typeof arrowKeys)[number],
+                  { control: event.ctrlKey, alt: event.altKey, shift: event.shiftKey }
+                );
+                if (nextTransform && onUpdateCanvasTransform) {
+                  event.preventDefault();
+                  onUpdateCanvasTransform(selectedItem.item_id, nextTransform);
+                  return;
+                }
+              }
+              const amount = event.shiftKey ? 10 : 1;
+              const delta: Record<string, [number, number]> = {
+                ArrowLeft: [-amount, 0],
+                ArrowRight: [amount, 0],
+                ArrowUp: [0, -amount],
+                ArrowDown: [0, amount],
+              };
+              const movement = delta[event.key];
+              if (!movement) return;
+              event.preventDefault();
+              onUpdateCanvasPosition(
+                selectedItem.item_id,
+                selectedCanvasPosition.x + movement[0],
+                selectedCanvasPosition.y + movement[1]
+              );
+            }}
+            style={{
+              position: "absolute",
+              left: `calc(50% + ${selectedCanvasPosition.x * scaleRatio}px)`,
+              top: `calc(50% + ${selectedCanvasPosition.y * scaleRatio}px)`,
+              transform: "translate(-50%, -50%)",
+              zIndex: 70,
+              width: "18px",
+              height: "18px",
+              padding: 0,
+              border: "2px solid white",
+              borderRadius: "50%",
+              background: "var(--accent-primary)",
+              boxShadow: "0 1px 5px rgba(0,0,0,.8)",
+              cursor: "move",
+              touchAction: "none",
+            }}
+          />
+        )}
+
+        {selectedItem && selectedCanvasLayer && supportsTransientCanvasTransform && selectedCanvasTransform && onUpdateCanvasTransform && (
+          <>
+            <button
+              type="button"
+              aria-label={`Scale ${selectedItem.name}`}
+              title="Drag horizontally to scale proportionally"
+              onPointerDown={(event) => startCanvasTransformDrag(event, "scale")}
+              onPointerMove={updateCanvasTransformDrag}
+              onPointerUp={commitCanvasTransformDrag}
+              onPointerCancel={() => {
+                canvasTransformDragRef.current = null;
+                setCanvasTransformDrag(null);
+              }}
+              style={{
+                position: "absolute",
+                ...scaleHandlePoint,
+                transform: "translate(-50%, -50%)",
+                zIndex: 71,
+                width: "18px",
+                height: "18px",
+                padding: 0,
+                border: "2px solid white",
+                borderRadius: "3px",
+                background: "var(--accent-primary)",
+                boxShadow: "0 1px 5px rgba(0,0,0,.8)",
+                cursor: "ew-resize",
+                touchAction: "none",
+              }}
+            />
+            <button
+              type="button"
+              aria-label={`Rotate ${selectedItem.name}`}
+              title="Drag horizontally to rotate"
+              onPointerDown={(event) => startCanvasTransformDrag(event, "rotation")}
+              onPointerMove={updateCanvasTransformDrag}
+              onPointerUp={commitCanvasTransformDrag}
+              onPointerCancel={() => {
+                canvasTransformDragRef.current = null;
+                setCanvasTransformDrag(null);
+              }}
+              style={{
+                position: "absolute",
+                ...rotationHandlePoint,
+                transform: "translate(-50%, -50%)",
+                zIndex: 71,
+                width: "18px",
+                height: "18px",
+                padding: 0,
+                border: "2px solid white",
+                borderRadius: "50%",
+                background: "var(--accent-secondary, #7c3aed)",
+                boxShadow: "0 1px 5px rgba(0,0,0,.8)",
+                cursor: "grab",
+                touchAction: "none",
+              }}
+            />
+          </>
+        )}
+
+        {selectedItem && selectedCanvasLayer && selectedCanvasCrop && onUpdateCanvasCrop &&
+          (selectedCanvasLayer.kind === "Video" || selectedCanvasLayer.kind === "Image") && (
+            <>
+              {(["top", "right", "bottom", "left"] as const).map((edge) => (
+                <button
+                  key={`crop-handle-${edge}`}
+                  type="button"
+                  aria-label={`Crop ${edge} edge of ${selectedItem.name}`}
+                  title={`Drag to crop ${edge} edge`}
+                  onPointerDown={(event) => startCanvasCropDrag(event, edge)}
+                  onPointerMove={updateCanvasCropDrag}
+                  onPointerUp={commitCanvasCropDrag}
+                  onPointerCancel={() => {
+                    canvasCropDragRef.current = null;
+                    setCanvasCropDrag(null);
+                  }}
+                  onKeyDown={(event) => {
+                    const amount = event.shiftKey ? 10 : 1;
+                    const deltas: Record<string, [number, number]> = {
+                      ArrowLeft: [-amount, 0],
+                      ArrowRight: [amount, 0],
+                      ArrowUp: [0, -amount],
+                      ArrowDown: [0, amount],
+                    };
+                    const delta = deltas[event.key];
+                    if (!delta) return;
+                    event.preventDefault();
+                    const next = canvasCropFromPointerDelta(
+                      selectedCanvasCrop,
+                      edge,
+                      delta[0],
+                      delta[1],
+                      canvasHandleHalfWidth * 2,
+                      canvasHandleHalfHeight * 2,
+                      selectedCanvasTransform?.rotation ?? 0
+                    );
+                    if (next[edge] !== selectedCanvasCrop[edge]) onUpdateCanvasCrop(selectedItem.item_id, next);
+                  }}
+                  style={{
+                    position: "absolute",
+                    ...cropHandlePoint(edge),
+                    transform: "translate(-50%, -50%)",
+                    zIndex: 72,
+                    width: "14px",
+                    height: "14px",
+                    padding: 0,
+                    border: "2px solid white",
+                    borderRadius: "50%",
+                    background: "#0f766e",
+                    boxShadow: "0 1px 5px rgba(0,0,0,.8)",
+                    cursor: edge === "top" || edge === "bottom" ? "ns-resize" : "ew-resize",
+                    touchAction: "none",
+                  }}
+                />
+              ))}
+            </>
+          )}
+
         {showSafeZones && supportsSafeZones && (
           <div
             aria-label="Social safe-zone guides"
@@ -1095,6 +2231,14 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
           <span>Superseded: {supersededRequests}</span>
+          <span>Text overlays: {Object.keys(richTextOverlays).length}</span>
+          <span>Blank: {Object.values(richTextOverlays).filter((entry) => !entry.dataUrl).length}</span>
+          <span>Overlay errors: {Object.keys(richTextErrors).length}</span>
+          <span>
+            ROI: {Object.values(richTextOverlays)
+              .map(({ roi }) => `${roi[0]},${roi[1]}–${roi[2]},${roi[3]}`)
+              .join(" | ") || "none"} ({canvasWidth}×{canvasHeight} @ {scaleRatio.toFixed(3)})
+          </span>
         </div>
       </div>
 
@@ -1169,6 +2313,68 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           <span style={{ fontSize: "12px", fontFamily: "ui-monospace, monospace", marginLeft: "8px" }}>
             {formatTimecode(playheadFrame)}
           </span>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              commitFrameSeek(frameSeekInputRef.current?.value);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px" }}
+          >
+            <label htmlFor="preview-frame-seek" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              Go to frame
+            </label>
+            <input
+              ref={frameSeekInputRef}
+              id="preview-frame-seek"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={maxTimelineFrame}
+              step={1}
+              value={frameSeekDraft ?? String(playheadFrame)}
+              aria-invalid={frameSeekError !== null}
+              aria-describedby={frameSeekError ? "preview-frame-seek-error" : undefined}
+              title={`Enter a frame from 0 to ${maxTimelineFrame}`}
+              onFocus={() => {
+                setFrameSeekDraft(String(playheadFrame));
+                setFrameSeekError(null);
+                setIsFrameSeekDirty(false);
+              }}
+              onChange={(event) => {
+                setFrameSeekDraft(event.target.value);
+                setFrameSeekError(null);
+                setIsFrameSeekDirty(true);
+              }}
+              onBlur={(event) => {
+                const inputValue = event.currentTarget.value;
+                if (shouldCommitFrameSeekOnBlur(inputValue, playheadFrame, isFrameSeekDirty)) {
+                  commitFrameSeek(inputValue);
+                } else {
+                  setFrameSeekDraft(null);
+                  setFrameSeekError(null);
+                }
+              }}
+              style={{
+                width: "72px",
+                height: "28px",
+                padding: "0 6px",
+                border: "1px solid var(--border-color)",
+                borderRadius: "4px",
+                backgroundColor: "var(--bg-surface)",
+                color: "var(--text-main)",
+                fontFamily: "ui-monospace, monospace",
+                fontSize: "12px",
+              }}
+            />
+            <button className="btn-action" type="submit" style={{ padding: "4px 7px" }}>
+              Go
+            </button>
+          </form>
+          {frameSeekError && (
+            <span id="preview-frame-seek-error" role="alert" style={{ fontSize: "11px", color: "var(--accent-warning)" }}>
+              {frameSeekError}
+            </span>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>

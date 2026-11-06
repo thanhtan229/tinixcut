@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Project, TimelineItem } from "../types/project";
 
 export interface TimelineShortcutsCallbacks {
+  enabled?: boolean;
   project: Project | null;
   selectedItemIds: Set<string>;
   primarySelectedItemId: string | null;
@@ -9,6 +10,8 @@ export interface TimelineShortcutsCallbacks {
   onPlayPauseToggle: () => void;
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDuplicatePrimary: (itemId: string) => void;
+  onCopySelected: () => void;
+  onPasteSelected: () => void;
   onDeleteSelected: (itemIds: string[]) => void;
   onRippleDeletePrimary: (itemId: string) => void;
   onTrimHeadToPlayhead: (itemId: string, newStart: number, newDuration: number) => void;
@@ -18,8 +21,8 @@ export interface TimelineShortcutsCallbacks {
   onToggleSnapping: () => void;
 }
 
-export function isFocusInInput(
-  targetElement?: { tagName?: string; isContentEditable?: boolean } | null
+export function shouldSuppressTimelineShortcutsForTarget(
+  targetElement?: { tagName?: string; isContentEditable?: boolean; role?: string } | null
 ): boolean {
   const active =
     targetElement !== undefined
@@ -30,11 +33,24 @@ export function isFocusInInput(
 
   if (!active) return false;
   const tagName = active.tagName ? active.tagName.toLowerCase() : "";
-  if (tagName === "input" || tagName === "textarea") return true;
+  if (["input", "textarea", "select", "button"].includes(tagName)) return true;
   if ("isContentEditable" in active && (active as { isContentEditable?: boolean }).isContentEditable) {
     return true;
   }
-  return false;
+  const role = "role" in active ? String((active as { role?: unknown }).role ?? "").toLowerCase() : "";
+  return ["button", "combobox", "listbox", "menuitem", "option", "slider", "spinbutton", "tab"].includes(role);
+}
+
+export function isTimelineClipShortcutTarget(
+  targetElement?: { closest?: (selector: string) => unknown } | null
+): boolean {
+  const active =
+    targetElement !== undefined
+      ? targetElement
+      : typeof document !== "undefined"
+      ? document.activeElement
+      : null;
+  return Boolean(active && typeof active.closest === "function" && active.closest('[data-timeline-clip="true"]'));
 }
 
 export function findClipForSplitAtPlayhead(
@@ -76,22 +92,46 @@ export function findClipForSplitAtPlayhead(
 export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
+  const enabled = callbacks.enabled ?? true;
 
   useEffect(() => {
+    if (!enabled) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Suppress all timeline shortcuts while editing inside text/input controls or when a dialog is open
+      if (callbacksRef.current.enabled === false) return;
+
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const isShift = e.shiftKey;
+      const isAlt = e.altKey;
+      const isClipboardShortcut = isCtrl && !isShift && !isAlt && ["c", "C", "v", "V"].includes(e.key);
+      const dialogIsOpen = typeof document !== "undefined" &&
+        Boolean(document.querySelector(".dialog-backdrop, [role='dialog']"));
+
+      // Timeline clips use role=button for keyboard accessibility. Allow only
+      // clipboard shortcuts on a focused clip; keep other focused controls isolated.
       if (
-        isFocusInInput() ||
-        (typeof document !== "undefined" &&
-          Boolean(document.querySelector(".dialog-backdrop, [role='dialog']")))
+        dialogIsOpen ||
+        (shouldSuppressTimelineShortcutsForTarget() &&
+          !(isClipboardShortcut && isTimelineClipShortcutTarget()))
       ) {
         return;
       }
 
       const cb = callbacksRef.current;
-      const isCtrl = e.ctrlKey || e.metaKey;
-      const isShift = e.shiftKey;
-      const isAlt = e.altKey;
+
+      // Ctrl/Cmd+C and Ctrl/Cmd+V -> same-project clip clipboard
+      if (isCtrl && !isShift && !isAlt && (e.key === "c" || e.key === "C")) {
+        if (cb.selectedItemIds.size > 0) {
+          e.preventDefault();
+          cb.onCopySelected();
+        }
+        return;
+      }
+      if (isCtrl && !isShift && !isAlt && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        cb.onPasteSelected();
+        return;
+      }
 
       // Space -> Play / Pause
       if (e.code === "Space" && !isCtrl && !isShift && !isAlt) {
@@ -213,5 +253,5 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [enabled]);
 }

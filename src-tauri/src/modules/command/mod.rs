@@ -4,18 +4,32 @@
 //! Handles baseRevision checks, idempotency receipts, atomic transactions, and dry-run/diff.
 
 use crate::modules::domain::id::*;
-use crate::modules::domain::time::{RationalTime, TimeRange};
+use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{
     grapheme_count, Asset, AssetDimensions, AudioCrossfade, ClipSpeed, CommandLedgerEntry, Crop,
     CutTransition, DomainError, FontReference, ItemKind, Keyframe, KeyframeEasing,
-    KeyframeProperty, MediaKind, PlacementMode, Project, ProjectSettings, RichTextSpan,
-    TextAnimation, TextBackgroundBox, TextFill, TextLayout, TextRichStyle, TextShadow, TextStroke,
-    TextStyle, TextTemplateReference, TimelineItem, Track, TrackKind, Transform, Transition,
-    TransitionKind, VisualEffectPreset, CURRENT_SCHEMA_VERSION,
+    KeyframeProperty, MediaKind, PlacementMode, Project, ProjectMarker, ProjectSettings,
+    RichTextSpan, TextAnimation, TextBackgroundBox, TextFill, TextLayout, TextRichStyle,
+    TextShadow, TextStroke, TextStyle, TextTemplateReference, TimelineItem, Track, TrackKind,
+    Transform, Transition, TransitionKind, VisualEffectPreset, CURRENT_SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
+
+fn gcd_u32(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.max(1)
+}
+
+fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.max(1)
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommandError {
@@ -113,6 +127,18 @@ pub enum CommandOperation {
     TrackDelete {
         track_id: String,
     },
+    TrackRename {
+        track_id: String,
+        name: String,
+    },
+    ProjectMarkerSet {
+        marker_id: Option<String>,
+        label: String,
+        position: RationalTime,
+    },
+    ProjectMarkerDelete {
+        marker_id: String,
+    },
     ClipCreate {
         track_id: String,
         item_id: Option<String>,
@@ -132,6 +158,15 @@ pub enum CommandOperation {
         item_id: String,
         new_timeline_range: TimeRange,
         new_source_range: TimeRange,
+    },
+    ClipSlip {
+        item_id: String,
+        new_source_start: RationalTime,
+    },
+    ClipRoll {
+        left_item_id: String,
+        right_item_id: String,
+        delta: RationalTime,
     },
     ClipSplit {
         item_id: String,
@@ -171,6 +206,18 @@ pub enum CommandOperation {
         track_id: String,
         muted: bool,
     },
+    TrackSoloSet {
+        track_id: String,
+        solo: bool,
+    },
+    TrackVolumeSet {
+        track_id: String,
+        volume: f32,
+    },
+    TrackLockSet {
+        track_id: String,
+        locked: bool,
+    },
     ProjectSettingsSet {
         width: u32,
         height: u32,
@@ -182,6 +229,22 @@ pub enum CommandOperation {
         item_id: String,
         volume: f32,
     },
+    ClipEmbeddedAudioSet {
+        item_id: String,
+        enabled: bool,
+    },
+    ClipAudioDetach {
+        item_id: String,
+        #[serde(default)]
+        detached_item_id: Option<String>,
+        #[serde(default)]
+        target_track_id: Option<String>,
+    },
+    ClipLinkSet {
+        video_item_id: String,
+        audio_item_id: String,
+        linked: bool,
+    },
     AssetImport {
         asset_id: Option<String>,
         name: String,
@@ -192,6 +255,10 @@ pub enum CommandOperation {
         file_size: u64,
         #[serde(default)]
         dimensions: Option<AssetDimensions>,
+    },
+    AssetRelink {
+        asset_id: String,
+        path: String,
     },
     ClipTextSet {
         item_id: String,
@@ -307,6 +374,10 @@ pub enum CommandOperation {
     ClipVisualEffectSet {
         item_id: String,
         visual_effect: VisualEffectPreset,
+    },
+    ClipColorAdjustmentsSet {
+        item_id: String,
+        color_adjustments: crate::modules::domain::ColorAdjustments,
     },
     ClipSpeedSet {
         item_id: String,
@@ -488,12 +559,18 @@ pub enum DiffChange {
     AssetImported {
         asset_id: String,
     },
+    AssetRelinked {
+        asset_id: String,
+    },
     ProjectSettingsModified {
         width: u32,
         height: u32,
     },
     ProjectCanvasBackgroundModified {
         color: String,
+    },
+    ProjectMarkerModified {
+        marker_id: String,
     },
     CutTransitionCreated {
         transition_id: String,
@@ -609,6 +686,7 @@ impl CommandService {
             updated_at: self.project.updated_at.clone(),
             client_registry: self.project.client_registry.clone(),
             command_ledger: Vec::new(),
+            markers: self.project.markers.clone(),
         };
         let mut changes = Vec::new();
         let mut warnings = Vec::new();
@@ -757,6 +835,7 @@ impl CommandService {
             updated_at: self.project.updated_at.clone(),
             client_registry: self.project.client_registry.clone(),
             command_ledger: Vec::new(),
+            markers: self.project.markers.clone(),
         };
         let mut staged_receipts = Vec::new();
         let mut staged_ledger_entries = Vec::new();
@@ -803,8 +882,10 @@ impl CommandService {
                     Some(DiffChange::TrackDeleted { track_id }) => (None, Some(track_id.clone())),
                     Some(DiffChange::TrackModified { track_id }) => (None, Some(track_id.clone())),
                     Some(DiffChange::AssetImported { asset_id }) => (Some(asset_id.clone()), None),
+                    Some(DiffChange::AssetRelinked { asset_id }) => (Some(asset_id.clone()), None),
                     Some(DiffChange::ProjectSettingsModified { .. })
-                    | Some(DiffChange::ProjectCanvasBackgroundModified { .. }) => (None, None),
+                    | Some(DiffChange::ProjectCanvasBackgroundModified { .. })
+                    | Some(DiffChange::ProjectMarkerModified { .. }) => (None, None),
                     Some(DiffChange::CutTransitionCreated {
                         transition_id,
                         track_id,
@@ -863,6 +944,7 @@ impl CommandService {
             self.project.tracks = staged_project.tracks;
             self.project.assets = staged_project.assets;
             self.project.settings = staged_project.settings;
+            self.project.markers = staged_project.markers;
 
             // Update ClientRegistry for structured identity
             if let Some(ref cid) = client_id {
@@ -1112,8 +1194,25 @@ impl CommandService {
             });
         }
 
+        // Linked audio/video counterparts travel together, even if only one
+        // side was selected in the timeline.
+        let mut effective_item_ids = item_ids.to_vec();
+        let mut cursor = 0;
+        while cursor < effective_item_ids.len() {
+            let id = effective_item_ids[cursor].clone();
+            cursor += 1;
+            let linked_id = project
+                .find_item_and_track(&id)
+                .and_then(|(_, item)| item.linked_item_id.clone());
+            if let Some(linked_id) = linked_id {
+                if !effective_item_ids.contains(&linked_id) {
+                    effective_item_ids.push(linked_id);
+                }
+            }
+        }
+
         let mut id_set = std::collections::HashSet::new();
-        for id in item_ids {
+        for id in &effective_item_ids {
             if !id_set.insert(id.as_str()) {
                 return Err(CommandError::OperationValidationFailed {
                     operation_id: op_id.to_string(),
@@ -1129,9 +1228,9 @@ impl CommandService {
             duration: RationalTime,
         }
 
-        let mut specs = Vec::with_capacity(item_ids.len());
+        let mut specs = Vec::with_capacity(effective_item_ids.len());
 
-        for id in item_ids {
+        for id in &effective_item_ids {
             let mut found = None;
             for track in &project.tracks {
                 if let Some(item) = track.find_item(id) {
@@ -1638,6 +1737,24 @@ impl CommandService {
                         operation_id: op_id.to_string(),
                         message: format!("Item '{}' not found", item_id),
                     })?;
+                let linked_item_id = item.linked_item_id.clone();
+                let move_delta = *target_start - item.timeline_range.start;
+                if let Some(linked_id) = &linked_item_id {
+                    let linked_track = project
+                        .tracks
+                        .iter()
+                        .find(|track| track.find_item(linked_id).is_some())
+                        .ok_or_else(|| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked item '{}' was not found", linked_id),
+                        })?;
+                    if linked_track.locked {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked track '{}' is locked", linked_track.track_id),
+                        });
+                    }
+                }
 
                 // Update timeline range
                 let new_range = TimeRange::new(*target_start, item.timeline_range.duration);
@@ -1652,10 +1769,25 @@ impl CommandService {
                 })?;
 
                 dest_track.items.push(item);
+                if let Some(linked_id) = &linked_item_id {
+                    let linked_item = project
+                        .tracks
+                        .iter_mut()
+                        .find_map(|track| track.find_item_mut(linked_id))
+                        .expect("validated linked item remains present");
+                    let linked_start = linked_item.timeline_range.start + move_delta;
+                    linked_item.timeline_range =
+                        TimeRange::new(linked_start, linked_item.timeline_range.duration);
+                }
 
                 // Dependent transition reconciliation for move
                 Self::reconcile_dependent_transitions_after_move(project, item_id, op_id);
                 Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
+                if let Some(linked_id) = &linked_item_id {
+                    Self::reconcile_dependent_audio_crossfades_after_edit(
+                        project, linked_id, op_id,
+                    );
+                }
 
                 Ok(Some(DiffChange::ClipMoved {
                     item_id: item_id.clone(),
@@ -1668,6 +1800,32 @@ impl CommandService {
                 new_timeline_range,
                 new_source_range,
             } => {
+                let linked_item_id = project
+                    .find_item_and_track(item_id)
+                    .and_then(|(_, item)| item.linked_item_id.clone());
+                if let Some(linked_id) = &linked_item_id {
+                    if let Some(track) = project
+                        .tracks
+                        .iter()
+                        .find(|track| track.find_item(linked_id).is_some() && track.locked)
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked track '{}' is locked", track.track_id),
+                        });
+                    }
+                }
+                if let Some(track) = project
+                    .tracks
+                    .iter()
+                    .find(|track| track.find_item(item_id).is_some() && track.locked)
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' is locked", track.track_id),
+                    });
+                }
+
                 // Trim duration policy must be checked against the resulting clip
                 // before any transition reconciliation mutates project state.
                 if let Some(item) = project
@@ -1749,8 +1907,33 @@ impl CommandService {
                     });
                 }
 
+                if let Some(linked_id) = &linked_item_id {
+                    let linked = project
+                        .tracks
+                        .iter_mut()
+                        .find_map(|track| track.find_item_mut(linked_id))
+                        .expect("validated linked item remains present");
+                    let source_shift = new_source_range.start - linked.source_range.start;
+                    for keyframe in &mut linked.keyframes {
+                        if keyframe.property == crate::modules::domain::KeyframeProperty::Volume {
+                            keyframe.offset = keyframe.offset - source_shift;
+                        }
+                    }
+                    linked.timeline_range = *new_timeline_range;
+                    linked.source_range = *new_source_range;
+                    linked.validate()?;
+                }
+
                 Self::cleanup_broken_transitions_after_trim(project, item_id);
+                if let Some(linked_id) = &linked_item_id {
+                    Self::cleanup_broken_transitions_after_trim(project, linked_id);
+                }
                 Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
+                if let Some(linked_id) = &linked_item_id {
+                    Self::reconcile_dependent_audio_crossfades_after_edit(
+                        project, linked_id, op_id,
+                    );
+                }
 
                 Ok(Some(DiffChange::ClipTrimmed {
                     item_id: item_id.clone(),
@@ -1763,6 +1946,17 @@ impl CommandService {
                 split_time,
                 new_right_item_id,
             } => {
+                if project
+                    .find_item_and_track(item_id)
+                    .and_then(|(_, item)| item.linked_item_id.as_ref())
+                    .is_some()
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Unlink the audio/video pair before splitting either clip"
+                            .to_string(),
+                    });
+                }
                 // Find clip
                 let mut split_result = None;
                 for track in &mut project.tracks {
@@ -2058,6 +2252,9 @@ impl CommandService {
                             right_source_duration,
                         );
                         right_item.keyframes = right_keyframes;
+                        // A split creates two adjacent pieces of one clip. Keep each
+                        // edge fade only on the fragment that still owns that edge.
+                        right_item.fade_in = None;
 
                         let orig_source_duration = item.source_range.duration;
                         let left_item = &mut track.items[pos];
@@ -2066,6 +2263,7 @@ impl CommandService {
                         left_item.source_range =
                             TimeRange::new(left_item.source_range.start, left_source_duration);
                         left_item.keyframes = left_keyframes;
+                        left_item.fade_out = None;
 
                         if let Some(ref mut anim) = left_item.text_animation {
                             anim.ensure_legacy_phase_anchors(orig_source_duration);
@@ -2142,6 +2340,9 @@ impl CommandService {
             }
 
             CommandOperation::ClipDelete { item_id } => {
+                let linked_item_id = project
+                    .find_item_and_track(item_id)
+                    .and_then(|(_, item)| item.linked_item_id.clone());
                 let mut found = false;
                 let mut removed_audio_crossfades = Vec::new();
                 for track in &mut project.tracks {
@@ -2168,6 +2369,27 @@ impl CommandService {
                         operation_id: op_id.to_string(),
                         message: format!("Item '{}' not found", item_id),
                     });
+                }
+
+                if let Some(linked_id) = &linked_item_id {
+                    for track in &mut project.tracks {
+                        if let Some(pos) = track
+                            .items
+                            .iter()
+                            .position(|item| &item.item_id == linked_id)
+                        {
+                            track.items.remove(pos);
+                            track.transitions.retain(|transition| {
+                                transition.left_item_id != *linked_id
+                                    && transition.right_item_id != *linked_id
+                            });
+                            track.audio_transitions.retain(|transition| {
+                                transition.left_item_id != *linked_id
+                                    && transition.right_item_id != *linked_id
+                            });
+                            break;
+                        }
+                    }
                 }
 
                 // The command receipt has a single-change shape; the project snapshot remains
@@ -2199,6 +2421,9 @@ impl CommandService {
                         operation_id: op_id.to_string(),
                         message: format!("Item '{}' not found", item_id),
                     })?;
+
+                // A duplicate is an independent clip and must not inherit a link to the source pair.
+                item.linked_item_id = None;
 
                 let id = new_item_id.clone().unwrap_or_else(generate_item_id);
                 item.item_id = id.clone();
@@ -2268,7 +2493,499 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::ClipSlip {
+                item_id,
+                new_source_start,
+            } => {
+                let (track_id, item) = project
+                    .tracks
+                    .iter()
+                    .find_map(|track| {
+                        track
+                            .find_item(item_id)
+                            .map(|item| (track.track_id.clone(), item.clone()))
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                let track = project.find_track(&track_id).expect("track was just found");
+                if track.locked {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' is locked", track_id),
+                    });
+                }
+                if let Some(linked_id) = &item.linked_item_id {
+                    let (linked_track, _) =
+                        project.find_item_and_track(linked_id).ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!("Linked item '{}' was not found", linked_id),
+                            }
+                        })?;
+                    if linked_track.locked {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked track '{}' is locked", linked_track.track_id),
+                        });
+                    }
+                }
+                let asset = item
+                    .asset_id
+                    .as_ref()
+                    .and_then(|asset_id| project.find_asset(asset_id))
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' has no available media asset", item_id),
+                    })?;
+                let asset_duration =
+                    asset
+                        .duration
+                        .ok_or_else(|| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Asset '{}' has no known duration", asset.asset_id),
+                        })?;
+                if new_source_start.semantic_lt(&RationalTime::zero(new_source_start.rate)) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Slip source start cannot be negative".to_string(),
+                    });
+                }
+                let new_source_range =
+                    TimeRange::new(*new_source_start, item.source_range.duration);
+                if new_source_range.end().semantic_gt(&asset_duration) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Slip would move item '{}' beyond the end of its media",
+                            item_id
+                        ),
+                    });
+                }
+                Self::reconcile_dependent_transitions_before_trim(
+                    project,
+                    item_id,
+                    &item.timeline_range,
+                    &new_source_range,
+                    None,
+                    op_id,
+                )?;
+                if let Some(linked_id) = &item.linked_item_id {
+                    Self::reconcile_dependent_transitions_before_trim(
+                        project,
+                        linked_id,
+                        &item.timeline_range,
+                        &new_source_range,
+                        None,
+                        op_id,
+                    )?;
+                }
+
+                let target = project
+                    .find_track_mut(&track_id)
+                    .and_then(|track| track.find_item_mut(item_id))
+                    .expect("item was just found");
+                target.source_range = new_source_range;
+                Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
+                if let Some(linked_id) = &item.linked_item_id {
+                    let linked = project
+                        .tracks
+                        .iter_mut()
+                        .find_map(|track| track.find_item_mut(linked_id))
+                        .expect("validated linked item remains present");
+                    linked.source_range = new_source_range;
+                    Self::reconcile_dependent_audio_crossfades_after_edit(
+                        project, linked_id, op_id,
+                    );
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipRoll {
+                left_item_id,
+                right_item_id,
+                delta,
+            } => {
+                let (track_id, left, right) = project
+                    .tracks
+                    .iter()
+                    .find_map(|track| {
+                        track
+                            .find_item(left_item_id)
+                            .zip(track.find_item(right_item_id))
+                            .map(|(left, right)| {
+                                (track.track_id.clone(), left.clone(), right.clone())
+                            })
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Roll clips must exist on the same track".to_string(),
+                    })?;
+                let track = project.find_track(&track_id).expect("track was just found");
+                if track.locked {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' is locked", track_id),
+                    });
+                }
+                if left.kind != right.kind
+                    || !matches!(left.kind, ItemKind::Video | ItemKind::Audio)
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Roll requires two adjacent clips of the same video or audio kind"
+                            .to_string(),
+                    });
+                }
+                for linked_id in [&left.linked_item_id, &right.linked_item_id]
+                    .into_iter()
+                    .flatten()
+                {
+                    let (linked_track, _) =
+                        project.find_item_and_track(linked_id).ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!("Linked item '{}' was not found", linked_id),
+                            }
+                        })?;
+                    if linked_track.locked {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked track '{}' is locked", linked_track.track_id),
+                        });
+                    }
+                }
+                let rate = project.settings.frame_rate;
+                let delta = delta.rescaled_to(rate);
+                if delta.value == 0
+                    || !left
+                        .timeline_range
+                        .end()
+                        .is_same_time(&right.timeline_range.start)
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Roll requires adjacent clips and a non-zero frame offset"
+                            .to_string(),
+                    });
+                }
+                let left_duration = left.timeline_range.duration + delta;
+                let right_start = right.timeline_range.start + delta;
+                let right_duration = right.timeline_range.duration - delta;
+                if left_duration.value <= 0 || right_duration.value <= 0 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Roll would make one of the clips empty".to_string(),
+                    });
+                }
+
+                let magnitude_value = delta.value.checked_abs().ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Roll offset is outside the supported range".to_string(),
+                    }
+                })?;
+                let signed_source_delta = |speed: ClipSpeed| -> Result<RationalTime, CommandError> {
+                    let (speed_num, speed_den) = match speed {
+                        ClipSpeed::Half => (1_u32, 2_u32),
+                        ClipSpeed::Normal => (1, 1),
+                        ClipSpeed::Double => (2, 1),
+                    };
+                    let rate_num =
+                        delta.rate.numerator.checked_mul(speed_den).ok_or_else(|| {
+                            CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Roll source timebase is outside the supported range"
+                                    .to_string(),
+                            }
+                        })?;
+                    let rate_den =
+                        delta
+                            .rate
+                            .denominator
+                            .checked_mul(speed_num)
+                            .ok_or_else(|| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Roll source timebase is outside the supported range"
+                                    .to_string(),
+                            })?;
+                    let divisor = gcd_u32(rate_num, rate_den);
+                    let exact_source_rate = FrameRate::new(rate_num / divisor, rate_den / divisor);
+                    let magnitude = RationalTime::new(magnitude_value, delta.rate);
+                    let source = speed
+                        .source_duration_for(magnitude, exact_source_rate)
+                        .map_err(|error| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        })?;
+                    Ok(RationalTime::new(
+                        if delta.value < 0 {
+                            -source.value
+                        } else {
+                            source.value
+                        },
+                        source.rate,
+                    ))
+                };
+                let left_source_delta = signed_source_delta(left.speed)?;
+                let right_source_delta = signed_source_delta(right.speed)?;
+                let common_source_rate =
+                    |rates: [FrameRate; 3]| -> Result<FrameRate, CommandError> {
+                        let mut common = 1_u64;
+                        for rate in rates {
+                            let next = u64::from(rate.numerator);
+                            let divisor = gcd_u64(common, next);
+                            common = (common / divisor).checked_mul(next).ok_or_else(|| {
+                                CommandError::OperationValidationFailed {
+                                    operation_id: op_id.to_string(),
+                                    message: "Roll source timebase is outside the supported range"
+                                        .to_string(),
+                                }
+                            })?;
+                        }
+                        if common == 0 || common > u64::from(u32::MAX) {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Roll source timebase is outside the supported range"
+                                    .to_string(),
+                            });
+                        }
+                        Ok(FrameRate::new(common as u32, 1))
+                    };
+                let left_exact_rate = common_source_rate([
+                    left.source_range.start.rate,
+                    left.source_range.duration.rate,
+                    left_source_delta.rate,
+                ])?;
+                let right_exact_rate = common_source_rate([
+                    right.source_range.start.rate,
+                    right.source_range.duration.rate,
+                    right_source_delta.rate,
+                ])?;
+                let left_delta = left_source_delta.rescaled_to(left_exact_rate);
+                let right_delta = right_source_delta.rescaled_to(right_exact_rate);
+                let left_source_range = TimeRange::new(
+                    left.source_range.start.rescaled_to(left_exact_rate),
+                    left.source_range.duration.rescaled_to(left_exact_rate) + left_delta,
+                );
+                let right_source_range = TimeRange::new(
+                    right.source_range.start.rescaled_to(right_exact_rate) + right_delta,
+                    right.source_range.duration.rescaled_to(right_exact_rate) - right_delta,
+                );
+                for (item_id, item, source_range) in [
+                    (left_item_id, &left, &left_source_range),
+                    (right_item_id, &right, &right_source_range),
+                ] {
+                    if source_range
+                        .start
+                        .semantic_lt(&RationalTime::zero(source_range.start.rate))
+                        || source_range.duration.value <= 0
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Roll would make source range for '{}' invalid",
+                                item_id
+                            ),
+                        });
+                    }
+                    let asset = item
+                        .asset_id
+                        .as_ref()
+                        .and_then(|asset_id| project.find_asset(asset_id))
+                        .ok_or_else(|| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Roll item '{}' has no available asset", item_id),
+                        })?;
+                    let asset_duration =
+                        asset
+                            .duration
+                            .ok_or_else(|| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: format!(
+                                    "Asset '{}' has no known duration",
+                                    asset.asset_id
+                                ),
+                            })?;
+                    if source_range.end().semantic_gt(&asset_duration) {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!(
+                                "Roll would move '{}' beyond the end of its media",
+                                item_id
+                            ),
+                        });
+                    }
+                }
+
+                let track = project
+                    .find_track_mut(&track_id)
+                    .expect("track was just found");
+                let left_index = track
+                    .items
+                    .iter()
+                    .position(|item| item.item_id == *left_item_id)
+                    .expect("left item was just found");
+                let right_index = track
+                    .items
+                    .iter()
+                    .position(|item| item.item_id == *right_item_id)
+                    .expect("right item was just found");
+                {
+                    let left_mut = &mut track.items[left_index];
+                    left_mut.timeline_range.duration = left_duration;
+                    left_mut.source_range = left_source_range;
+                    left_mut.validate().map_err(|error| {
+                        CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                }
+                {
+                    let right_mut = &mut track.items[right_index];
+                    right_mut.timeline_range.start = right_start;
+                    right_mut.timeline_range.duration = right_duration;
+                    right_mut.source_range = right_source_range;
+                    right_mut.validate().map_err(|error| {
+                        CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                }
+
+                for (linked_id, timeline_range, source_range) in [
+                    (
+                        &left.linked_item_id,
+                        TimeRange::new(left.timeline_range.start, left_duration),
+                        left_source_range,
+                    ),
+                    (
+                        &right.linked_item_id,
+                        TimeRange::new(right_start, right_duration),
+                        right_source_range,
+                    ),
+                ] {
+                    if let Some(linked_id) = linked_id {
+                        let linked = project
+                            .tracks
+                            .iter_mut()
+                            .find_map(|track| track.find_item_mut(linked_id))
+                            .expect("validated linked item remains present");
+                        linked.timeline_range = timeline_range;
+                        linked.source_range = source_range;
+                        linked.validate()?;
+                    }
+                }
+
+                let transitions: Vec<_> = project
+                    .find_track(&track_id)
+                    .expect("track was just found")
+                    .transitions
+                    .iter()
+                    .filter(|transition| {
+                        transition.left_item_id == *left_item_id
+                            || transition.right_item_id == *left_item_id
+                            || transition.left_item_id == *right_item_id
+                            || transition.right_item_id == *right_item_id
+                    })
+                    .cloned()
+                    .collect();
+                for transition in transitions {
+                    Self::validate_cut_transition_handles(
+                        project,
+                        &track_id,
+                        &transition.left_item_id,
+                        &transition.right_item_id,
+                        transition.duration,
+                        op_id,
+                    )?;
+                }
+                let crossfades: Vec<_> = project
+                    .find_track(&track_id)
+                    .expect("track was just found")
+                    .audio_transitions
+                    .iter()
+                    .filter(|crossfade| {
+                        crossfade.left_item_id == *left_item_id
+                            || crossfade.right_item_id == *left_item_id
+                            || crossfade.left_item_id == *right_item_id
+                            || crossfade.right_item_id == *right_item_id
+                    })
+                    .cloned()
+                    .collect();
+                for crossfade in crossfades {
+                    Self::validate_audio_crossfade_handles(
+                        project,
+                        &track_id,
+                        &crossfade.left_item_id,
+                        &crossfade.right_item_id,
+                        crossfade.duration,
+                        op_id,
+                    )?;
+                }
+
+                for linked_id in [&left.linked_item_id, &right.linked_item_id]
+                    .into_iter()
+                    .flatten()
+                {
+                    let (linked_track, _) = project
+                        .find_item_and_track(linked_id)
+                        .expect("validated linked item remains present");
+                    let linked_track_id = linked_track.track_id.clone();
+                    let transitions = linked_track.transitions.clone();
+                    let crossfades = linked_track.audio_transitions.clone();
+                    for transition in transitions.iter().filter(|transition| {
+                        transition.left_item_id == *linked_id
+                            || transition.right_item_id == *linked_id
+                    }) {
+                        Self::validate_cut_transition_handles(
+                            project,
+                            &linked_track_id,
+                            &transition.left_item_id,
+                            &transition.right_item_id,
+                            transition.duration,
+                            op_id,
+                        )?;
+                    }
+                    for crossfade in crossfades.iter().filter(|crossfade| {
+                        crossfade.left_item_id == *linked_id
+                            || crossfade.right_item_id == *linked_id
+                    }) {
+                        Self::validate_audio_crossfade_handles(
+                            project,
+                            &linked_track_id,
+                            &crossfade.left_item_id,
+                            &crossfade.right_item_id,
+                            crossfade.duration,
+                            op_id,
+                        )?;
+                    }
+                }
+
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: left_item_id.clone(),
+                }))
+            }
+
             CommandOperation::ClipCropSet { item_id, crop } => {
+                let crop_values = [crop.top, crop.bottom, crop.left, crop.right];
+                if crop_values
+                    .iter()
+                    .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+                    || crop.top + crop.bottom >= 1.0
+                    || crop.left + crop.right >= 1.0
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Crop edges must be finite values in [0, 1] and leave a visible area on both axes".to_string(),
+                    });
+                }
                 let mut found = false;
                 for track in &mut project.tracks {
                     if let Some(item) = track.find_item_mut(item_id) {
@@ -2358,6 +3075,85 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::TrackRename { track_id, name } => {
+                let name = name.trim();
+                if name.is_empty() || name.chars().count() > 64 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Track name must contain 1 to 64 characters".to_string(),
+                    });
+                }
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                track.name = name.to_string();
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::ProjectMarkerSet {
+                marker_id,
+                label,
+                position,
+            } => {
+                let label = label.trim();
+                if label.is_empty() || label.chars().count() > 64 || position.value < 0 {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Marker label must contain 1 to 64 characters and its position must be non-negative".to_string(),
+                    });
+                }
+                let id = if let Some(id) = marker_id {
+                    id.clone()
+                } else {
+                    crate::modules::domain::id::generate_marker_id()
+                };
+                let marker = ProjectMarker {
+                    marker_id: id.clone(),
+                    label: label.to_string(),
+                    position: position.rescaled_to(project.settings.frame_rate),
+                };
+                marker
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+                if let Some(existing) = project
+                    .markers
+                    .iter_mut()
+                    .find(|marker| marker.marker_id == id)
+                {
+                    *existing = marker;
+                } else {
+                    project.markers.push(marker);
+                }
+                project
+                    .markers
+                    .sort_by(|left, right| left.position.semantic_cmp(&right.position));
+                Ok(Some(DiffChange::ProjectMarkerModified { marker_id: id }))
+            }
+
+            CommandOperation::ProjectMarkerDelete { marker_id } => {
+                let original_len = project.markers.len();
+                project
+                    .markers
+                    .retain(|marker| marker.marker_id != *marker_id);
+                if project.markers.len() == original_len {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Marker '{}' not found", marker_id),
+                    });
+                }
+                Ok(Some(DiffChange::ProjectMarkerModified {
+                    marker_id: marker_id.clone(),
+                }))
+            }
+
             CommandOperation::TrackMuteSet { track_id, muted } => {
                 let track = project.find_track_mut(track_id).ok_or_else(|| {
                     CommandError::OperationValidationFailed {
@@ -2366,6 +3162,51 @@ impl CommandService {
                     }
                 })?;
                 track.muted = *muted;
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::TrackSoloSet { track_id, solo } => {
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                track.solo = *solo;
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::TrackVolumeSet { track_id, volume } => {
+                if !volume.is_finite() || !(0.0..=2.0).contains(volume) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Track volume must be finite and between 0.0 and 2.0".to_string(),
+                    });
+                }
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                track.volume = *volume;
+                Ok(Some(DiffChange::TrackModified {
+                    track_id: track_id.clone(),
+                }))
+            }
+
+            CommandOperation::TrackLockSet { track_id, locked } => {
+                let track = project.find_track_mut(track_id).ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Track '{}' not found", track_id),
+                    }
+                })?;
+                track.locked = *locked;
                 Ok(Some(DiffChange::TrackModified {
                     track_id: track_id.clone(),
                 }))
@@ -2391,6 +3232,295 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::ClipEmbeddedAudioSet { item_id, enabled } => {
+                let mut found = false;
+                for track in &mut project.tracks {
+                    if let Some(item) = track.find_item_mut(item_id) {
+                        if item.kind != ItemKind::Video {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Embedded audio can only be controlled on video clips"
+                                    .to_string(),
+                            });
+                        }
+                        if *enabled && item.linked_item_id.is_some() {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: "Unlink detached audio before re-enabling embedded audio"
+                                    .to_string(),
+                            });
+                        }
+                        item.embedded_audio_enabled = *enabled;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    });
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipAudioDetach {
+                item_id,
+                detached_item_id,
+                target_track_id,
+            } => {
+                let (video, source_track_id, asset_path) = project
+                    .find_item_and_track(item_id)
+                    .map(|(track, item)| {
+                        let path = item
+                            .asset_id
+                            .as_ref()
+                            .and_then(|asset_id| project.find_asset(asset_id))
+                            .map(|asset| asset.path.clone());
+                        (item.clone(), track.track_id.clone(), path)
+                    })
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if video.kind != ItemKind::Video || !video.embedded_audio_enabled {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Detach requires a video clip with enabled embedded audio"
+                            .to_string(),
+                    });
+                }
+                if video.linked_item_id.is_some() {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Video clip already has a linked audio item".to_string(),
+                    });
+                }
+                let asset_id = video.asset_id.clone().ok_or_else(|| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Video clip has no media asset".to_string(),
+                    }
+                })?;
+                let asset_path =
+                    asset_path.ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Video clip references a missing media asset".to_string(),
+                    })?;
+                let metadata = crate::FFmpegService::probe_file(std::path::Path::new(&asset_path))
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Cannot verify the embedded audio stream: {error}"),
+                    })?;
+                if metadata.audio_codec.as_deref().is_none_or(str::is_empty) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Source video has no audio stream to detach".to_string(),
+                    });
+                }
+
+                let selected_track_id = if let Some(track_id) = target_track_id {
+                    let track = project.find_track(track_id).ok_or_else(|| {
+                        CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Audio track '{}' not found", track_id),
+                        }
+                    })?;
+                    if track.kind != TrackKind::Audio
+                        || track.locked
+                        || track
+                            .items
+                            .iter()
+                            .any(|item| item.timeline_range.overlaps(&video.timeline_range))
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: "Target audio track is locked, has the wrong kind, or overlaps the detached clip".to_string(),
+                        });
+                    }
+                    track_id.clone()
+                } else if let Some(track) = project.tracks.iter().find(|track| {
+                    track.kind == TrackKind::Audio
+                        && !track.locked
+                        && !track
+                            .items
+                            .iter()
+                            .any(|item| item.timeline_range.overlaps(&video.timeline_range))
+                }) {
+                    track.track_id.clone()
+                } else {
+                    let track = Track::new("Detached Video Audio".to_string(), TrackKind::Audio);
+                    let track_id = track.track_id.clone();
+                    project.tracks.push(track);
+                    track_id
+                };
+
+                let mut audio = TimelineItem::new(
+                    Some(asset_id),
+                    format!("{} (Audio)", video.name),
+                    ItemKind::Audio,
+                    video.timeline_range,
+                    video.source_range,
+                )
+                .map_err(|error| CommandError::OperationValidationFailed {
+                    operation_id: op_id.to_string(),
+                    message: error.to_string(),
+                })?;
+                audio.item_id = detached_item_id
+                    .clone()
+                    .unwrap_or_else(crate::modules::domain::id::generate_item_id);
+                if audio.item_id == video.item_id {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Detached audio item ID must differ from the source video item ID"
+                            .to_string(),
+                    });
+                }
+                if project.find_item_and_track(&audio.item_id).is_some() {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Detached audio item ID '{}' already exists",
+                            audio.item_id
+                        ),
+                    });
+                }
+                audio.linked_item_id = Some(video.item_id.clone());
+                let audio_item_id = audio.item_id.clone();
+                audio.speed = video.speed;
+                audio.volume = video.volume;
+                audio.fade_in = video.fade_in;
+                audio.fade_out = video.fade_out;
+                audio.keyframes = video
+                    .keyframes
+                    .into_iter()
+                    .filter(|keyframe| {
+                        keyframe.property == crate::modules::domain::KeyframeProperty::Volume
+                    })
+                    .collect();
+                audio.embedded_audio_enabled = false;
+                audio
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
+
+                project
+                    .find_track_mut(&selected_track_id)
+                    .expect("validated target audio track")
+                    .items
+                    .push(audio);
+                project
+                    .find_track_mut(&source_track_id)
+                    .expect("source video track remains present")
+                    .find_item_mut(item_id)
+                    .expect("source video item remains present")
+                    .embedded_audio_enabled = false;
+                project
+                    .find_track_mut(&source_track_id)
+                    .expect("source video track remains present")
+                    .find_item_mut(item_id)
+                    .expect("source video item remains present")
+                    .linked_item_id = Some(audio_item_id);
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipLinkSet {
+                video_item_id,
+                audio_item_id,
+                linked,
+            } => {
+                let (video_track_id, video_track_locked, video) = project
+                    .find_item_and_track(video_item_id)
+                    .map(|(track, item)| (track.track_id.clone(), track.locked, item.clone()))
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Video item '{}' not found", video_item_id),
+                    })?;
+                let (audio_track_id, audio_track_locked, audio) = project
+                    .find_item_and_track(audio_item_id)
+                    .map(|(track, item)| (track.track_id.clone(), track.locked, item.clone()))
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Audio item '{}' not found", audio_item_id),
+                    })?;
+                if video.kind != ItemKind::Video || audio.kind != ItemKind::Audio {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "ClipLinkSet requires one Video item and one Audio item"
+                            .to_string(),
+                    });
+                }
+                if video_track_id == audio_track_id {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Linked video and audio must be on different tracks".to_string(),
+                    });
+                }
+                if video_track_locked || audio_track_locked {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Cannot link or unlink clips on a locked track".to_string(),
+                    });
+                }
+                if *linked {
+                    if video.embedded_audio_enabled
+                        || video.linked_item_id.is_some()
+                        || audio.linked_item_id.is_some()
+                        || video.asset_id != audio.asset_id
+                        || video.timeline_range != audio.timeline_range
+                        || video.source_range != audio.source_range
+                        || video.speed != audio.speed
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: "Link requires detached embedded audio, matching media/ranges/speed, and unlinked clips".to_string(),
+                        });
+                    }
+                    project
+                        .find_track_mut(&video_track_id)
+                        .unwrap()
+                        .find_item_mut(video_item_id)
+                        .unwrap()
+                        .linked_item_id = Some(audio_item_id.clone());
+                    project
+                        .find_track_mut(&audio_track_id)
+                        .unwrap()
+                        .find_item_mut(audio_item_id)
+                        .unwrap()
+                        .linked_item_id = Some(video_item_id.clone());
+                } else {
+                    if video.linked_item_id.as_deref() != Some(audio_item_id.as_str())
+                        || audio.linked_item_id.as_deref() != Some(video_item_id.as_str())
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: "The specified clips are not linked to each other".to_string(),
+                        });
+                    }
+                    project
+                        .find_track_mut(&video_track_id)
+                        .unwrap()
+                        .find_item_mut(video_item_id)
+                        .unwrap()
+                        .linked_item_id = None;
+                    project
+                        .find_track_mut(&audio_track_id)
+                        .unwrap()
+                        .find_item_mut(audio_item_id)
+                        .unwrap()
+                        .linked_item_id = None;
+                }
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: video_item_id.clone(),
+                }))
+            }
+
             CommandOperation::AssetImport {
                 asset_id,
                 name,
@@ -2411,6 +3541,21 @@ impl CommandService {
                     dimensions.clone(),
                 );
                 Ok(Some(DiffChange::AssetImported { asset_id: id }))
+            }
+
+            CommandOperation::AssetRelink { asset_id, path } => {
+                crate::modules::media::MediaCatalog::relink_asset(
+                    project,
+                    asset_id,
+                    std::path::Path::new(path),
+                )
+                .map_err(|error| CommandError::OperationValidationFailed {
+                    operation_id: op_id.to_string(),
+                    message: error.to_string(),
+                })?;
+                Ok(Some(DiffChange::AssetRelinked {
+                    asset_id: asset_id.clone(),
+                }))
             }
 
             CommandOperation::ClipTextSet { item_id, text } => {
@@ -4012,6 +5157,38 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::ClipColorAdjustmentsSet {
+                item_id,
+                color_adjustments,
+            } => {
+                color_adjustments.validate().map_err(|error| {
+                    CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    }
+                })?;
+                let item = project
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|track| track.items.iter_mut())
+                    .find(|item| item.item_id == *item_id)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Image) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Color adjustments are supported only on video and image clips"
+                            .into(),
+                    });
+                }
+                item.color_adjustments = *color_adjustments;
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
             CommandOperation::ClipSpeedSet { item_id, speed } => {
                 let (item, asset_duration) = project
                     .tracks
@@ -4064,6 +5241,20 @@ impl CommandService {
                     });
                 }
 
+                let linked_item_id = item.linked_item_id.clone();
+                if let Some(linked_id) = &linked_item_id {
+                    if let Some(track) = project
+                        .tracks
+                        .iter()
+                        .find(|track| track.find_item(linked_id).is_some() && track.locked)
+                    {
+                        return Err(CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: format!("Linked track '{}' is locked", track.track_id),
+                        });
+                    }
+                }
+
                 Self::reconcile_dependent_transitions_before_trim(
                     project,
                     item_id,
@@ -4082,7 +5273,23 @@ impl CommandService {
                     }
                 }
 
+                if let Some(linked_id) = &linked_item_id {
+                    for track in &mut project.tracks {
+                        if let Some(linked) = track.find_item_mut(linked_id) {
+                            linked.speed = *speed;
+                            linked.source_range = new_source_range;
+                            linked.validate()?;
+                            break;
+                        }
+                    }
+                }
+
                 Self::reconcile_dependent_audio_crossfades_after_edit(project, item_id, op_id);
+                if let Some(linked_id) = &linked_item_id {
+                    Self::reconcile_dependent_audio_crossfades_after_edit(
+                        project, linked_id, op_id,
+                    );
+                }
                 Ok(Some(DiffChange::ClipModified {
                     item_id: item_id.clone(),
                 }))
@@ -4882,7 +6089,9 @@ impl CommandService {
                     reason: format!("Asset '{}' is missing", asset_id),
                 }
             })?;
-            if asset.media_kind != MediaKind::Audio {
+            // Audio items can refer to a video container after detaching its audio.
+            // Detach probes the stream; retain the same offline behavior as audio assets.
+            if !matches!(asset.media_kind, MediaKind::Audio | MediaKind::Video) {
                 return Err(CommandError::UnsupportedTransitionMedia {
                     operation_id: op_id.to_string(),
                     code: "UNSUPPORTED_AUDIO_CROSSFADE_MEDIA".to_string(),
@@ -5344,6 +6553,1676 @@ fn register_template_resources(
 mod tests {
     use super::*;
     use crate::modules::domain::time::FrameRate;
+
+    #[test]
+    fn phase52_crop_command_accepts_visible_area_and_rejects_invalid_edges_atomically() {
+        let (project, project_id, _, item_id, _) = setup_phase13_test_project();
+        let mut valid_service = CommandService::new(project.clone());
+        valid_service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase52_crop_valid".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase52_crop_valid".to_string(),
+                    operation: CommandOperation::ClipCropSet {
+                        item_id: item_id.clone(),
+                        crop: Crop {
+                            top: 0.2,
+                            bottom: 0.3,
+                            left: 0.1,
+                            right: 0.4,
+                        },
+                    },
+                }],
+            })
+            .expect("crop leaving visible content should apply");
+        assert_eq!(
+            valid_service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .crop
+                .top,
+            0.2
+        );
+
+        for invalid_crop in [
+            Crop {
+                top: -0.01,
+                ..Crop::default()
+            },
+            Crop {
+                right: f32::NAN,
+                ..Crop::default()
+            },
+            Crop {
+                top: 0.5,
+                bottom: 0.5,
+                ..Crop::default()
+            },
+            Crop {
+                left: 0.7,
+                right: 0.31,
+                ..Crop::default()
+            },
+        ] {
+            let mut service = CommandService::new(project.clone());
+            let error = service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: project_id.clone(),
+                    base_revision: 0,
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: Some("tx_phase52_crop_invalid".to_string()),
+                    operations: vec![OperationEnvelope {
+                        operation_id: "op_phase52_crop_invalid".to_string(),
+                        operation: CommandOperation::ClipCropSet {
+                            item_id: item_id.clone(),
+                            crop: invalid_crop,
+                        },
+                    }],
+                })
+                .expect_err("invalid crop must be rejected");
+            assert!(matches!(
+                error,
+                CommandError::OperationValidationFailed { .. }
+            ));
+            assert_eq!(service.project().revision, 0);
+            assert_eq!(
+                service.project().tracks[0]
+                    .find_item(&item_id)
+                    .unwrap()
+                    .crop,
+                Crop::default()
+            );
+        }
+    }
+
+    #[test]
+    fn phase50_close_gap_group_move_commits_all_downstream_clips_atomically() {
+        let (mut project, project_id, _, _, right_id) = setup_phase13_test_project();
+        let right = project.tracks[0]
+            .find_item_mut(&right_id)
+            .expect("right clip exists");
+        right.timeline_range = TimeRange::new(
+            RationalTime::new(45, FrameRate::FPS_30),
+            right.timeline_range.duration,
+        );
+        let mut later = right.clone();
+        later.item_id = "itm_3".to_string();
+        later.timeline_range = TimeRange::new(
+            RationalTime::new(75, FrameRate::FPS_30),
+            later.timeline_range.duration,
+        );
+        project.tracks[0].items.push(later);
+        let mut service = CommandService::new(project);
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_close_gap".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_close_gap".to_string(),
+                    operation: CommandOperation::ClipGroupMove {
+                        item_ids: vec![right_id.clone(), "itm_3".to_string()],
+                        delta: RationalTime::new(-15, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("closing a gap should commit");
+
+        assert_eq!(receipt.new_revision, 1);
+        let right = service.project().tracks[0]
+            .find_item(&right_id)
+            .expect("right clip remains");
+        assert!(right
+            .timeline_range
+            .start
+            .semantic_eq(&RationalTime::new(30, FrameRate::FPS_30)));
+        assert!(right
+            .timeline_range
+            .duration
+            .semantic_eq(&RationalTime::new(30, FrameRate::FPS_30)));
+        let later = service.project().tracks[0]
+            .find_item("itm_3")
+            .expect("downstream clip remains");
+        assert!(later
+            .timeline_range
+            .start
+            .semantic_eq(&RationalTime::new(60, FrameRate::FPS_30)));
+    }
+
+    #[test]
+    fn phase51_embedded_audio_toggle_is_a_video_clip_command() {
+        let (project, project_id, _, left_id, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_embedded_audio".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_embedded_audio".to_string(),
+                    operation: CommandOperation::ClipEmbeddedAudioSet {
+                        item_id: left_id.clone(),
+                        enabled: false,
+                    },
+                }],
+            })
+            .expect("disable embedded audio");
+        let clip = service.project().tracks[0].find_item(&left_id).unwrap();
+        assert!(!clip.embedded_audio_enabled);
+    }
+
+    #[test]
+    fn phase51_track_solo_is_a_command_service_edit() {
+        let (project, project_id, _, _, _) = setup_phase13_test_project();
+        let track_id = project.tracks[0].track_id.clone();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_track_solo".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_track_solo".to_string(),
+                    operation: CommandOperation::TrackSoloSet {
+                        track_id: track_id.clone(),
+                        solo: true,
+                    },
+                }],
+            })
+            .expect("solo track");
+        assert!(service.project().find_track(&track_id).unwrap().solo);
+        assert_eq!(service.revision(), 1);
+    }
+
+    #[test]
+    fn phase51_track_gain_is_a_validated_command_service_edit() {
+        let (project, project_id, _, _, _) = setup_phase13_test_project();
+        let track_id = project.tracks[0].track_id.clone();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_track_gain".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_track_gain".to_string(),
+                    operation: CommandOperation::TrackVolumeSet {
+                        track_id: track_id.clone(),
+                        volume: 0.5,
+                    },
+                }],
+            })
+            .expect("set half track gain");
+        assert!(
+            (service.project().find_track(&track_id).unwrap().volume - 0.5).abs() < f32::EPSILON
+        );
+        assert_eq!(service.revision(), 1);
+        let invalid = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 1,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase51_track_gain_invalid".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase51_track_gain_invalid".to_string(),
+                operation: CommandOperation::TrackVolumeSet {
+                    track_id,
+                    volume: f32::NAN,
+                },
+            }],
+        });
+        assert!(invalid.is_err());
+        assert_eq!(service.revision(), 1);
+    }
+
+    #[test]
+    fn phase51_detach_rejects_offline_source_without_mutation() {
+        let (project, project_id, _, item_id, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        let track_count = service.project().tracks.len();
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase51_detach_offline".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase51_detach_offline".to_string(),
+                operation: CommandOperation::ClipAudioDetach {
+                    item_id: item_id.clone(),
+                    detached_item_id: None,
+                    target_track_id: None,
+                },
+            }],
+        });
+        assert!(
+            result.is_err(),
+            "offline media must not be detached speculatively"
+        );
+        assert_eq!(service.revision(), 0);
+        assert_eq!(service.project().tracks.len(), track_count);
+        assert!(
+            service
+                .project()
+                .find_item_and_track(&item_id)
+                .unwrap()
+                .1
+                .embedded_audio_enabled
+        );
+    }
+
+    #[test]
+    fn phase51_detach_creates_one_aligned_audio_item_and_disables_video_audio() {
+        let (mut project, project_id, _, item_id, _) = setup_phase13_test_project();
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "tinixcut_phase51_detach_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&fixture_dir).unwrap();
+        let fixture_path = fixture_dir.join("video_with_audio.mp4");
+        let mut ffmpeg =
+            crate::modules::media::MediaBinaryResolver::command("ffmpeg").expect("FFmpeg sidecar");
+        let status = ffmpeg
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=160x90:r=30:d=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&fixture_path)
+            .status()
+            .expect("generate audio video fixture");
+        assert!(status.success(), "FFmpeg fixture generation failed");
+        project.assets[0].path = fixture_path.to_string_lossy().into_owned();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_detach_success".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_detach_success".to_string(),
+                    operation: CommandOperation::ClipAudioDetach {
+                        item_id: item_id.clone(),
+                        detached_item_id: Some("itm_detached_audio".to_string()),
+                        target_track_id: None,
+                    },
+                }],
+            })
+            .expect("detach embedded audio");
+        let source = service.project().find_item_and_track(&item_id).unwrap().1;
+        let (track, detached) = service
+            .project()
+            .find_item_and_track("itm_detached_audio")
+            .unwrap();
+        assert!(!source.embedded_audio_enabled);
+        assert_eq!(track.kind, TrackKind::Audio);
+        assert_eq!(detached.kind, ItemKind::Audio);
+        assert_eq!(detached.timeline_range, source.timeline_range);
+        assert_eq!(detached.source_range, source.source_range);
+        assert_eq!(source.linked_item_id.as_deref(), Some("itm_detached_audio"));
+        assert_eq!(detached.linked_item_id.as_deref(), Some(item_id.as_str()));
+        service
+            .project()
+            .validate()
+            .expect("detached pair is valid");
+        assert_eq!(service.revision(), 1);
+        std::fs::remove_dir_all(fixture_dir).ok();
+    }
+
+    #[test]
+    fn phase51_linked_group_move_keeps_sync_and_explicit_unlink_allows_independent_edit() {
+        let (mut project, project_id, _, video_id, _) = setup_phase13_test_project();
+        project.tracks[0].items[0].embedded_audio_enabled = false;
+        let mut audio_track = Track::new("Audio".to_string(), TrackKind::Audio);
+        audio_track.track_id = "trk_a1".to_string();
+        let mut audio = project.tracks[0].items[0].clone();
+        audio.item_id = "itm_audio_link".to_string();
+        audio.name = "Clip 1 Audio".to_string();
+        audio.kind = ItemKind::Audio;
+        audio.embedded_audio_enabled = false;
+        project.tracks[0].items[0].linked_item_id = Some(audio.item_id.clone());
+        audio.linked_item_id = Some(video_id.clone());
+        audio_track.items.push(audio);
+        project.tracks.push(audio_track);
+
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_linked_move".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_linked_move".to_string(),
+                    operation: CommandOperation::ClipGroupMove {
+                        item_ids: vec![video_id.clone()],
+                        delta: RationalTime::new(60, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("moving one selected linked item moves its counterpart");
+        let video = service.project().find_item_and_track(&video_id).unwrap().1;
+        let audio = service
+            .project()
+            .find_item_and_track("itm_audio_link")
+            .unwrap()
+            .1;
+        assert_eq!(
+            video.timeline_range.start,
+            RationalTime::new(60, FrameRate::FPS_30)
+        );
+        assert_eq!(audio.timeline_range.start, video.timeline_range.start);
+        service
+            .project()
+            .validate()
+            .expect("linked move remains valid");
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_linked_speed".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_linked_speed".to_string(),
+                    operation: CommandOperation::ClipSpeedSet {
+                        item_id: video_id.clone(),
+                        speed: ClipSpeed::Double,
+                    },
+                }],
+            })
+            .expect("speed edit mirrors across linked items");
+        let video = service.project().find_item_and_track(&video_id).unwrap().1;
+        let audio = service
+            .project()
+            .find_item_and_track("itm_audio_link")
+            .unwrap()
+            .1;
+        assert_eq!(video.speed, ClipSpeed::Double);
+        assert_eq!(audio.speed, video.speed);
+        assert_eq!(audio.source_range, video.source_range);
+        service
+            .project()
+            .validate()
+            .expect("speed edit remains valid");
+
+        let duplicate_audio = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: project_id.clone(),
+            base_revision: 2,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase51_link_prevents_duplicate_audio".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase51_link_prevents_duplicate_audio".to_string(),
+                operation: CommandOperation::ClipEmbeddedAudioSet {
+                    item_id: video_id.clone(),
+                    enabled: true,
+                },
+            }],
+        });
+        assert!(
+            duplicate_audio.is_err(),
+            "linked audio cannot be played twice"
+        );
+
+        let split = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: project_id.clone(),
+            base_revision: 2,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase51_linked_split_rejected".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase51_linked_split_rejected".to_string(),
+                operation: CommandOperation::ClipSplit {
+                    item_id: video_id.clone(),
+                    split_time: RationalTime::new(75, FrameRate::FPS_30),
+                    new_right_item_id: Some("itm_linked_split_right".to_string()),
+                },
+            }],
+        });
+        assert!(split.is_err(), "split must not orphan a linked counterpart");
+        assert_eq!(service.revision(), 2);
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 2,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase51_unlink".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase51_unlink".to_string(),
+                    operation: CommandOperation::ClipLinkSet {
+                        video_item_id: video_id.clone(),
+                        audio_item_id: "itm_audio_link".to_string(),
+                        linked: false,
+                    },
+                }],
+            })
+            .expect("unlink pair");
+        assert_eq!(
+            service
+                .project()
+                .find_item_and_track(&video_id)
+                .unwrap()
+                .1
+                .linked_item_id,
+            None
+        );
+        assert_eq!(
+            service
+                .project()
+                .find_item_and_track("itm_audio_link")
+                .unwrap()
+                .1
+                .linked_item_id,
+            None
+        );
+        service
+            .project()
+            .validate()
+            .expect("unlinked items remain valid");
+    }
+
+    #[test]
+    fn phase51_linked_slip_and_roll_preserve_pair_and_reject_locked_track() {
+        let (mut project, project_id, _, left_id, right_id) = setup_phase13_test_project();
+        let mut audio_track = Track::new("Linked audio".to_string(), TrackKind::Audio);
+        audio_track.track_id = "trk_linked_audio".to_string();
+        for video in &mut project.tracks[0].items {
+            let mut audio = video.clone();
+            audio.item_id = format!("audio_{}", video.item_id);
+            audio.kind = ItemKind::Audio;
+            audio.embedded_audio_enabled = false;
+            audio.linked_item_id = Some(video.item_id.clone());
+            video.embedded_audio_enabled = false;
+            video.linked_item_id = Some(audio.item_id.clone());
+            audio_track.items.push(audio);
+        }
+        project.tracks.push(audio_track);
+        project.tracks[1]
+            .audio_transitions
+            .push(crate::modules::domain::AudioCrossfade {
+                transition_id: "crossfade_linked_test".to_string(),
+                track_id: "trk_linked_audio".to_string(),
+                left_item_id: format!("audio_{left_id}"),
+                right_item_id: format!("audio_{right_id}"),
+                duration: RationalTime::new(10, FrameRate::FPS_30),
+            });
+        project.tracks[0]
+            .transitions
+            .push(crate::modules::domain::CutTransition {
+                transition_id: "transition_linked_test".to_string(),
+                track_id: "trk_v1".to_string(),
+                left_item_id: left_id.clone(),
+                right_item_id: right_id.clone(),
+                kind: TransitionKind::CrossDissolve,
+                duration: RationalTime::new(10, FrameRate::FPS_30),
+            });
+        project.validate().unwrap();
+        let mut service = CommandService::new(project);
+        let execute = |service: &mut CommandService, revision, operation| {
+            service.execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: revision,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(format!("tx_linked_{revision}")),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_linked_{revision}"),
+                    operation,
+                }],
+            })
+        };
+        let prior_slip = service.project().clone();
+        let slip_receipt = execute(
+            &mut service,
+            0,
+            CommandOperation::ClipSlip {
+                item_id: left_id.clone(),
+                new_source_start: RationalTime::new(11, FrameRate::FPS_30),
+            },
+        )
+        .unwrap();
+        let after_slip = service.project().clone();
+        let roll_receipt = execute(
+            &mut service,
+            1,
+            CommandOperation::ClipRoll {
+                left_item_id: left_id.clone(),
+                right_item_id: right_id.clone(),
+                delta: RationalTime::new(1, FrameRate::FPS_30),
+            },
+        )
+        .unwrap();
+        service.project().validate().unwrap();
+        assert_eq!(service.project().tracks[0].transitions.len(), 1);
+        assert_eq!(service.project().tracks[1].audio_transitions.len(), 1);
+        let after_roll = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(4);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "linked slip".to_string(),
+            transaction_id: slip_receipt.transaction_id,
+            prior_snapshot: prior_slip.clone(),
+            resulting_snapshot: after_slip.clone(),
+        });
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "linked roll".to_string(),
+            transaction_id: roll_receipt.transaction_id,
+            prior_snapshot: after_slip.clone(),
+            resulting_snapshot: after_roll.clone(),
+        });
+        let mut active = after_roll.clone();
+        history.undo(&mut active).unwrap();
+        assert_eq!(active.tracks, after_slip.tracks);
+        history.undo(&mut active).unwrap();
+        assert_eq!(active.tracks, prior_slip.tracks);
+        history.redo(&mut active).unwrap();
+        history.redo(&mut active).unwrap();
+        assert_eq!(active.tracks, after_roll.tracks);
+        for id in [&left_id, &right_id] {
+            let video = service.project().find_item_and_track(id).unwrap().1;
+            let audio = service
+                .project()
+                .find_item_and_track(video.linked_item_id.as_ref().unwrap())
+                .unwrap()
+                .1;
+            assert_eq!(video.source_range, audio.source_range);
+            assert_eq!(video.timeline_range, audio.timeline_range);
+        }
+        let mut locked = service.project().clone();
+        locked.tracks[1].locked = true;
+        let before = locked.clone();
+        let mut locked_service = CommandService::new(locked);
+        assert!(execute(
+            &mut locked_service,
+            2,
+            CommandOperation::ClipRoll {
+                left_item_id: left_id,
+                right_item_id: right_id,
+                delta: RationalTime::new(1, FrameRate::FPS_30),
+            }
+        )
+        .is_err());
+        assert_eq!(
+            serde_json::to_value(locked_service.project()).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+    }
+
+    #[test]
+    fn phase50_clip_roll_moves_cut_and_source_ranges_in_one_revision() {
+        let (project, project_id, _, left_id, right_id) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_roll".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_roll".to_string(),
+                    operation: CommandOperation::ClipRoll {
+                        left_item_id: left_id.clone(),
+                        right_item_id: right_id.clone(),
+                        delta: RationalTime::new(6, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("valid roll should commit");
+
+        assert_eq!(receipt.new_revision, 1);
+        let track = &service.project().tracks[0];
+        let left = track.find_item(&left_id).unwrap();
+        let right = track.find_item(&right_id).unwrap();
+        assert!(left
+            .timeline_range
+            .duration
+            .semantic_eq(&RationalTime::new(36, FrameRate::FPS_30)));
+        assert!(left
+            .source_range
+            .duration
+            .semantic_eq(&RationalTime::new(36, FrameRate::FPS_30)));
+        assert!(right
+            .timeline_range
+            .start
+            .semantic_eq(&RationalTime::new(36, FrameRate::FPS_30)));
+        assert!(right
+            .timeline_range
+            .duration
+            .semantic_eq(&RationalTime::new(24, FrameRate::FPS_30)));
+        assert!(right
+            .source_range
+            .start
+            .semantic_eq(&RationalTime::new(26, FrameRate::FPS_30)));
+        assert!(right
+            .source_range
+            .duration
+            .semantic_eq(&RationalTime::new(24, FrameRate::FPS_30)));
+        assert!(left
+            .timeline_range
+            .duration
+            .semantic_eq(&right.timeline_range.start));
+    }
+
+    #[test]
+    fn phase50_clip_roll_preserves_subtick_frame_offsets_exactly() {
+        let (mut project, project_id, _, left_id, right_id) = setup_phase13_test_project();
+        let source_rate = FrameRate::new(2, 1);
+        for asset in &mut project.assets {
+            asset.duration = Some(RationalTime::new(1200, FrameRate::FPS_30));
+        }
+        let track = &mut project.tracks[0];
+        let left = track.find_item_mut(&left_id).unwrap();
+        left.timeline_range.duration = RationalTime::new(450, FrameRate::FPS_30);
+        left.source_range = TimeRange::new(
+            RationalTime::new(10, source_rate),
+            RationalTime::new(30, source_rate),
+        );
+        let right = track.find_item_mut(&right_id).unwrap();
+        right.timeline_range.start = RationalTime::new(450, FrameRate::FPS_30);
+        right.timeline_range.duration = RationalTime::new(450, FrameRate::FPS_30);
+        right.source_range = TimeRange::new(
+            RationalTime::new(40, source_rate),
+            RationalTime::new(30, source_rate),
+        );
+        let mut service = CommandService::new(project);
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_roll_subtick".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_roll_subtick".to_string(),
+                    operation: CommandOperation::ClipRoll {
+                        left_item_id: left_id.clone(),
+                        right_item_id: right_id.clone(),
+                        delta: RationalTime::new(1, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("one project-frame roll should be represented exactly");
+
+        let track = &service.project().tracks[0];
+        let left = track.find_item(&left_id).unwrap();
+        let right = track.find_item(&right_id).unwrap();
+        assert!(left
+            .source_range
+            .start
+            .semantic_eq(&RationalTime::new(150, FrameRate::FPS_30)));
+        assert!(left
+            .source_range
+            .duration
+            .semantic_eq(&RationalTime::new(451, FrameRate::FPS_30)));
+        assert!(right
+            .source_range
+            .start
+            .semantic_eq(&RationalTime::new(601, FrameRate::FPS_30)));
+        assert!(right
+            .source_range
+            .duration
+            .semantic_eq(&RationalTime::new(449, FrameRate::FPS_30)));
+        assert!(left
+            .source_range
+            .end()
+            .semantic_eq(&right.source_range.start));
+        service
+            .project()
+            .validate()
+            .expect("exact roll remains valid");
+    }
+
+    #[test]
+    fn phase50_clip_roll_rejects_missing_source_handle_without_mutation() {
+        let (mut project, project_id, _, left_id, right_id) = setup_phase13_test_project();
+        project.tracks[0]
+            .find_item_mut(&right_id)
+            .unwrap()
+            .source_range
+            .start = RationalTime::zero(FrameRate::FPS_30);
+        let mut service = CommandService::new(project);
+        let before = service.project().clone();
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase50_roll_reject".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase50_roll_reject".to_string(),
+                operation: CommandOperation::ClipRoll {
+                    left_item_id: left_id,
+                    right_item_id: right_id,
+                    delta: RationalTime::new(-1, FrameRate::FPS_30),
+                },
+            }],
+        });
+        assert!(result.is_err());
+        assert_eq!(service.project().revision, before.revision);
+        assert_eq!(service.project().tracks[0].items, before.tracks[0].items);
+    }
+
+    #[test]
+    fn phase50_track_rename_trims_and_rejects_empty_names() {
+        let (project, project_id, _, _, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_rename".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_rename".to_string(),
+                    operation: CommandOperation::TrackRename {
+                        track_id: "trk_v1".to_string(),
+                        name: "  Main Video  ".to_string(),
+                    },
+                }],
+            })
+            .expect("valid name should commit");
+        assert_eq!(service.project().tracks[0].name, "Main Video");
+
+        let before = service.project().clone();
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 1,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_phase50_rename_invalid".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_phase50_rename_invalid".to_string(),
+                operation: CommandOperation::TrackRename {
+                    track_id: "trk_v1".to_string(),
+                    name: "   ".to_string(),
+                },
+            }],
+        });
+        assert!(result.is_err());
+        assert_eq!(service.project().tracks[0].name, before.tracks[0].name);
+        assert_eq!(service.project().revision, before.revision);
+    }
+
+    #[test]
+    fn phase50_project_markers_create_update_delete_and_undo_as_project_commands() {
+        let (project, project_id, _, _, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_marker_add".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_marker_add".to_string(),
+                    operation: CommandOperation::ProjectMarkerSet {
+                        marker_id: Some("mark_phase50".to_string()),
+                        label: "  Chorus  ".to_string(),
+                        position: RationalTime::new(45, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("marker should commit");
+        assert_eq!(service.project().markers[0].label, "Chorus");
+        assert!(service.project().markers[0]
+            .position
+            .semantic_eq(&RationalTime::new(45, FrameRate::FPS_30)));
+
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_marker_update".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_marker_update".to_string(),
+                    operation: CommandOperation::ProjectMarkerSet {
+                        marker_id: Some("mark_phase50".to_string()),
+                        label: "Verse".to_string(),
+                        position: RationalTime::new(60, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("marker update should commit");
+        assert_eq!(service.project().markers[0].label, "Verse");
+
+        let before_delete = service.project().clone();
+        let delete_receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 2,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_marker_delete".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_marker_delete".to_string(),
+                    operation: CommandOperation::ProjectMarkerDelete {
+                        marker_id: "mark_phase50".to_string(),
+                    },
+                }],
+            })
+            .expect("marker should delete");
+        assert!(service.project().markers.is_empty());
+        let after_delete = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(4);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Delete marker".to_string(),
+            transaction_id: delete_receipt.transaction_id,
+            prior_snapshot: before_delete,
+            resulting_snapshot: after_delete.clone(),
+        });
+        let mut active = after_delete;
+        history
+            .undo(&mut active)
+            .expect("marker delete should undo");
+        assert_eq!(active.markers.len(), 1);
+        assert_eq!(active.markers[0].label, "Verse");
+        history
+            .redo(&mut active)
+            .expect("marker delete should redo");
+        assert!(active.markers.is_empty());
+    }
+
+    #[test]
+    fn phase50_track_lock_blocks_group_move_without_partial_change() {
+        let (project, project_id, _, _, right_id) = setup_phase13_test_project();
+        let right_item = project.tracks[0]
+            .find_item(&right_id)
+            .expect("right clip exists")
+            .clone();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: project_id.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_lock_track".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_lock_track".to_string(),
+                    operation: CommandOperation::TrackLockSet {
+                        track_id: "trk_v1".to_string(),
+                        locked: true,
+                    },
+                }],
+            })
+            .expect("track lock should commit");
+
+        assert!(service.project().tracks[0].locked);
+        let before = service.project().clone();
+        let error = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_move_locked_track".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_move_locked_track".to_string(),
+                    operation: CommandOperation::ClipGroupMove {
+                        item_ids: vec![right_id.clone()],
+                        delta: RationalTime::new(1, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect_err("group move on a locked track must be rejected");
+
+        assert!(error.to_string().contains("locked"));
+        assert_eq!(
+            service.project(),
+            &before,
+            "failed move must not mutate project"
+        );
+
+        let error = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: service.project().project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_trim_locked_track".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_trim_locked_track".to_string(),
+                    operation: CommandOperation::ClipTrim {
+                        item_id: right_id,
+                        new_timeline_range: right_item.timeline_range,
+                        new_source_range: right_item.source_range,
+                    },
+                }],
+            })
+            .expect_err("slip/trim on a locked track must be rejected");
+
+        assert!(error.to_string().contains("locked"));
+        assert_eq!(
+            service.project(),
+            &before,
+            "failed trim must not mutate project"
+        );
+
+        let error = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: service.project().project_id.clone(),
+                base_revision: 1,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_slip_locked_track".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_slip_locked_track".to_string(),
+                    operation: CommandOperation::ClipSlip {
+                        item_id: "itm_2".to_string(),
+                        new_source_start: RationalTime::new(25, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect_err("slip on a locked track must be rejected");
+
+        assert!(error.to_string().contains("locked"));
+        assert_eq!(
+            service.project(),
+            &before,
+            "failed slip must not mutate project"
+        );
+    }
+
+    #[test]
+    fn phase50_clip_slip_changes_source_range_and_preserves_timeline_and_keyframes() {
+        let (mut project, project_id, _, left_id, _) = setup_phase13_test_project();
+        let item = project.tracks[0].find_item_mut(&left_id).unwrap();
+        item.keyframes.push(Keyframe::new(
+            KeyframeProperty::Opacity,
+            RationalTime::new(12, FrameRate::FPS_30),
+            0.75,
+        ));
+        let old_timeline_range = item.timeline_range;
+        let old_source_duration = item.source_range.duration;
+        let old_keyframes = item.keyframes.clone();
+        let mut service = CommandService::new(project);
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_clip_slip".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_phase50_clip_slip".to_string(),
+                    operation: CommandOperation::ClipSlip {
+                        item_id: left_id.clone(),
+                        new_source_start: RationalTime::new(20, FrameRate::FPS_30),
+                    },
+                }],
+            })
+            .expect("valid slip should commit");
+
+        let item = service.project().tracks[0].find_item(&left_id).unwrap();
+        assert_eq!(receipt.new_revision, 1);
+        assert_eq!(item.timeline_range, old_timeline_range);
+        assert_eq!(
+            item.source_range.start,
+            RationalTime::new(20, FrameRate::FPS_30)
+        );
+        assert_eq!(item.source_range.duration, old_source_duration);
+        assert_eq!(item.keyframes, old_keyframes);
+    }
+
+    #[test]
+    fn phase50_clip_slip_rejects_negative_and_past_end_source_ranges_atomically() {
+        let (project, project_id, _, left_id, _) = setup_phase13_test_project();
+        let before = project.clone();
+        let mut service = CommandService::new(project);
+        for (operation_id, transaction_id, start) in [
+            ("op_phase50_slip_negative", "tx_phase50_slip_negative", -1),
+            ("op_phase50_slip_past_end", "tx_phase50_slip_past_end", 71),
+        ] {
+            let error = service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: project_id.clone(),
+                    base_revision: 0,
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: Some(transaction_id.to_string()),
+                    operations: vec![OperationEnvelope {
+                        operation_id: operation_id.to_string(),
+                        operation: CommandOperation::ClipSlip {
+                            item_id: left_id.clone(),
+                            new_source_start: RationalTime::new(start, FrameRate::FPS_30),
+                        },
+                    }],
+                })
+                .expect_err("out-of-bounds source range must be rejected");
+            assert!(error.to_string().contains("Slip"));
+            assert_eq!(service.revision(), 0);
+            assert_eq!(service.project(), &before);
+        }
+    }
+
+    #[test]
+    fn phase50_insert_at_playhead_splits_shifts_and_creates_in_one_transaction() {
+        let (project, project_id, track_id, left_id, right_id) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_insert_at_playhead".to_string()),
+                operations: vec![
+                    OperationEnvelope {
+                        operation_id: "op_phase50_insert_split".to_string(),
+                        operation: CommandOperation::ClipSplit {
+                            item_id: left_id.clone(),
+                            split_time: RationalTime::new(15, FrameRate::FPS_30),
+                            new_right_item_id: Some("itm_1_right".to_string()),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_insert_shift".to_string(),
+                        operation: CommandOperation::ClipGroupMove {
+                            item_ids: vec!["itm_1_right".to_string(), right_id.clone()],
+                            delta: RationalTime::new(15, FrameRate::FPS_30),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_insert_create".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: track_id.clone(),
+                            item_id: Some("itm_inserted".to_string()),
+                            name: "Inserted source range".to_string(),
+                            kind: ItemKind::Video,
+                            asset_id: Some("ast_2".to_string()),
+                            timeline_start: RationalTime::new(15, FrameRate::FPS_30),
+                            duration: RationalTime::new(15, FrameRate::FPS_30),
+                            source_start: Some(RationalTime::new(0, FrameRate::FPS_30)),
+                        },
+                    },
+                ],
+            })
+            .expect("insert transaction should commit atomically");
+
+        let track = &service.project().tracks[0];
+        let start_of = |id: &str| track.find_item(id).unwrap().timeline_range.start.value;
+        assert_eq!(start_of(&left_id), 0);
+        assert_eq!(
+            track
+                .find_item(&left_id)
+                .unwrap()
+                .timeline_range
+                .duration
+                .value,
+            15
+        );
+        assert_eq!(start_of("itm_inserted"), 15);
+        assert_eq!(start_of("itm_1_right"), 30);
+        assert_eq!(start_of(&right_id), 45);
+    }
+
+    #[test]
+    fn phase50_overwrite_splits_deletes_and_creates_in_one_transaction() {
+        let (project, project_id, track_id, left_id, right_id) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_phase50_overwrite".to_string()),
+                operations: vec![
+                    OperationEnvelope {
+                        operation_id: "op_phase50_overwrite_split_left".to_string(),
+                        operation: CommandOperation::ClipSplit {
+                            item_id: left_id.clone(),
+                            split_time: RationalTime::new(15, FrameRate::FPS_30),
+                            new_right_item_id: Some("itm_overwrite_left_tail".to_string()),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_overwrite_split_right".to_string(),
+                        operation: CommandOperation::ClipSplit {
+                            item_id: right_id.clone(),
+                            split_time: RationalTime::new(45, FrameRate::FPS_30),
+                            new_right_item_id: Some("itm_overwrite_right_tail".to_string()),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_overwrite_delete_left".to_string(),
+                        operation: CommandOperation::ClipDelete {
+                            item_id: "itm_overwrite_left_tail".to_string(),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_overwrite_delete_right".to_string(),
+                        operation: CommandOperation::ClipDelete {
+                            item_id: right_id.clone(),
+                        },
+                    },
+                    OperationEnvelope {
+                        operation_id: "op_phase50_overwrite_create".to_string(),
+                        operation: CommandOperation::ClipCreate {
+                            track_id: track_id.clone(),
+                            item_id: Some("itm_overwrite".to_string()),
+                            name: "Replacement".to_string(),
+                            kind: ItemKind::Video,
+                            asset_id: Some("ast_1".to_string()),
+                            timeline_start: RationalTime::new(15, FrameRate::FPS_30),
+                            duration: RationalTime::new(30, FrameRate::FPS_30),
+                            source_start: Some(RationalTime::new(50, FrameRate::FPS_30)),
+                        },
+                    },
+                ],
+            })
+            .expect("overwrite transaction should commit atomically");
+
+        let track = service
+            .project()
+            .tracks
+            .iter()
+            .find(|track| track.track_id == track_id)
+            .unwrap();
+        assert_eq!(receipt.new_revision, 1);
+        assert_eq!(track.items.len(), 3);
+        assert_eq!(
+            track
+                .find_item("itm_overwrite")
+                .unwrap()
+                .timeline_range
+                .start
+                .value,
+            15
+        );
+        assert_eq!(
+            track
+                .find_item("itm_overwrite_right_tail")
+                .unwrap()
+                .timeline_range
+                .start
+                .value,
+            45
+        );
+        assert_eq!(
+            track
+                .find_item(&left_id)
+                .unwrap()
+                .timeline_range
+                .duration
+                .value,
+            15
+        );
+        assert!(track.find_item(&right_id).is_none());
+        assert!(track.find_item("itm_overwrite_left_tail").is_none());
+    }
+
+    #[test]
+    fn asset_relink_command_updates_path_and_verified_media_metadata() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_asset_relink_command_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let target_path = temp_dir.join("relocated.mp4");
+        create_relink_test_video(&target_path);
+
+        let mut project = create_test_project();
+        project.assets.push(Asset {
+            asset_id: "asset_relink_test".to_string(),
+            name: "source.mp4".to_string(),
+            path: temp_dir.join("missing.mp4").to_string_lossy().to_string(),
+            media_kind: crate::modules::domain::MediaKind::Video,
+            duration: None,
+            file_size: 16,
+            dimensions: None,
+        });
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+        let receipt = service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_asset_relink".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_asset_relink".to_string(),
+                    operation: CommandOperation::AssetRelink {
+                        asset_id: "asset_relink_test".to_string(),
+                        path: target_path.to_string_lossy().to_string(),
+                    },
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(receipt.new_revision, 1);
+        let asset = &service.project().assets[0];
+        assert_eq!(asset.path, target_path.to_string_lossy());
+        assert_eq!(asset.name, "relocated.mp4");
+        assert_eq!(
+            asset.file_size,
+            std::fs::metadata(&target_path).unwrap().len()
+        );
+        assert!(asset.duration.is_some());
+        assert!(asset.dimensions.is_some());
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn asset_relink_command_rejects_wrong_media_kind_and_rolls_back_transaction() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_asset_relink_wrong_kind_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let target_path = temp_dir.join("audio.wav");
+        let generated = crate::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
+            .unwrap()
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=2:frequency=440",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&target_path)
+            .status()
+            .unwrap();
+        assert!(generated.success());
+
+        let mut project = create_test_project();
+        project.assets.push(Asset {
+            asset_id: "asset_relink_video".to_string(),
+            name: "source.mp4".to_string(),
+            path: temp_dir.join("missing.mp4").to_string_lossy().to_string(),
+            media_kind: crate::modules::domain::MediaKind::Video,
+            duration: None,
+            file_size: 0,
+            dimensions: None,
+        });
+        let original = project.clone();
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_asset_relink_wrong_kind".to_string()),
+            operations: vec![
+                OperationEnvelope {
+                    operation_id: "op_create_track_before_invalid_relink".to_string(),
+                    operation: CommandOperation::TrackCreate {
+                        track_id: None,
+                        name: "Must roll back".to_string(),
+                        kind: crate::modules::domain::TrackKind::Video,
+                    },
+                },
+                OperationEnvelope {
+                    operation_id: "op_invalid_asset_relink".to_string(),
+                    operation: CommandOperation::AssetRelink {
+                        asset_id: "asset_relink_video".to_string(),
+                        path: target_path.to_string_lossy().to_string(),
+                    },
+                },
+            ],
+        });
+
+        assert!(result.is_err());
+        assert_eq!(service.project(), &original);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn asset_relink_command_rejects_source_too_short_for_existing_timeline_range() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_asset_relink_short_source_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let target_path = temp_dir.join("short.mp4");
+        create_test_video(&target_path, "1");
+
+        let rate = FrameRate::FPS_30;
+        let mut project = create_test_project();
+        project.assets.push(Asset {
+            asset_id: "asset_relink_video".to_string(),
+            name: "source.mp4".to_string(),
+            path: temp_dir.join("missing.mp4").to_string_lossy().to_string(),
+            media_kind: crate::modules::domain::MediaKind::Video,
+            duration: None,
+            file_size: 0,
+            dimensions: None,
+        });
+        let mut track = crate::modules::domain::Track::new(
+            "Video".to_string(),
+            crate::modules::domain::TrackKind::Video,
+        );
+        let range = crate::modules::domain::time::TimeRange::new(
+            crate::modules::domain::time::RationalTime::zero(rate),
+            crate::modules::domain::time::RationalTime::from_frames(60, rate),
+        );
+        track.items.push(
+            crate::modules::domain::TimelineItem::new(
+                Some("asset_relink_video".to_string()),
+                "Two-second clip".to_string(),
+                crate::modules::domain::ItemKind::Video,
+                range,
+                range,
+            )
+            .unwrap(),
+        );
+        project.tracks.push(track);
+        let original = project.clone();
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_asset_relink_short_source".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_short_asset_relink".to_string(),
+                operation: CommandOperation::AssetRelink {
+                    asset_id: "asset_relink_video".to_string(),
+                    path: target_path.to_string_lossy().to_string(),
+                },
+            }],
+        });
+
+        assert!(result.is_err());
+        assert_eq!(service.project(), &original);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn asset_relink_command_rejects_audio_shorter_than_source_range_by_ten_ms() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_asset_relink_short_audio_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let target_path = temp_dir.join("short.wav");
+        let generated = crate::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
+            .unwrap()
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=1.99:frequency=440:sample_rate=48000",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&target_path)
+            .status()
+            .unwrap();
+        assert!(generated.success());
+
+        let rate = FrameRate::FPS_30;
+        let mut project = create_test_project();
+        project.assets.push(Asset {
+            asset_id: "asset_relink_audio".to_string(),
+            name: "source.wav".to_string(),
+            path: temp_dir.join("missing.wav").to_string_lossy().to_string(),
+            media_kind: crate::modules::domain::MediaKind::Audio,
+            duration: None,
+            file_size: 0,
+            dimensions: None,
+        });
+        let mut track = crate::modules::domain::Track::new(
+            "Audio".to_string(),
+            crate::modules::domain::TrackKind::Audio,
+        );
+        let range = crate::modules::domain::time::TimeRange::new(
+            crate::modules::domain::time::RationalTime::zero(rate),
+            crate::modules::domain::time::RationalTime::from_frames(60, rate),
+        );
+        track.items.push(
+            crate::modules::domain::TimelineItem::new(
+                Some("asset_relink_audio".to_string()),
+                "Two-second audio".to_string(),
+                crate::modules::domain::ItemKind::Audio,
+                range,
+                range,
+            )
+            .unwrap(),
+        );
+        project.tracks.push(track);
+        let original = project.clone();
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_asset_relink_short_audio".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_short_asset_relink_audio".to_string(),
+                operation: CommandOperation::AssetRelink {
+                    asset_id: "asset_relink_audio".to_string(),
+                    path: target_path.to_string_lossy().to_string(),
+                },
+            }],
+        });
+
+        assert!(result.is_err());
+        assert_eq!(service.project(), &original);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    fn create_relink_test_video(path: &std::path::Path) {
+        create_test_video(path, "2");
+    }
+
+    fn create_test_video(path: &std::path::Path, duration_seconds: &str) {
+        let generated = crate::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
+            .unwrap()
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=duration={duration_seconds}:size=320x240:rate=30"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(generated.success());
+    }
+
+    #[test]
+    fn asset_relink_command_rejects_nonexistent_target_without_mutation() {
+        let mut project = create_test_project();
+        project.assets.push(Asset {
+            asset_id: "asset_relink_test".to_string(),
+            name: "source.mp4".to_string(),
+            path: "missing.mp4".to_string(),
+            media_kind: crate::modules::domain::MediaKind::Video,
+            duration: None,
+            file_size: 16,
+            dimensions: None,
+        });
+        let original = project.clone();
+        let project_id = project.project_id.clone();
+        let mut service = CommandService::new(project);
+        let result = service.execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id,
+            base_revision: 0,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_asset_relink_missing".to_string()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_asset_relink_missing".to_string(),
+                operation: CommandOperation::AssetRelink {
+                    asset_id: "asset_relink_test".to_string(),
+                    path: "missing-target.mp4".to_string(),
+                },
+            }],
+        });
+
+        assert!(result.is_err());
+        assert_eq!(service.project(), &original);
+    }
 
     fn create_test_project() -> Project {
         Project::new("POC 3 Test Project".to_string())
@@ -6691,7 +9570,7 @@ mod tests {
                 "trk_txt",
                 &trans_result,
             );
-        assert_eq!(cap_ops.len(), 4); // 2 creates + 2 text sets
+        assert_eq!(cap_ops.len(), 6); // 2 creates + 2 text sets + 2 wrapped rich-text styles
 
         service
             .execute(CommandEnvelope {
@@ -6720,6 +9599,27 @@ mod tests {
         // 9. Verify CompositionPlan compilation & keyframe sampling parity
         let plan = crate::modules::composition::CompositionPlan::from_project(proj)
             .expect("Plan must compile");
+        for caption in proj.tracks[1]
+            .items
+            .iter()
+            .filter(|item| item.name.starts_with("Caption: AI Transcribed"))
+        {
+            assert_eq!(
+                caption
+                    .text_rich
+                    .as_ref()
+                    .expect("generated caption rich style")
+                    .layout
+                    .wrap_mode,
+                crate::modules::domain::TextWrapMode::Wrap
+            );
+            let layer = plan
+                .visual_layers
+                .iter()
+                .find(|layer| layer.item_id == caption.item_id)
+                .expect("generated caption composition layer");
+            assert!(layer.uses_shared_text_overlay());
+        }
 
         // Sampling at t = 30 frames:
         // Keyframe interpolation between offset 0 (0.2) and offset 60 (1.0) -> midpoint at 30 is 0.6!
@@ -7755,6 +10655,65 @@ mod tests {
     }
 
     #[test]
+    fn splitting_audio_keeps_fades_only_on_the_original_outer_edges() {
+        let (mut project, project_id, track_id, left_id, _) = setup_phase18_audio_test_project();
+        let original = project.tracks[0]
+            .items
+            .iter_mut()
+            .find(|item| item.item_id == left_id)
+            .unwrap();
+        original.fade_in = Some(RationalTime::new(10, FrameRate::FPS_30));
+        original.fade_out = Some(RationalTime::new(10, FrameRate::FPS_30));
+
+        let mut service = CommandService::new(project);
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id,
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_split_audio_fades".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_split_audio_fades".to_string(),
+                    operation: CommandOperation::ClipSplit {
+                        item_id: left_id.clone(),
+                        split_time: RationalTime::new(15, FrameRate::FPS_30),
+                        new_right_item_id: Some("audio_right_fragment".to_string()),
+                    },
+                }],
+            })
+            .unwrap();
+
+        let track = service
+            .project()
+            .tracks
+            .iter()
+            .find(|track| track.track_id == track_id)
+            .unwrap();
+        let left = track
+            .items
+            .iter()
+            .find(|item| item.item_id == left_id)
+            .unwrap();
+        let right = track
+            .items
+            .iter()
+            .find(|item| item.item_id == "audio_right_fragment")
+            .unwrap();
+
+        assert_eq!(left.fade_in, Some(RationalTime::new(10, FrameRate::FPS_30)));
+        assert_eq!(left.fade_out, None);
+        assert_eq!(right.fade_in, None);
+        assert_eq!(
+            right.fade_out,
+            Some(RationalTime::new(10, FrameRate::FPS_30))
+        );
+    }
+
+    #[test]
     fn test_phase18_audio_crossfade_command_history_lifecycle() {
         let (project, project_id, track_id, left_id, right_id) = setup_phase18_audio_test_project();
         let mut service = CommandService::new(project.clone());
@@ -8203,6 +11162,97 @@ mod tests {
         assert_eq!(
             active.tracks[0].find_item(&item_id).unwrap().visual_effect,
             VisualEffectPreset::Vivid
+        );
+    }
+
+    #[test]
+    fn test_phase52_color_adjustment_command_validates_and_round_trips_history() {
+        use crate::modules::domain::ColorAdjustments;
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let prior = project.clone();
+        let mut service = CommandService::new(project);
+        let adjustment = ColorAdjustments {
+            brightness: 0.2,
+            contrast: 1.25,
+            saturation: 0.8,
+            temperature: -0.4,
+        };
+        service
+            .execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: 0,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_p52_color".into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_p52_color".into(),
+                    operation: CommandOperation::ClipColorAdjustmentsSet {
+                        item_id: item_id.clone(),
+                        color_adjustments: adjustment,
+                    },
+                }],
+            })
+            .expect("valid SDR adjustment should apply");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .color_adjustments,
+            adjustment
+        );
+
+        let mut active = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(10);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Set SDR color".into(),
+            transaction_id: Some("tx_p52_color".into()),
+            prior_snapshot: prior,
+            resulting_snapshot: active.clone(),
+        });
+        history.undo(&mut active).expect("undo SDR adjustment");
+        assert_eq!(
+            active.tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .color_adjustments,
+            ColorAdjustments::default()
+        );
+        history.redo(&mut active).expect("redo SDR adjustment");
+        assert_eq!(
+            active.tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .color_adjustments,
+            adjustment
+        );
+
+        let invalid = ColorAdjustments {
+            brightness: f32::NAN,
+            ..adjustment
+        };
+        let rejected = CommandService::new(active.clone()).execute(CommandEnvelope {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project_id: pid,
+            base_revision: active.revision,
+            client_id: None,
+            client_epoch: None,
+            sequence_number: None,
+            dry_run: false,
+            transaction_id: Some("tx_p52_invalid_color".into()),
+            operations: vec![OperationEnvelope {
+                operation_id: "op_p52_invalid_color".into(),
+                operation: CommandOperation::ClipColorAdjustmentsSet {
+                    item_id,
+                    color_adjustments: invalid,
+                },
+            }],
+        });
+        assert!(
+            rejected.is_err(),
+            "non-finite color controls must be rejected"
         );
     }
 

@@ -91,6 +91,13 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipColorAdjustmentsSet";
+      payload: {
+        item_id: string;
+        color_adjustments: import("./project").ColorAdjustments;
+      };
+    }
+  | {
       type: "ClipSpeedSet";
       payload: {
         item_id: string;
@@ -112,11 +119,48 @@ export type CommandOperation =
       };
     }
   | {
+      type: "TrackRename";
+      payload: { track_id: string; name: string };
+    }
+  | {
       type: "TrackMuteSet";
       payload: {
         track_id: string;
         muted: boolean;
       };
+    }
+  | {
+      type: "TrackSoloSet";
+      payload: {
+        track_id: string;
+        solo: boolean;
+      };
+    }
+  | {
+      type: "TrackVolumeSet";
+      payload: { track_id: string; volume: number };
+    }
+  | {
+      type: "TrackLockSet";
+      payload: {
+        track_id: string;
+        locked: boolean;
+      };
+    }
+  | {
+      type: "TrackReorder";
+      payload: {
+        track_id: string;
+        new_index: number;
+      };
+    }
+  | {
+      type: "ProjectMarkerSet";
+      payload: { marker_id?: string | null; label: string; position: RationalTime };
+    }
+  | {
+      type: "ProjectMarkerDelete";
+      payload: { marker_id: string };
     }
   | {
       type: "ProjectSettingsSet";
@@ -158,6 +202,21 @@ export type CommandOperation =
         item_id: string;
         new_timeline_range: TimeRange;
         new_source_range: TimeRange;
+      };
+    }
+  | {
+      type: "ClipSlip";
+      payload: {
+        item_id: string;
+        new_source_start: RationalTime;
+      };
+    }
+  | {
+      type: "ClipRoll";
+      payload: {
+        left_item_id: string;
+        right_item_id: string;
+        delta: RationalTime;
       };
     }
   | {
@@ -223,6 +282,25 @@ export type CommandOperation =
         item_id: string;
         volume: number;
       };
+    }
+  | {
+      type: "ClipEmbeddedAudioSet";
+      payload: {
+        item_id: string;
+        enabled: boolean;
+      };
+    }
+  | {
+      type: "ClipAudioDetach";
+      payload: {
+        item_id: string;
+        detached_item_id?: string;
+        target_track_id?: string;
+      };
+    }
+  | {
+      type: "ClipLinkSet";
+      payload: { video_item_id: string; audio_item_id: string; linked: boolean };
     }
   | {
       type: "ClipTextSet";
@@ -414,6 +492,10 @@ export type CommandOperation =
       };
     }
   | {
+      type: "AssetRelink";
+      payload: { asset_id: string; path: string };
+    }
+  | {
       type: "ClipPlacementModeSet";
       payload: {
         item_id: string;
@@ -479,13 +561,13 @@ export interface OperationReceipt {
 }
 
 export interface CommandReceipt {
-  project_id: string;
-  prior_revision: number;
-  new_revision: number;
-  transaction_id?: string;
-  operations_applied: number;
+  projectId: string;
+  priorRevision: number;
+  newRevision: number;
+  transactionId?: string;
+  operationsApplied: number;
   receipts: OperationReceipt[];
-  idempotency_scope?: string;
+  idempotencyScope?: string;
 }
 
 export interface DiffReport {

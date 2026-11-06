@@ -40,7 +40,9 @@ use tinixcut_lib::modules::media::text_overlay::{
     OverlayStyle, TextOverlayError,
 };
 use tinixcut_lib::modules::media::text_renderer_poc::RgbaBuffer;
-use tinixcut_lib::modules::persistence::migrate_v10_to_v11;
+use tinixcut_lib::modules::persistence::{
+    migrate_v10_to_v11, migrate_v11_to_v12, run_migrations_if_needed,
+};
 use tinixcut_lib::modules::templates::catalog::{TemplateCatalog, TemplateCatalogError};
 use tinixcut_lib::modules::templates::curated::{curated_definitions, resolve_curated_definition};
 use tinixcut_lib::modules::templates::pack::{
@@ -959,8 +961,16 @@ fn test_ac08_persistence_v10_to_v11_migration_and_legacy_presets() {
     let v11_val = migrate_v10_to_v11(v10_val).expect("migration from v10 to v11 must succeed");
 
     assert_eq!(v11_val["schema_version"], 11);
-    let migrated_project: Project = serde_json::from_value(v11_val).unwrap();
-    assert_eq!(migrated_project.schema_version, 11);
+    let v12_val = migrate_v11_to_v12(v11_val).expect("migration from v11 to v12 must succeed");
+    assert_eq!(v12_val["schema_version"], 12);
+    assert!(v12_val["tracks"][0]["items"][0]["template_instance"].is_null());
+
+    // The project model now expects schema 17. Validate the complete historic
+    // migration chain separately from the phase-specific v10->v12 assertions.
+    let current_json = run_migrations_if_needed(v10_json)
+        .expect("legacy v10 project must migrate through the current schema");
+    let migrated_project: Project = serde_json::from_str(&current_json).unwrap();
+    assert_eq!(migrated_project.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(migrated_project.tracks[0].items[0].template_instance, None);
     migrated_project
         .validate()

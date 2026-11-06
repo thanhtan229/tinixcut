@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use tinixcut_lib::modules::composition::CompositionPlan;
+use tinixcut_lib::modules::composition::{CompositionPlan, TextOverlayInput};
 use tinixcut_lib::modules::domain::text::{
     FontReference, GradientKind, GradientSpace, GradientStop, RichTextSpan, StrokeAlign,
     TextBackgroundBox, TextFill, TextLayout, TextRichStyle, TextShadow, TextSpanStyle, TextStroke,
@@ -13,13 +13,15 @@ use tinixcut_lib::modules::domain::text::{
 };
 use tinixcut_lib::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use tinixcut_lib::modules::domain::{
-    ItemKind, MediaKind, Project, TextAnchor, TimelineItem, Track, TrackKind,
+    ItemKind, Keyframe, KeyframeProperty, MediaKind, Project, TextAnchor, TextStyle, TimelineItem,
+    Track, TrackKind,
 };
 use tinixcut_lib::modules::export::{ExportEngine, ExportProfile};
 use tinixcut_lib::modules::media::resolver::MediaBinaryResolver;
 use tinixcut_lib::modules::media::text_overlay::{
-    preview_overlay_at, render_overlay_for_layer, resolve_font, OverlayPlacement, OverlayStyle,
-    ResolvedFont, RichTextRenderer, TextOverlayError, TEXT_OVERLAY_RENDERER_VERSION,
+    preview_overlay_at, render_frame_overlay_buffer_at, render_overlay_for_layer, resolve_font,
+    OverlayPlacement, OverlayStyle, ResolvedFont, RichTextRenderer, TextOverlayError,
+    TEXT_OVERLAY_RENDERER_VERSION,
 };
 use tinixcut_lib::modules::media::text_renderer_poc::{ColorRgba, RgbaBuffer};
 use tinixcut_lib::modules::media::MediaCatalog;
@@ -438,6 +440,498 @@ fn p30_ac04_preview_and_export_consume_identical_overlay_pixels() {
     let legacy_plan = CompositionPlan::from_project(&legacy_project).expect("legacy plan");
     let (legacy_filter, _) = legacy_plan.build_video_filtergraph(&[], 1.0, None);
     assert!(legacy_filter.contains("drawtext=text='Legacy title'"));
+}
+
+#[test]
+fn phase30_legacy_rounded_caption_preview_and_mp4_pixels_match() {
+    let (mut project, item_id) =
+        project_with_rich_text("Legacy rounded caption", "Tinix Cut", None);
+    project.settings.width = 320;
+    project.settings.height = 180;
+
+    let rate = project.settings.frame_rate;
+    let short_range = TimeRange::new(RationalTime::zero(rate), RationalTime::from_frames(6, rate));
+    let item = &mut project.tracks[0].items[0];
+    item.timeline_range = short_range;
+    item.source_range = short_range;
+    item.text_style = Some(TextStyle {
+        font_family: "Inter".to_string(),
+        font_size: 48.0,
+        font_weight: 700,
+        font_color: "#FFFFFF".to_string(),
+        background_color: Some("#E02020".to_string()),
+        background_opacity: 0.85,
+        background_corner_radius: 24.0,
+        padding_x: 22.0,
+        padding_y: 12.0,
+        ..TextStyle::default()
+    });
+    project.validate().expect("rounded legacy caption is valid");
+    let timestamp = RationalTime::zero(rate);
+
+    // Exercise the UI-supported radius range at representative values and ensure
+    // preview and export materialize the same rounded pixels for each value.
+    for radius in [4.0, 8.0, 14.0, 24.0, 48.0] {
+        project.tracks[0].items[0]
+            .text_style
+            .as_mut()
+            .expect("legacy text style")
+            .background_corner_radius = radius;
+        project.validate().expect("rounded caption radius is valid");
+
+        let preview = preview_overlay_at(&project, &item_id, timestamp)
+            .expect("preview render at tested radius")
+            .expect("active caption at tested radius");
+        let plan =
+            CompositionPlan::from_project(&project).expect("composition plan at tested radius");
+        let layer = plan
+            .visual_layers
+            .iter()
+            .find(|layer| layer.item_id == item_id)
+            .expect("caption layer at tested radius");
+        let export_overlay =
+            render_overlay_for_layer(&project, plan.width, plan.height, layer, layer.opacity)
+                .expect("export overlay render at tested radius")
+                .expect("rounded caption export overlay at tested radius");
+
+        assert_eq!(preview.roi, export_overlay.roi, "radius {radius} px");
+        assert_eq!(
+            preview.roi_png_bytes, export_overlay.roi_png_bytes,
+            "preview/export pixels differ at radius {radius} px"
+        );
+        let pixels = RgbaBuffer::from_png_bytes(&preview.roi_png_bytes)
+            .expect("decode rounded overlay at tested radius");
+        let corner = ((pixels.height - 1) as usize * pixels.width as usize) * 4;
+        assert_eq!(
+            pixels.data[corner + 3],
+            0,
+            "rounded corner must remain transparent at radius {radius} px"
+        );
+    }
+
+    // Keep the end-to-end MP4 pixel check at the normal 24 px preset.
+    project.tracks[0].items[0]
+        .text_style
+        .as_mut()
+        .expect("legacy text style")
+        .background_corner_radius = 24.0;
+    let preview = preview_overlay_at(&project, &item_id, timestamp)
+        .expect("preview render")
+        .expect("active caption");
+    let plan = CompositionPlan::from_project(&project).expect("composition plan");
+    let layer = plan
+        .visual_layers
+        .iter()
+        .find(|layer| layer.item_id == item_id)
+        .expect("caption layer");
+    assert!(layer.uses_shared_text_overlay());
+
+    let export_overlay =
+        render_overlay_for_layer(&project, plan.width, plan.height, layer, layer.opacity)
+            .expect("export overlay render")
+            .expect("rounded legacy caption overlay");
+    assert_eq!(preview.roi, export_overlay.roi);
+    assert_eq!(preview.roi_png_bytes, export_overlay.roi_png_bytes);
+
+    let overlay_pixels = RgbaBuffer::from_png_bytes(&preview.roi_png_bytes)
+        .expect("decode shared preview/export overlay");
+    let corner = ((overlay_pixels.height - 1) as usize * overlay_pixels.width as usize) * 4;
+    let top_center = (overlay_pixels.width as usize / 2) * 4;
+    assert_eq!(
+        overlay_pixels.data[corner + 3],
+        0,
+        "rounded corner stays transparent"
+    );
+    assert!(
+        overlay_pixels.data[top_center + 3] > 150,
+        "top center contains the caption background"
+    );
+
+    let dir = test_dir("legacy_rounded_caption_export");
+    let output = dir.join("legacy_rounded_caption.mp4");
+    let profile = ExportProfile::from_project_settings(&project.settings);
+    let report = ExportEngine::render_snapshot(&project, &output, &profile, None)
+        .expect("export rounded legacy caption");
+    assert!(report.file_size_bytes > 0);
+
+    let frame_bytes = MediaBinaryResolver::command("ffmpeg")
+        .expect("ffmpeg available")
+        .args([
+            "-v",
+            "error",
+            "-i",
+            &output.to_string_lossy(),
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "pipe:1",
+        ])
+        .output()
+        .expect("decode exported frame");
+    assert!(frame_bytes.status.success());
+    let frame = RgbaBuffer {
+        width: project.settings.width,
+        height: project.settings.height,
+        data: frame_bytes.stdout,
+    };
+    let [roi_x, roi_y, _, _] = preview.roi;
+    let corner_offset = ((roi_y as usize * frame.width as usize) + roi_x as usize) * 4;
+    let background_x = roi_x + overlay_pixels.width / 2;
+    let background_y = roi_y + 2;
+    let background_offset =
+        ((background_y as usize * frame.width as usize) + background_x as usize) * 4;
+    assert!(
+        frame.data[background_offset] > frame.data[corner_offset].saturating_add(80),
+        "MP4 must preserve the red caption background and leave its rounded corner clear"
+    );
+
+    fs::remove_dir_all(&dir).expect("remove temporary export artifacts");
+}
+
+#[test]
+fn g53_keyframed_square_background_legacy_text_uses_shared_frame_renderer() {
+    let (mut project, item_id) = project_with_rich_text("G53 legacy text", "Caption", None);
+    project.settings.width = 320;
+    project.settings.height = 180;
+    let rate = project.settings.frame_rate;
+    let item = &mut project.tracks[0].items[0];
+    item.text_style = Some(TextStyle {
+        font_size: 34.0,
+        background_color: Some("#E02020".to_string()),
+        background_opacity: 1.0,
+        background_corner_radius: 0.0,
+        ..TextStyle::default()
+    });
+    item.transform.position_y = -100.0;
+    item.keyframes = vec![
+        Keyframe::new(KeyframeProperty::PositionY, RationalTime::zero(rate), 55.0),
+        Keyframe::new(
+            KeyframeProperty::PositionY,
+            RationalTime::from_frames(4, rate),
+            -40.0,
+        ),
+    ];
+    project
+        .validate()
+        .expect("G53 legacy text project is valid");
+
+    let plan = CompositionPlan::from_project(&project).expect("composition plan");
+    let layer = plan
+        .visual_layers
+        .iter()
+        .find(|layer| layer.item_id == item_id)
+        .expect("legacy text layer");
+    assert!(layer.uses_shared_text_overlay());
+
+    let mut frame_rois = Vec::new();
+    for frame in [0, 4] {
+        let timestamp = RationalTime::from_frames(frame, rate);
+        let preview = preview_overlay_at(&project, &item_id, timestamp)
+            .expect("preview uses shared legacy renderer")
+            .expect("active text layer");
+        let full_frame = render_frame_overlay_buffer_at(&project, &plan, layer, timestamp)
+            .expect("per-frame export overlay")
+            .expect("shared overlay exists");
+        let exported_roi = full_frame.crop(preview.roi).to_png_bytes();
+        assert_eq!(
+            preview.roi_png_bytes, exported_roi,
+            "preview ROI matches full-canvas export buffer at frame {frame}"
+        );
+        assert!(preview.roi[2] - preview.roi[0] > 1, "ROI has visible width");
+        assert!(
+            preview.roi[3] - preview.roi[1] > 1,
+            "ROI has visible height"
+        );
+        frame_rois.push(preview.roi);
+    }
+    assert_ne!(
+        frame_rois[0], frame_rois[1],
+        "position keyframes move the ROI"
+    );
+
+    let sequence_overlay = TextOverlayInput {
+        item_id: item_id.clone(),
+        path: PathBuf::from("g53_frame_%06d.png"),
+        roi: [0, 0, 320, 180],
+    };
+    let (_, export_filtergraph) = plan.to_ffmpeg_export_args_with_overlays(
+        Path::new("g53_export.mp4"),
+        23,
+        "libx264",
+        None,
+        &[sequence_overlay],
+    );
+    assert!(
+        export_filtergraph.contains("overlay=x=0:y=0"),
+        "full export consumes the per-frame shared-renderer sequence"
+    );
+    assert!(
+        !export_filtergraph.contains("drawtext"),
+        "keyframed legacy text must not fall back to static drawtext"
+    );
+
+    // Static legacy square-background text remains on the established drawtext route.
+    let (mut static_project, _) = project_with_rich_text("Static legacy", "Legacy title", None);
+    static_project.tracks[0].items[0].text_style = Some(TextStyle {
+        background_color: Some("#E02020".to_string()),
+        background_opacity: 1.0,
+        background_corner_radius: 0.0,
+        ..TextStyle::default()
+    });
+    let static_plan = CompositionPlan::from_project(&static_project).expect("static plan");
+    let static_layer = static_plan.visual_layers.first().expect("static layer");
+    assert!(!static_layer.uses_shared_text_overlay());
+    let (filter, _) = static_plan.build_video_filtergraph(&[], 1.0, None);
+    assert!(filter.contains("drawtext=text='Legacy title'"));
+}
+
+#[test]
+fn g53_keyframed_legacy_text_without_background_uses_shared_frame_renderer() {
+    let (mut project, item_id) =
+        project_with_rich_text("G53 animated legacy text", "Caption", None);
+    project.settings.width = 320;
+    project.settings.height = 180;
+    let rate = project.settings.frame_rate;
+    let item = &mut project.tracks[0].items[0];
+    item.text_style = Some(TextStyle::default());
+    item.keyframes = vec![
+        Keyframe::new(KeyframeProperty::PositionY, RationalTime::zero(rate), 55.0),
+        Keyframe::new(
+            KeyframeProperty::PositionY,
+            RationalTime::from_frames(4, rate),
+            -40.0,
+        ),
+    ];
+    project
+        .validate()
+        .expect("animated legacy project is valid");
+
+    let plan = CompositionPlan::from_project(&project).expect("composition plan");
+    let layer = plan
+        .visual_layers
+        .iter()
+        .find(|layer| layer.item_id == item_id)
+        .expect("legacy text layer");
+    assert!(layer.uses_shared_text_overlay());
+
+    for frame in [0, 4] {
+        let timestamp = RationalTime::from_frames(frame, rate);
+        let preview = preview_overlay_at(&project, &item_id, timestamp)
+            .expect("preview uses shared legacy renderer")
+            .expect("active text layer");
+        let full_frame = render_frame_overlay_buffer_at(&project, &plan, layer, timestamp)
+            .expect("per-frame export overlay")
+            .expect("shared overlay exists");
+        assert_eq!(
+            preview.roi_png_bytes,
+            full_frame.crop(preview.roi).to_png_bytes(),
+            "no-background preview ROI matches export at frame {frame}"
+        );
+        assert!(preview.roi[2] - preview.roi[0] > 1);
+        assert!(preview.roi[3] - preview.roi[1] > 1);
+    }
+
+    // Preview opacity remains a CSS property; the export frame buffer bakes it
+    // into alpha. Verify the export alpha matches half-opacity for the same text.
+    let mut half_opacity_project = project.clone();
+    half_opacity_project.tracks[0].items[0].keyframes.extend([
+        Keyframe::new(KeyframeProperty::Opacity, RationalTime::zero(rate), 0.5),
+        Keyframe::new(
+            KeyframeProperty::Opacity,
+            RationalTime::from_frames(4, rate),
+            0.5,
+        ),
+    ]);
+    half_opacity_project
+        .validate()
+        .expect("half-opacity keyframes are valid");
+    let opacity_plan =
+        CompositionPlan::from_project(&half_opacity_project).expect("half-opacity plan");
+    let opacity_layer = opacity_plan
+        .visual_layers
+        .iter()
+        .find(|layer| layer.item_id == item_id)
+        .expect("half-opacity text layer");
+    let timestamp = RationalTime::zero(rate);
+    let preview = preview_overlay_at(&half_opacity_project, &item_id, timestamp)
+        .expect("half-opacity preview")
+        .expect("active text layer");
+    let full_frame = render_frame_overlay_buffer_at(
+        &half_opacity_project,
+        &opacity_plan,
+        opacity_layer,
+        timestamp,
+    )
+    .expect("half-opacity export buffer")
+    .expect("shared text buffer");
+    let preview_pixels =
+        RgbaBuffer::from_png_bytes(&preview.roi_png_bytes).expect("decode half-opacity preview");
+    let export_pixels = full_frame.crop(preview.roi);
+    let mut compared_pixels = 0;
+    for (preview_pixel, export_pixel) in preview_pixels
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(export_pixels.data.as_chunks::<4>().0)
+    {
+        if preview_pixel[3] <= 16 {
+            continue;
+        }
+        let expected_alpha = (preview_pixel[3] as f32 * 0.5).round() as i16;
+        assert!(
+            (export_pixel[3] as i16 - expected_alpha).abs() <= 2,
+            "export alpha must apply keyframed 0.5 opacity to preview alpha"
+        );
+        compared_pixels += 1;
+    }
+    assert!(compared_pixels > 0, "compare visible text pixels");
+}
+
+#[test]
+fn g53_keyframed_square_legacy_text_mp4_matches_preview_positions() {
+    let (mut project, item_id) = project_with_rich_text("G53 MP4 legacy text", "Caption", None);
+    project.settings.width = 320;
+    project.settings.height = 180;
+    project.settings.frame_rate = FrameRate::FPS_30;
+    let rate = project.settings.frame_rate;
+    let clip_range = TimeRange::new(RationalTime::zero(rate), RationalTime::from_frames(8, rate));
+    let item = &mut project.tracks[0].items[0];
+    item.timeline_range = clip_range;
+    item.source_range = clip_range;
+    item.text_style = Some(TextStyle {
+        font_size: 34.0,
+        background_color: Some("#E02020".to_string()),
+        background_opacity: 1.0,
+        background_corner_radius: 0.0,
+        padding_x: 8.0,
+        padding_y: 5.0,
+        ..TextStyle::default()
+    });
+    item.transform.position_y = -100.0;
+    item.keyframes = vec![
+        Keyframe::new(KeyframeProperty::PositionY, RationalTime::zero(rate), 55.0),
+        Keyframe::new(
+            KeyframeProperty::PositionY,
+            RationalTime::from_frames(7, rate),
+            -40.0,
+        ),
+    ];
+    project.validate().expect("G53 MP4 project is valid");
+
+    let unique_dir =
+        std::env::temp_dir().join(format!("tinixcut_g53_mp4_{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&unique_dir).expect("create unique G53 test directory");
+    let output = unique_dir.join("g53_keyframed.mp4");
+    let profile = ExportProfile::from_project_settings(&project.settings);
+    let report = ExportEngine::render_snapshot(&project, &output, &profile, None)
+        .expect("export keyframed square legacy caption");
+    assert!(report.file_size_bytes > 0);
+
+    let decoded = MediaBinaryResolver::command("ffmpeg")
+        .expect("ffmpeg available")
+        .args([
+            "-v",
+            "error",
+            "-i",
+            &output.to_string_lossy(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "pipe:1",
+        ])
+        .output()
+        .expect("decode exported video frames");
+    assert!(decoded.status.success());
+    let frame_size = (project.settings.width * project.settings.height * 4) as usize;
+    assert!(
+        decoded.stdout.len() >= frame_size * 8,
+        "export has all 8 frames"
+    );
+
+    let red_box = |buffer: &RgbaBuffer, origin: [u32; 2]| -> Option<[u32; 4]> {
+        let mut bounds = [u32::MAX, u32::MAX, 0, 0];
+        let mut found = false;
+        for y in 0..buffer.height {
+            for x in 0..buffer.width {
+                let offset = ((y as usize * buffer.width as usize) + x as usize) * 4;
+                let [red, green, blue, alpha] = buffer.data[offset..offset + 4]
+                    .try_into()
+                    .expect("RGBA pixel");
+                if alpha > 32
+                    && red > 100
+                    && red > green.saturating_mul(2)
+                    && red > blue.saturating_mul(2)
+                {
+                    found = true;
+                    let x = x + origin[0];
+                    let y = y + origin[1];
+                    bounds[0] = bounds[0].min(x);
+                    bounds[1] = bounds[1].min(y);
+                    bounds[2] = bounds[2].max(x);
+                    bounds[3] = bounds[3].max(y);
+                }
+            }
+        }
+        found.then_some(bounds)
+    };
+
+    let mut preview_centers = Vec::new();
+    let mut export_centers = Vec::new();
+    for frame_index in [0_u32, 7_u32] {
+        let timestamp = RationalTime::from_frames(frame_index as i64, rate);
+        let preview = preview_overlay_at(&project, &item_id, timestamp)
+            .expect("render preview overlay")
+            .expect("caption active at keyframe");
+        let preview_pixels =
+            RgbaBuffer::from_png_bytes(&preview.roi_png_bytes).expect("decode preview ROI");
+        let expected = red_box(&preview_pixels, [preview.roi[0], preview.roi[1]])
+            .expect("preview contains red square background");
+
+        let start = frame_index as usize * frame_size;
+        let exported_frame = RgbaBuffer {
+            width: project.settings.width,
+            height: project.settings.height,
+            data: decoded.stdout[start..start + frame_size].to_vec(),
+        };
+        let actual =
+            red_box(&exported_frame, [0, 0]).expect("encoded frame contains red square background");
+        for coordinate in 0..4 {
+            assert!(
+                expected[coordinate].abs_diff(actual[coordinate]) <= 3,
+                "preview/export red-background bounds differ by more than codec tolerance at frame {frame_index}: expected {expected:?}, actual {actual:?}"
+            );
+        }
+        preview_centers.push((expected[1] + expected[3]) / 2);
+        export_centers.push((actual[1] + actual[3]) / 2);
+    }
+    assert!(preview_centers[0].abs_diff(preview_centers[1]) > 40);
+    assert!(export_centers[0].abs_diff(export_centers[1]) > 40);
+
+    let canonical_temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonicalize temp directory");
+    let canonical_test_dir = unique_dir
+        .canonicalize()
+        .expect("canonicalize created G53 test directory");
+    assert_eq!(
+        canonical_test_dir.parent(),
+        Some(canonical_temp.as_path()),
+        "test directory must be a direct child of the system temp directory"
+    );
+    let test_dir_name = canonical_test_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("G53 test directory name");
+    assert!(
+        test_dir_name.starts_with("tinixcut_g53_mp4_"),
+        "refuse to remove unexpected temp directory"
+    );
+    fs::remove_dir_all(&canonical_test_dir).expect("remove this test's unique temporary directory");
 }
 
 #[test]

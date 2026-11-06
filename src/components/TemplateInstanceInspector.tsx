@@ -9,9 +9,11 @@ import {
 } from "../types/template";
 import { editorApi } from "../services/editorApi";
 import { validateParameterValue } from "../utils/templateHelpers";
+import { shouldResetInspectorDrafts } from "./inspectorDraftSync";
 
 interface TemplateInstanceInspectorProps {
   item: TimelineItem;
+  projectRevision: number;
   onParameterSet?: (key: string, value: TemplateParameterValue) => Promise<any> | void;
   onReset?: () => void;
   onDetach?: () => void;
@@ -24,6 +26,7 @@ interface TemplateInstanceInspectorProps {
 
 export const TemplateInstanceInspector: React.FC<TemplateInstanceInspectorProps> = ({
   item,
+  projectRevision,
   onParameterSet,
   onReset,
   onDetach,
@@ -54,6 +57,11 @@ export const TemplateInstanceInspector: React.FC<TemplateInstanceInspectorProps>
   const [layerDrafts, setLayerDrafts] = useState<Record<string, Partial<TemplateLayer>>>({});
   const commitSignaturesRef = useRef<Set<string>>(new Set());
   const draftGenerationRef = useRef<Record<string, number>>({});
+  const draftIdentityRef = useRef<{
+    revision: number;
+    itemId: string;
+    parameters?: Record<string, TemplateParameterValue>;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -91,13 +99,27 @@ export const TemplateInstanceInspector: React.FC<TemplateInstanceInspectorProps>
     };
   }, [instance?.template_id, instance?.template_version]);
 
-  // Synchronize parameter drafts when external instance parameters update
+  // Reconcile transient drafts after committed history changes such as Undo/Redo.
   useEffect(() => {
-    if (instance?.parameters) {
-      setParamDrafts(instance.parameters);
-      lastCommittedParamRef.current = instance.parameters;
+    const previous = draftIdentityRef.current;
+    if (
+      !previous ||
+      previous.parameters !== instance?.parameters ||
+      shouldResetInspectorDrafts(previous.revision, projectRevision, previous.itemId, item.item_id)
+    ) {
+      const parameters = instance?.parameters ?? {};
+      setParamDrafts(parameters);
+      lastCommittedParamRef.current = parameters;
+      setLayerDrafts({});
+      commitSignaturesRef.current.clear();
+      draftGenerationRef.current = {};
     }
-  }, [instance?.parameters]);
+    draftIdentityRef.current = {
+      revision: projectRevision,
+      itemId: item.item_id,
+      parameters: instance?.parameters,
+    };
+  }, [projectRevision, item.item_id, instance?.parameters]);
 
   if (!instance) {
     return (

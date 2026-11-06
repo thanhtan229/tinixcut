@@ -36,6 +36,7 @@ fn style(
         accent_color: None,
         background_color: background_color.map(str::to_string),
         background_opacity,
+        background_corner_radius: 0.0,
         padding_x,
         padding_y,
         alignment,

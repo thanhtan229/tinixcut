@@ -31,6 +31,10 @@ pub fn generate_transition_id() -> String {
     format!("trans_{}", Uuid::new_v4().simple())
 }
 
+pub fn generate_marker_id() -> String {
+    format!("mark_{}", Uuid::new_v4().simple())
+}
+
 pub fn is_valid_id(id: &str) -> bool {
     let trimmed = id.trim();
     !trimmed.is_empty()

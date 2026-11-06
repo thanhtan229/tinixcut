@@ -14,6 +14,7 @@ pub enum JobKind {
     Proxy,
     Waveform,
     Transcription,
+    VisualAnalysis,
     Export,
 }
 
@@ -178,6 +179,19 @@ impl JobManager {
         }
     }
 
+    /// Request cancellation while allowing the worker to report terminal state
+    /// only after its cleanup has completed.
+    pub fn request_cancel(&mut self, id: &str) -> bool {
+        let Some(job) = self.jobs.get(id) else {
+            return false;
+        };
+        if !matches!(job.status, JobStatus::Queued | JobStatus::Running) {
+            return false;
+        }
+        job.cancel_flag.store(true, Ordering::SeqCst);
+        true
+    }
+
     /// Cancel all currently active or queued jobs.
     pub fn cancel_all_active(&mut self) -> usize {
         let active_ids: Vec<String> = self
@@ -309,6 +323,21 @@ mod tests {
         assert!(cancelled);
         assert_eq!(jm.get_job(&id).unwrap().status, JobStatus::Cancelled);
         assert!(cancel_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancel_request_waits_for_worker_cleanup_before_terminal_state() {
+        let mut jm = JobManager::new(1);
+        let (id, _) = jm.submit_job("export-cancel".into(), JobKind::Export, "key".into(), 1);
+        let cancel_flag = jm.start_job(&id).unwrap();
+
+        assert!(jm.request_cancel(&id));
+        assert!(cancel_flag.load(Ordering::SeqCst));
+        assert_eq!(jm.get_job(&id).unwrap().status, JobStatus::Running);
+
+        assert!(jm.cancel_job(&id));
+        assert_eq!(jm.get_job(&id).unwrap().status, JobStatus::Cancelled);
+        assert!(!jm.request_cancel(&id));
     }
 
     #[test]

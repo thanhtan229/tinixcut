@@ -1,7 +1,7 @@
 //! Phase 14 Export Automation Schedule
 //! Evaluates dynamic keyframe properties per-frame in Rust and produces:
 //! 1. FFmpeg `sendcmd` scripts with midpoint dispatch for video layers and transition branches.
-//! 2. Streamed mono `f32le` audio gain envelopes applied via `amultiply` with exact 1.0 stereo gain.
+//! 2. Streamed `f32le` audio gain envelopes applied via `amultiply` with the source channel count.
 //! 3. RAII cleanup guard guaranteeing temporary file removal on success, failure, or cancellation.
 
 use crate::modules::composition::{CompositionAudioLayer, CompositionPlan, CompositionVisualLayer};
@@ -9,6 +9,8 @@ use crate::modules::domain::time::FrameRate;
 use crate::modules::domain::time::RationalTime;
 use crate::modules::domain::KeyframeProperty;
 use crate::modules::export::ExportError;
+use crate::modules::media::ffmpeg::FFmpegService;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -132,6 +134,7 @@ pub struct LayerAudioAutomation {
     pub audio_index: usize,
     pub envelope_file: PathBuf,
     pub sample_rate: u32,
+    pub channels: u16,
     pub total_samples: usize,
 }
 
@@ -164,9 +167,49 @@ impl ExportAutomationSchedule {
             ExportError::IoError(format!("Failed to create automation temp dir: {e}"))
         })?;
 
+        let mut probed_audio_channels = HashMap::new();
+        let mut audio_channels = Vec::with_capacity(plan.audio_layers.len());
+        for audio in &plan.audio_layers {
+            let needs_envelope = layer_has_animated_volume(audio)
+                || plan.audio_crossfades.iter().any(|transition| {
+                    transition.left_item_id == audio.item_id
+                        || transition.right_item_id == audio.item_id
+                });
+            if audio.muted || !needs_envelope {
+                audio_channels.push(2);
+                continue;
+            }
+
+            let channels = match audio.asset_path.as_ref().filter(|path| path.is_file()) {
+                Some(path) => {
+                    if let Some(channels) = probed_audio_channels.get(path) {
+                        *channels
+                    } else {
+                        let metadata = FFmpegService::probe_file(path).map_err(|error| {
+                            ExportError::RenderFailed(format!(
+                                "Failed to inspect audio channels for '{}': {error}",
+                                path.display()
+                            ))
+                        })?;
+                        let channels = metadata
+                            .streams
+                            .iter()
+                            .find(|stream| stream.codec_type == "audio")
+                            .and_then(|stream| stream.channels)
+                            .unwrap_or(2)
+                            .max(1);
+                        probed_audio_channels.insert(path.clone(), channels);
+                        channels
+                    }
+                }
+                _ => 2,
+            };
+            audio_channels.push(channels);
+        }
+
         // 1. Preflight check: estimate required audio envelope bytes
         let mut total_estimated_audio_bytes: u64 = 0;
-        for audio in &plan.audio_layers {
+        for (idx, audio) in plan.audio_layers.iter().enumerate() {
             let needs_envelope = layer_has_animated_volume(audio)
                 || plan.audio_crossfades.iter().any(|transition| {
                     transition.left_item_id == audio.item_id
@@ -176,7 +219,7 @@ impl ExportAutomationSchedule {
                 let (_, _, render_duration) = plan.audio_render_window(audio);
                 let dur = render_duration.to_seconds();
                 let samples = (dur * audio_sample_rate as f64).round() as u64;
-                total_estimated_audio_bytes += samples * 4; // 4 bytes per mono f32le sample
+                total_estimated_audio_bytes += samples * 4 * audio_channels[idx] as u64;
             }
         }
 
@@ -242,9 +285,6 @@ impl ExportAutomationSchedule {
 
             let base_w = plan.width as f32;
             let base_h = plan.height as f32;
-            let cropped_w = base_w * (1.0 - layer.crop.left - layer.crop.right);
-            let cropped_h = base_h * (1.0 - layer.crop.top - layer.crop.bottom);
-
             // Emit runtime command for frames n > start_frame using midpoint dispatch
             for n in (start_frame + 1)..=end_frame {
                 let t_prev = (n - 1) as f64 / fps;
@@ -261,8 +301,14 @@ impl ExportAutomationSchedule {
                 let rotation = layer.evaluate_property(KeyframeProperty::Rotation, clip_offset);
                 let opacity = layer.effective_opacity_at(clip_offset);
 
-                let mut render_w = (cropped_w * scale_x).round().max(2.0) as u32;
-                let mut render_h = (cropped_h * scale_y).round().max(2.0) as u32;
+                // Match the same source-aware Fit/Fill geometry used by the
+                // static composition and native preview. Using canvas size
+                // here stretches portrait/landscape sources when any visual
+                // keyframe activates the runtime automation path.
+                let (render_width, render_height) =
+                    layer.rendered_size(base_w, base_h, scale_x, scale_y);
+                let mut render_w = render_width.round().max(2.0) as u32;
+                let mut render_h = render_height.round().max(2.0) as u32;
                 if !render_w.is_multiple_of(2) {
                     render_w += 1;
                 }
@@ -270,8 +316,20 @@ impl ExportAutomationSchedule {
                     render_h += 1;
                 }
 
-                let top_left_x = ((base_w - render_w as f32) / 2.0 + pos_x).round() as i32;
-                let top_left_y = ((base_h - render_h as f32) / 2.0 + pos_y).round() as i32;
+                // The animated FFmpeg branch uses rotate's fixed diagonal
+                // output box so runtime angle changes do not renegotiate the
+                // overlay input dimensions. Place that padded box around the
+                // intended layer center; positioning by the unrotated source
+                // size shifts even a zero-degree animated layer.
+                let rotated_box = (render_w as f32).hypot(render_h as f32).ceil();
+                let mut overlay_w = rotated_box as u32;
+                let mut overlay_h = overlay_w;
+                if !overlay_w.is_multiple_of(2) {
+                    overlay_w += 1;
+                    overlay_h += 1;
+                }
+                let top_left_x = ((base_w - overlay_w as f32) / 2.0 + pos_x).round() as i32;
+                let top_left_y = ((base_h - overlay_h as f32) / 2.0 + pos_y).round() as i32;
                 let angle_rad = rotation * std::f32::consts::PI / 180.0;
 
                 cmd_content.push_str(&format!(
@@ -341,11 +399,6 @@ impl ExportAutomationSchedule {
                 ));
                 let mut cmd_content = String::new();
 
-                let cropped_w =
-                    base_w * (1.0 - trans.left_layer.crop.left - trans.left_layer.crop.right);
-                let cropped_h =
-                    base_h * (1.0 - trans.left_layer.crop.top - trans.left_layer.crop.bottom);
-
                 for k in 1..branch_frames {
                     let t_prev = (k - 1) as f64 / fps;
                     let t_curr = k as f64 / fps;
@@ -368,8 +421,11 @@ impl ExportAutomationSchedule {
                         .left_layer
                         .evaluate_property(KeyframeProperty::ScaleY, clip_offset);
 
-                    let mut render_w = (cropped_w * scale_x).round().max(2.0) as u32;
-                    let mut render_h = (cropped_h * scale_y).round().max(2.0) as u32;
+                    let (render_width, render_height) = trans
+                        .left_layer
+                        .rendered_size(base_w, base_h, scale_x, scale_y);
+                    let mut render_w = render_width.round().max(2.0) as u32;
+                    let mut render_h = render_height.round().max(2.0) as u32;
                     if !render_w.is_multiple_of(2) {
                         render_w += 1;
                     }
@@ -407,11 +463,6 @@ impl ExportAutomationSchedule {
                 ));
                 let mut cmd_content = String::new();
 
-                let cropped_w =
-                    base_w * (1.0 - trans.right_layer.crop.left - trans.right_layer.crop.right);
-                let cropped_h =
-                    base_h * (1.0 - trans.right_layer.crop.top - trans.right_layer.crop.bottom);
-
                 for k in 1..branch_frames {
                     let t_prev = (k - 1) as f64 / fps;
                     let t_curr = k as f64 / fps;
@@ -434,8 +485,11 @@ impl ExportAutomationSchedule {
                         .right_layer
                         .evaluate_property(KeyframeProperty::ScaleY, clip_offset);
 
-                    let mut render_w = (cropped_w * scale_x).round().max(2.0) as u32;
-                    let mut render_h = (cropped_h * scale_y).round().max(2.0) as u32;
+                    let (render_width, render_height) = trans
+                        .right_layer
+                        .rendered_size(base_w, base_h, scale_x, scale_y);
+                    let mut render_w = render_width.round().max(2.0) as u32;
+                    let mut render_h = render_height.round().max(2.0) as u32;
                     if !render_w.is_multiple_of(2) {
                         render_w += 1;
                     }
@@ -512,9 +566,12 @@ impl ExportAutomationSchedule {
                     audio_sample_time(render_start, i, audio_sample_rate, plan.frame_rate)?;
                 let gain = plan.effective_audio_gain_at(audio, timeline_time);
 
-                writer.write_all(&gain.to_le_bytes()).map_err(|e| {
-                    ExportError::IoError(format!("Failed to write audio envelope sample: {e}"))
-                })?;
+                let gain_bytes = gain.to_le_bytes();
+                for _ in 0..audio_channels[idx] {
+                    writer.write_all(&gain_bytes).map_err(|e| {
+                        ExportError::IoError(format!("Failed to write audio envelope sample: {e}"))
+                    })?;
+                }
             }
 
             writer.flush().map_err(|e| {
@@ -527,6 +584,7 @@ impl ExportAutomationSchedule {
                 audio_index: idx,
                 envelope_file: env_file,
                 sample_rate: audio_sample_rate,
+                channels: audio_channels[idx],
                 total_samples,
             });
         }
@@ -537,5 +595,195 @@ impl ExportAutomationSchedule {
             audio_layers,
             guard,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExportAutomationSchedule;
+    use crate::modules::composition::CompositionPlan;
+    use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
+    use crate::modules::domain::{
+        Asset, AssetDimensions, CutTransition, ItemKind, Keyframe, KeyframeProperty, MediaKind,
+        Project, TimelineItem, Track, TrackKind, TransitionKind,
+    };
+
+    #[test]
+    fn animated_portrait_fit_uses_source_aware_cropped_dimensions() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Animated portrait fit regression".to_string());
+        project.assets.push(Asset {
+            asset_id: "asset_portrait".to_string(),
+            name: "portrait.mp4".to_string(),
+            path: "portrait.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(60, rate)),
+            file_size: 0,
+            dimensions: Some(AssetDimensions {
+                width: 1080,
+                height: 1920,
+            }),
+        });
+
+        let range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(60, rate),
+        );
+        let mut item = TimelineItem::new(
+            Some("asset_portrait".to_string()),
+            "Portrait clip".to_string(),
+            ItemKind::Video,
+            range,
+            range,
+        )
+        .expect("valid portrait item");
+        item.crop.top = 0.05;
+        item.keyframes.push(Keyframe::new(
+            KeyframeProperty::PositionX,
+            RationalTime::from_frames(30, rate),
+            40.0,
+        ));
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("valid composition plan");
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_phase52_automation_geometry_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let schedule = ExportAutomationSchedule::build(&plan, &temp_dir, 48_000, None)
+            .expect("automation schedule should build");
+        assert_eq!(schedule.video_layers.len(), 1);
+
+        let commands = std::fs::read_to_string(&schedule.video_layers[0].command_file)
+            .expect("generated automation command file");
+        assert!(commands.contains("scale@sc_0 w 640;"), "{commands}");
+        assert!(commands.contains("scale@sc_0 h 1080;"), "{commands}");
+        assert!(commands.contains("overlay@ov_0 x 372;"), "{commands}");
+        assert!(commands.contains("overlay@ov_0 y -88;"), "{commands}");
+
+        drop(schedule);
+        let _ = std::fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn animated_portrait_transition_branches_keep_centered_fit_placement() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Animated portrait transition placement regression".into());
+        project.assets.push(Asset {
+            asset_id: "asset_portrait_transition".into(),
+            name: "portrait.mp4".into(),
+            path: "portrait.mp4".into(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(450, rate)),
+            file_size: 0,
+            dimensions: Some(AssetDimensions {
+                width: 1080,
+                height: 1920,
+            }),
+        });
+
+        let mut left = TimelineItem::new(
+            Some("asset_portrait_transition".into()),
+            "Left portrait".into(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(225, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(225, rate),
+            ),
+        )
+        .expect("valid left clip");
+        left.item_id = "transition_left_portrait".into();
+        left.transform.position_x = 40.0;
+        left.keyframes.push(Keyframe::new(
+            KeyframeProperty::PositionX,
+            RationalTime::from_frames(30, rate),
+            40.0,
+        ));
+
+        let mut right = TimelineItem::new(
+            Some("asset_portrait_transition".into()),
+            "Right portrait".into(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(225, rate),
+                RationalTime::from_frames(225, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(225, rate),
+                RationalTime::from_frames(225, rate),
+            ),
+        )
+        .expect("valid right clip");
+        right.item_id = "transition_right_portrait".into();
+        right.transform.position_x = 40.0;
+        right.keyframes.push(Keyframe::new(
+            KeyframeProperty::PositionX,
+            RationalTime::from_frames(30, rate),
+            40.0,
+        ));
+
+        let mut track = Track::new("Video".into(), TrackKind::Video);
+        track.track_id = "transition_portrait_track".into();
+        track.items.extend([left, right]);
+        track.transitions.push(CutTransition {
+            transition_id: "portrait_cross_dissolve".into(),
+            track_id: track.track_id.clone(),
+            left_item_id: "transition_left_portrait".into(),
+            right_item_id: "transition_right_portrait".into(),
+            kind: TransitionKind::CrossDissolve,
+            duration: RationalTime::from_frames(30, rate),
+        });
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("valid composition plan");
+        let temp_dir = std::env::temp_dir().join(format!(
+            "tinixcut_phase50_transition_geometry_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let schedule = ExportAutomationSchedule::build(&plan, &temp_dir, 48_000, None)
+            .expect("automation schedule should build");
+        let transition = &schedule.transition_branches[0];
+        let left_commands = std::fs::read_to_string(
+            transition
+                .left_command_file
+                .as_ref()
+                .expect("animated left branch command file"),
+        )
+        .expect("left branch automation commands");
+        let right_commands = std::fs::read_to_string(
+            transition
+                .right_command_file
+                .as_ref()
+                .expect("animated right branch command file"),
+        )
+        .expect("right branch automation commands");
+
+        // 1080x1920 Fit on 1920x1080 becomes 608x1080 after even-width rounding.
+        // The 40px position offset is relative to canvas center, matching static preview/export.
+        assert!(
+            left_commands.contains("overlay@ov_tr_l_0 x 696;"),
+            "{left_commands}"
+        );
+        assert!(
+            right_commands.contains("overlay@ov_tr_r_0 x 696;"),
+            "{right_commands}"
+        );
+        assert!(
+            !left_commands.contains("overlay@ov_tr_l_0 x 40;"),
+            "{left_commands}"
+        );
+        assert!(
+            !right_commands.contains("overlay@ov_tr_r_0 x 40;"),
+            "{right_commands}"
+        );
+
+        drop(schedule);
+        let _ = std::fs::remove_dir(temp_dir);
     }
 }

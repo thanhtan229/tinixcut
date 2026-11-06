@@ -2,7 +2,9 @@
 //! Architecture Invariant: Automation is a client of the editor, NOT UI mouse/keyboard simulation
 //! and NOT a second project reducer. It routes exclusively through the Command Service.
 
+pub mod edit_plan;
 pub mod mcp;
+pub mod workflow_manifest;
 
 use crate::modules::command::{
     CommandEnvelope, CommandError, CommandReceipt, CommandService, DiffReport,
@@ -11,12 +13,35 @@ use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{MediaKind, Project, TrackKind};
 use crate::modules::export::{ExportEngine, ExportError, ExportProfile, ExportReport};
 use crate::modules::job::{JobKind, JobManager, JobStatus};
-use crate::modules::persistence::{load_project, save_project_atomic};
+#[cfg(test)]
+use crate::modules::persistence::save_project_atomic;
+use crate::modules::persistence::{
+    load_project, load_project_revision_if_exists, same_project_path,
+    save_project_atomic_if_revision, PersistenceError,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
+
+/// Create an isolated edit branch while preserving the complete project content.
+pub fn clone_project_as_variant(source: &Project, name: &str) -> Result<Project, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Variant name cannot be empty".to_string());
+    }
+    let identity = Project::new(name.to_string());
+    let mut variant = source.clone();
+    variant.project_id = identity.project_id;
+    variant.name = identity.name;
+    variant.revision = 0;
+    variant.created_at = identity.created_at;
+    variant.updated_at = identity.updated_at;
+    variant.client_registry = Default::default();
+    variant.command_ledger.clear();
+    Ok(variant)
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutomationError {
@@ -25,6 +50,12 @@ pub enum AutomationError {
 
     #[error("Failed to load project: {0}")]
     ProjectLoad(String),
+
+    #[error("Project revision conflict: expected disk revision {expected:?}, found {actual:?}; reload the project or save as a new file to preserve your edits")]
+    ProjectRevisionConflict {
+        expected: Option<u64>,
+        actual: Option<u64>,
+    },
 
     #[error("Command execution error: {0}")]
     Command(#[from] CommandError),
@@ -47,6 +78,7 @@ impl AutomationError {
         match self {
             AutomationError::ProjectNotOpen => "PROJECT_NOT_OPEN",
             AutomationError::ProjectLoad(_) => "PROJECT_LOAD_FAILED",
+            AutomationError::ProjectRevisionConflict { .. } => "PROJECT_REVISION_CONFLICT",
             AutomationError::Command(CommandError::StaleRevision { .. }) => "STALE_REVISION",
             AutomationError::Command(CommandError::IdempotencyCollision { .. }) => {
                 "IDEMPOTENCY_COLLISION"
@@ -93,6 +125,15 @@ impl AutomationError {
             AutomationError::Serialization(_) => "SERIALIZATION_ERROR",
             AutomationError::Cli(_) => "CLI_ERROR",
         }
+    }
+}
+
+fn map_project_save_error(error: PersistenceError) -> AutomationError {
+    match error {
+        PersistenceError::RevisionConflict { expected, actual } => {
+            AutomationError::ProjectRevisionConflict { expected, actual }
+        }
+        other => AutomationError::ProjectLoad(other.to_string()),
     }
 }
 
@@ -265,6 +306,7 @@ pub struct AutomationSession {
     pub service: Option<CommandService>,
     pub jobs: Arc<Mutex<JobManager>>,
     pub current_project_path: Option<PathBuf>,
+    pub persisted_revision: Option<u64>,
 }
 
 impl Default for AutomationSession {
@@ -279,6 +321,7 @@ impl AutomationSession {
             service: None,
             jobs: Arc::new(Mutex::new(JobManager::new(4))),
             current_project_path: None,
+            persisted_revision: None,
         }
     }
 
@@ -288,12 +331,14 @@ impl AutomationSession {
         let report = AutomationAdapter::inspect_project(&project);
         self.service = Some(CommandService::new(project));
         self.current_project_path = Some(path.to_path_buf());
+        self.persisted_revision = Some(report.revision);
         Ok(report)
     }
 
     pub fn close_project(&mut self) -> Result<(), AutomationError> {
         self.service = None;
         self.current_project_path = None;
+        self.persisted_revision = None;
         Ok(())
     }
 
@@ -308,9 +353,21 @@ impl AutomationSession {
                 AutomationError::Cli("No path specified for project save".to_string())
             })?,
         };
-        save_project_atomic(service.project(), &path)
-            .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+        let same_path = match self.current_project_path.as_deref() {
+            Some(current_path) => same_project_path(current_path, &path)
+                .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?,
+            None => false,
+        };
+        let expected_revision = if same_path {
+            self.persisted_revision
+        } else {
+            load_project_revision_if_exists(&path)
+                .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?
+        };
+        save_project_atomic_if_revision(service.project(), &path, expected_revision)
+            .map_err(map_project_save_error)?;
         self.current_project_path = Some(path.clone());
+        self.persisted_revision = Some(service.project().revision);
         Ok(path.to_string_lossy().to_string())
     }
 
@@ -362,6 +419,7 @@ impl AutomationSession {
         mut envelope: CommandEnvelope,
         save_after: bool,
     ) -> Result<CommandReceipt, AutomationError> {
+        let expected_revision = self.persisted_revision;
         let service = self
             .service
             .as_mut()
@@ -385,8 +443,9 @@ impl AutomationSession {
         let receipt = service.execute(envelope)?;
         if save_after {
             if let Some(ref path) = self.current_project_path {
-                save_project_atomic(service.project(), path)
-                    .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+                save_project_atomic_if_revision(service.project(), path, expected_revision)
+                    .map_err(map_project_save_error)?;
+                self.persisted_revision = Some(service.project().revision);
             }
         }
         Ok(receipt)
@@ -866,11 +925,19 @@ impl AutomationAdapter {
         vec![
             "TrackCreate".to_string(),
             "TrackDelete".to_string(),
+            "TrackRename".to_string(),
+            "ProjectMarkerSet".to_string(),
+            "ProjectMarkerDelete".to_string(),
             "TrackReorder".to_string(),
             "TrackMuteSet".to_string(),
+            "TrackSoloSet".to_string(),
+            "TrackVolumeSet".to_string(),
+            "TrackLockSet".to_string(),
             "ClipCreate".to_string(),
             "ClipMove".to_string(),
             "ClipTrim".to_string(),
+            "ClipSlip".to_string(),
+            "ClipRoll".to_string(),
             "ClipSplit".to_string(),
             "ClipDelete".to_string(),
             "ClipDuplicate".to_string(),
@@ -879,17 +946,26 @@ impl AutomationAdapter {
             "ClipPlacementModeSet".to_string(),
             "ClipOpacitySet".to_string(),
             "ClipVolumeSet".to_string(),
+            "ClipEmbeddedAudioSet".to_string(),
+            "ClipAudioDetach".to_string(),
+            "ClipLinkSet".to_string(),
+            "ClipSpeedSet".to_string(),
             "ClipTextSet".to_string(),
             "ClipTextStyleSet".to_string(),
+            "TextTrackStyleSet".to_string(),
             "TextTemplateApply".to_string(),
+            "TextTrackTemplateApply".to_string(),
             "ClipTextTemplateReset".to_string(),
             "ClipAudioFadeSet".to_string(),
             "ClipTransitionSet".to_string(),
+            "ClipVisualEffectSet".to_string(),
+            "ClipColorAdjustmentsSet".to_string(),
             "ClipKeyframeAdd".to_string(),
             "ClipKeyframeRemove".to_string(),
             "ClipKeyframeMove".to_string(),
             "ClipKeyframeEasingSet".to_string(),
             "AssetImport".to_string(),
+            "AssetRelink".to_string(),
             "ProjectSettingsSet".to_string(),
             "CanvasBackgroundSet".to_string(),
             "CutTransitionCreate".to_string(),
@@ -1081,10 +1157,15 @@ impl AutomationAdapter {
         envelope: CommandEnvelope,
         save_after: bool,
     ) -> Result<CommandReceipt, AutomationError> {
+        let expected_revision = service.project().revision;
         let receipt = service.execute(envelope)?;
         if save_after {
-            save_project_atomic(service.project(), project_path)
-                .map_err(|e| AutomationError::ProjectLoad(e.to_string()))?;
+            save_project_atomic_if_revision(
+                service.project(),
+                project_path,
+                Some(expected_revision),
+            )
+            .map_err(map_project_save_error)?;
         }
         Ok(receipt)
     }
@@ -1363,6 +1444,46 @@ pub mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    #[test]
+    fn project_variant_gets_new_identity_but_preserves_content() {
+        let mut source = Project::new("Source".to_string());
+        source.revision = 12;
+        source.settings.width = 1080;
+        let source_id = source.project_id.clone();
+        let variant = super::clone_project_as_variant(&source, "  Cut B  ").unwrap();
+
+        assert_ne!(variant.project_id, source_id);
+        assert_eq!(variant.name, "Cut B");
+        assert_eq!(variant.revision, 0);
+        assert_eq!(variant.settings, source.settings);
+        assert_eq!(variant.assets, source.assets);
+        assert_eq!(variant.tracks, source.tracks);
+        assert!(variant.command_ledger.is_empty());
+        assert!(variant.client_registry.clients.is_empty());
+        assert_eq!(variant.client_registry.current_epoch, 1);
+        assert_eq!(source.project_id, source_id);
+        assert_eq!(source.revision, 12);
+    }
+
+    #[test]
+    fn project_variant_rejects_blank_name() {
+        let source = Project::new("Source".to_string());
+        assert!(super::clone_project_as_variant(&source, "   ").is_err());
+    }
+
+    #[test]
+    fn persistence_conflicts_keep_their_machine_readable_error_code() {
+        let error = super::map_project_save_error(
+            crate::modules::persistence::PersistenceError::RevisionConflict {
+                expected: Some(7),
+                actual: Some(8),
+            },
+        );
+
+        assert_eq!(error.error_code(), "PROJECT_REVISION_CONFLICT");
+        assert!(error.to_string().contains("expected disk revision Some(7)"));
+    }
+
     fn get_fixture_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("tinixcut_test_fixtures_phase10");
         fs::create_dir_all(&dir).unwrap();
@@ -1447,9 +1568,17 @@ pub mod tests {
             .supported_operations
             .contains(&"ClipCreate".to_string()));
         for operation in [
+            "TrackLockSet",
+            "TrackVolumeSet",
             "ClipTextStyleSet",
             "TextTemplateApply",
             "ClipTextTemplateReset",
+            "AssetRelink",
+            "ClipSpeedSet",
+            "ClipVisualEffectSet",
+            "ClipColorAdjustmentsSet",
+            "TextTrackStyleSet",
+            "TextTrackTemplateApply",
         ] {
             assert!(
                 inspect_report

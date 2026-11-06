@@ -7,12 +7,12 @@
 
 use crate::modules::domain::text::{
     AnimationTransform, AnimationUnit, FontReference, GradientKind, GradientSpace, RichTextSpan,
-    StrokeAlign, TextBackgroundBox, TextFill, TextRichStyle, TextWrapMode,
+    StrokeAlign, TextBackgroundBox, TextFill, TextLayout, TextRichStyle, TextWrapMode,
 };
 use crate::modules::domain::text_animation::{
     evaluate_text_animation_with_layout, EvaluatedTextMotion,
 };
-use crate::modules::domain::{Asset, TextAlignment, TextAnchor};
+use crate::modules::domain::{Asset, TextAlignment, TextAnchor, TextStyle};
 use crate::modules::media::text_renderer_poc::{
     blur_alpha_mask, dilate_alpha_mask, ColorRgba, GlyphAlphaMask, RgbaBuffer,
     DEFAULT_CACHE_MAX_BYTES,
@@ -35,6 +35,66 @@ pub const DEFAULT_RICH_FONT_SIZE: f32 = 48.0;
 
 /// Horizontal margin used when the style does not declare `max_width`.
 pub const DEFAULT_MAX_WIDTH_MARGIN: f32 = 80.0;
+
+fn legacy_text_style(style: &TextStyle) -> TextRichStyle {
+    let background = style
+        .background_color
+        .as_ref()
+        .filter(|_| style.background_opacity > 0.0)
+        .map(|background_color| TextBackgroundBox {
+            fill: TextFill::Solid {
+                color: background_color.clone(),
+            },
+            padding_x: style.padding_x,
+            padding_y: style.padding_y,
+            corner_radius: style.background_corner_radius,
+            opacity: style.background_opacity,
+        });
+
+    TextRichStyle {
+        font: Some(FontReference {
+            family: if style.font_family == "Inter" {
+                "Roboto".to_string()
+            } else {
+                style.font_family.clone()
+            },
+            weight: style.font_weight,
+            ..FontReference::default()
+        }),
+        font_size: Some(style.font_size),
+        layout: TextLayout {
+            alignment: style.alignment,
+            line_height: style.line_height,
+            ..TextLayout::default()
+        },
+        fill: TextFill::Solid {
+            color: style.font_color.clone(),
+        },
+        background,
+        ..TextRichStyle::default()
+    }
+}
+
+fn legacy_background_text_style(style: &TextStyle) -> Option<TextRichStyle> {
+    if style.background_color.is_none()
+        || style.background_opacity <= 0.0
+        || style.background_corner_radius <= 0.0
+    {
+        return None;
+    }
+    Some(legacy_text_style(style))
+}
+
+fn shared_legacy_text_style(
+    layer: &crate::modules::composition::CompositionVisualLayer,
+) -> Option<TextRichStyle> {
+    let style = layer.text_style.clone().unwrap_or_default();
+    legacy_background_text_style(&style).or_else(|| {
+        let is_animated_text = layer.kind == crate::modules::domain::ItemKind::Text
+            && (layer.text_animation.is_some() || !layer.keyframes.is_empty());
+        is_animated_text.then(|| legacy_text_style(&style))
+    })
+}
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum TextOverlayError {
@@ -1798,6 +1858,7 @@ impl RichTextRenderer {
                 last,
                 font_size,
                 newline,
+                whitespace: !newline && grapheme.chars().all(char::is_whitespace),
                 fill,
             });
         }
@@ -1820,6 +1881,7 @@ struct GraphemeMetric {
     last: Option<GlyphId>,
     font_size: f32,
     newline: bool,
+    whitespace: bool,
     fill: FillSpec,
 }
 
@@ -1862,17 +1924,45 @@ fn build_lines(metrics: &[GraphemeMetric], wrap: bool, max_width: f32) -> Vec<Li
     let mut lines: Vec<LineLayout> = Vec::new();
     let mut indices: Vec<usize> = Vec::new();
     let mut width = 0.0f32;
+    let mut last_break: Option<usize> = None;
 
     for (index, metric) in metrics.iter().enumerate() {
         if metric.newline {
             flush_line(&mut lines, &mut indices, &mut width, false);
+            last_break = None;
             continue;
         }
         if wrap && !indices.is_empty() && width + metric.width > max_width {
-            flush_line(&mut lines, &mut indices, &mut width, true);
+            if let Some(break_at) = last_break {
+                let remainder = indices.split_off(break_at + 1);
+                indices.truncate(break_at);
+                width = indices
+                    .iter()
+                    .map(|line_index| metrics[*line_index].width)
+                    .sum();
+                flush_line(&mut lines, &mut indices, &mut width, true);
+                indices = remainder;
+                width = indices
+                    .iter()
+                    .map(|line_index| metrics[*line_index].width)
+                    .sum();
+                last_break = indices
+                    .iter()
+                    .position(|line_index| metrics[*line_index].whitespace);
+                if !indices.is_empty() && width + metric.width > max_width {
+                    flush_line(&mut lines, &mut indices, &mut width, true);
+                    last_break = None;
+                }
+            } else {
+                flush_line(&mut lines, &mut indices, &mut width, true);
+                last_break = None;
+            }
         }
         indices.push(index);
         width += metric.width;
+        if metric.whitespace && indices.len() > 1 {
+            last_break = Some(indices.len() - 1);
+        }
     }
     flush_line(&mut lines, &mut indices, &mut width, false);
     if lines.is_empty() {
@@ -2866,7 +2956,7 @@ pub fn render_template_overlay_buffer(
                             opacity: st.background_opacity,
                             padding_x: st.padding_x * canvas_scale_x,
                             padding_y: st.padding_y * canvas_scale_y,
-                            corner_radius: 0.0,
+                            corner_radius: st.background_corner_radius,
                         }),
                         spans: Vec::new(),
                     };
@@ -3107,8 +3197,15 @@ pub fn render_overlay_for_layer(
             None,
         );
     }
-    let Some(rich) = layer.text_rich.as_ref() else {
-        return Ok(None);
+    let generated_rich;
+    let rich = if let Some(rich) = layer.text_rich.as_ref() {
+        rich
+    } else {
+        generated_rich = shared_legacy_text_style(layer);
+        let Some(rich) = generated_rich.as_ref() else {
+            return Ok(None);
+        };
+        rich
     };
     let text = layer.text_content.as_deref().unwrap_or("");
     if text.trim().is_empty() {
@@ -3169,8 +3266,15 @@ pub fn render_frame_overlay_at(
         );
     }
 
-    let Some(rich) = layer.text_rich.as_ref() else {
-        return Ok(None);
+    let generated_rich;
+    let rich = if let Some(rich) = layer.text_rich.as_ref() {
+        rich
+    } else {
+        generated_rich = shared_legacy_text_style(layer);
+        let Some(rich) = generated_rich.as_ref() else {
+            return Ok(None);
+        };
+        rich
     };
     let text = layer.text_content.as_deref().unwrap_or("");
     if text.trim().is_empty() {
@@ -3262,8 +3366,15 @@ pub fn render_frame_overlay_buffer_at(
         );
     }
 
-    let Some(rich) = layer.text_rich.as_ref() else {
-        return Ok(None);
+    let generated_rich;
+    let rich = if let Some(rich) = layer.text_rich.as_ref() {
+        rich
+    } else {
+        generated_rich = shared_legacy_text_style(layer);
+        let Some(rich) = generated_rich.as_ref() else {
+            return Ok(None);
+        };
+        rich
     };
     let text = layer.text_content.as_deref().unwrap_or("");
     if text.trim().is_empty() {
@@ -3376,8 +3487,19 @@ pub fn preview_overlay_at(
         }));
     }
 
-    let Some(rich) = composition_layer.text_rich.as_ref() else {
-        return Ok(None);
+    let generated_rich;
+    let rich = if let Some(rich) = composition_layer.text_rich.as_ref() {
+        rich
+    } else {
+        generated_rich = Some(legacy_text_style(
+            composition_layer
+                .text_style
+                .as_ref()
+                .unwrap_or(&TextStyle::default()),
+        ));
+        generated_rich
+            .as_ref()
+            .expect("legacy text style is present")
     };
     let text = composition_layer.text_content.as_deref().unwrap_or("");
     if text.trim().is_empty() {
@@ -3767,6 +3889,66 @@ mod tests {
     }
 
     #[test]
+    fn rounded_legacy_background_maps_to_shared_renderer_style() {
+        let mut legacy = TextStyle::default();
+        legacy.background_color = Some("#123456".to_string());
+        legacy.background_opacity = 0.75;
+        legacy.background_corner_radius = 14.0;
+        legacy.padding_x = 12.0;
+        legacy.padding_y = 6.0;
+
+        let rich = legacy_background_text_style(&legacy).expect("rounded legacy style");
+        let background = rich.background.expect("rounded background");
+        assert_eq!(background.corner_radius, 14.0);
+        assert_eq!(background.opacity, 0.75);
+        assert_eq!(background.padding_x, 12.0);
+        assert_eq!(background.padding_y, 6.0);
+        assert!(legacy_background_text_style(&TextStyle::default()).is_none());
+    }
+
+    #[test]
+    fn preview_rasterizes_legacy_text_with_square_background() {
+        use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
+        use crate::modules::domain::{ItemKind, Project, TimelineItem, Track, TrackKind};
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("legacy preview text".to_string());
+        let mut track = Track::new("Text".to_string(), TrackKind::Video);
+        let mut item = TimelineItem::new(
+            None,
+            "Caption".to_string(),
+            ItemKind::Text,
+            TimeRange::new(
+                RationalTime::zero(rate),
+                RationalTime::from_frames(150, rate),
+            ),
+            TimeRange::new(
+                RationalTime::zero(rate),
+                RationalTime::from_frames(150, rate),
+            ),
+        )
+        .expect("text item");
+        item.text_content = Some("Phase 53 caption after fix".to_string());
+        let mut text_style = TextStyle::default();
+        text_style.font_size = 42.0;
+        text_style.background_color = Some("#111827".to_string());
+        text_style.background_opacity = 0.82;
+        item.text_style = Some(text_style);
+        let item_id = item.item_id.clone();
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let overlay = preview_overlay_at(&project, &item_id, RationalTime::from_frames(60, rate))
+            .expect("preview rendering")
+            .expect("active legacy caption overlay");
+
+        assert!(overlay.has_visible_content);
+        assert!(!overlay.roi_png_bytes.is_empty());
+        let image = RgbaBuffer::from_png_bytes(&overlay.roi_png_bytes).expect("valid PNG ROI");
+        assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] > 0));
+    }
+
+    #[test]
     fn solid_fill_renders_vietnamese_diacritics_as_graphemes() {
         let renderer = renderer();
         let rich = base_style(TextFill::Solid {
@@ -3923,6 +4105,28 @@ mod tests {
             )
             .expect("autofit");
         assert!(fitted_overlay.roi[2] - fitted_overlay.roi[0] <= 260);
+    }
+
+    #[test]
+    fn wrapping_prefers_word_boundaries() {
+        let metrics: Vec<GraphemeMetric> = "hello world"
+            .chars()
+            .map(|character| GraphemeMetric {
+                width: 10.0,
+                first: None,
+                last: None,
+                font_size: 12.0,
+                newline: false,
+                whitespace: character.is_whitespace(),
+                fill: FillSpec::Solid(parse_hex_color("#FFFFFF").expect("white")),
+            })
+            .collect();
+
+        let lines = build_lines(&metrics, true, 60.0);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].indices, vec![0, 1, 2, 3, 4]);
+        assert_eq!(lines[1].indices, vec![6, 7, 8, 9, 10]);
     }
 
     #[test]

@@ -166,7 +166,7 @@ export const CapCutTemplateImportDialog: React.FC<CapCutTemplateImportDialogProp
         expectedResourceFingerprints: fingerprints,
         stagingToken: inspection.report.staging_token ?? "",
       });
-      await onApplied(`Applied imported template “${definition.name}” (revision ${receipt.new_revision}).`);
+      await onApplied(`Applied imported template “${definition.name}” (revision ${receipt.newRevision}).`);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

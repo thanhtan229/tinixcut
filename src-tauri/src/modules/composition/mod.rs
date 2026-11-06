@@ -4,8 +4,9 @@
 
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{
-    AssetDimensions, ClipSpeed, Crop, ItemKind, PlacementMode, Project, TextAnimation,
-    TextRichStyle, TextStyle, TextTemplateReference, TrackKind, Transform, VisualEffectPreset,
+    AssetDimensions, ClipSpeed, ColorAdjustments, Crop, ItemKind, PlacementMode, Project,
+    TextAnimation, TextRichStyle, TextStyle, TextTemplateReference, TrackKind, Transform,
+    VisualEffectPreset,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -91,6 +92,7 @@ pub struct CompositionVisualLayer {
     pub crop: Crop,
     pub placement_mode: PlacementMode,
     pub visual_effect: VisualEffectPreset,
+    pub color_adjustments: ColorAdjustments,
     pub opacity: f32,
     pub text_content: Option<String>,
     pub font_family: Option<String>,
@@ -109,6 +111,19 @@ pub struct CompositionVisualLayer {
 }
 
 impl CompositionVisualLayer {
+    pub fn uses_shared_text_overlay(&self) -> bool {
+        self.kind == ItemKind::Text
+            && (self.text_rich.is_some()
+                || self.template_instance.is_some()
+                || self.text_animation.is_some()
+                || !self.keyframes.is_empty()
+                || self.text_style.as_ref().is_some_and(|style| {
+                    style.background_color.is_some()
+                        && style.background_opacity > 0.0
+                        && style.background_corner_radius > 0.0
+                }))
+    }
+
     pub fn source_time_at(&self, timeline_time: RationalTime) -> RationalTime {
         let offset = timeline_time.sub_exact(&self.timeline_range.start);
         preserve_source_rate_when_exact(
@@ -219,6 +234,8 @@ pub struct CompositionAudioLayer {
     pub source_range: TimeRange,
     pub speed: ClipSpeed,
     pub volume: f32,
+    #[serde(default = "default_composition_track_volume")]
+    pub track_volume: f32,
     pub muted: bool,
     pub fade_in: Option<RationalTime>,
     pub fade_out: Option<RationalTime>,
@@ -238,7 +255,7 @@ impl CompositionAudioLayer {
 
     /// Computes effective volume gain at a specific timeline timestamp
     pub fn effective_volume_at(&self, timeline_time: RationalTime) -> f32 {
-        if self.muted {
+        if self.muted || self.track_volume <= 0.0 {
             return 0.0;
         }
         if !self.timeline_range.contains_time(timeline_time) {
@@ -283,8 +300,39 @@ impl CompositionAudioLayer {
             }
         }
 
-        base_vol
+        base_vol * self.track_volume
     }
+
+    /// Returns true if this audio layer can produce audible sound (> 0.0 gain)
+    /// at any point in its timeline range.
+    ///
+    /// Considers:
+    /// - `muted`: muted layers never produce sound.
+    /// - `keyframes`: if volume keyframes exist, returns true if any keyframe has value > 0.0.
+    /// - `volume`: if no volume keyframes exist, returns true if static volume is > 0.0.
+    /// - `fade_in` / `fade_out`: fades scale volume by factors in [0.0, 1.0], so they
+    ///   can only attenuate, never amplify a zero base volume.
+    pub fn can_become_audible(&self) -> bool {
+        if self.muted || self.track_volume <= 0.0 {
+            return false;
+        }
+
+        let volume_kfs: Vec<&CompositionKeyframe> = self
+            .keyframes
+            .iter()
+            .filter(|k| k.property == KeyframeProperty::Volume)
+            .collect();
+
+        if volume_kfs.is_empty() {
+            self.volume > 0.0
+        } else {
+            volume_kfs.iter().any(|k| k.value > 0.0)
+        }
+    }
+}
+
+fn default_composition_track_volume() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -421,17 +469,87 @@ fn default_composition_sample_rate() -> u32 {
     48000
 }
 
+fn default_composition_channels() -> u16 {
+    2
+}
+
+fn ffmpeg_channel_layout(channels: u16) -> String {
+    match channels {
+        1 => "mono".to_string(),
+        2 => "stereo".to_string(),
+        3 => "2.1".to_string(),
+        4 => "quad".to_string(),
+        5 => "5.0".to_string(),
+        6 => "5.1".to_string(),
+        7 => "6.1".to_string(),
+        8 => "7.1".to_string(),
+        other => format!("{other}c"),
+    }
+}
+
 fn default_composition_background_color() -> String {
     "#000000".to_string()
 }
 
-fn ffmpeg_visual_effect_filter(effect: VisualEffectPreset) -> &'static str {
-    match effect {
-        VisualEffectPreset::None => "",
-        VisualEffectPreset::Mono => ",eq=saturation=0",
-        VisualEffectPreset::Vivid => ",eq=contrast=1.12:saturation=1.25",
-        VisualEffectPreset::Muted => ",eq=contrast=0.96:saturation=0.70",
+/// Builds the shared SDR RGB affine transform used by the preview and FFmpeg.
+/// Values are gamma-encoded RGB, matching SVG feColorMatrix with sRGB interpolation.
+pub fn visual_color_matrix(
+    effect: VisualEffectPreset,
+    adjustments: ColorAdjustments,
+) -> [[f64; 4]; 3] {
+    let (preset_contrast, preset_saturation) = match effect {
+        VisualEffectPreset::None => (1.0, 1.0),
+        VisualEffectPreset::Mono => (1.0, 0.0),
+        VisualEffectPreset::Vivid => (1.12, 1.25),
+        VisualEffectPreset::Muted => (0.96, 0.70),
+    };
+    let contrast = preset_contrast as f64 * adjustments.contrast as f64;
+    let saturation = preset_saturation as f64 * adjustments.saturation as f64;
+    let offset = 0.5 * (1.0 - contrast) + adjustments.brightness as f64;
+    let t = adjustments.temperature as f64 * 0.12;
+    let gains = [1.0 + t, 1.0, 1.0 - t];
+    let luma = [0.2126, 0.7152, 0.0722];
+    let mut matrix = [[0.0; 4]; 3];
+    for row in 0..3 {
+        for column in 0..3 {
+            let saturation_component =
+                (if row == column { saturation } else { 0.0 }) + luma[column] * (1.0 - saturation);
+            matrix[row][column] = gains[row] * contrast * saturation_component;
+        }
+        matrix[row][3] = gains[row] * offset;
     }
+    matrix
+}
+
+fn ffmpeg_color_adjustment_filter(
+    effect: VisualEffectPreset,
+    adjustments: ColorAdjustments,
+) -> String {
+    let matrix = visual_color_matrix(effect, adjustments);
+    if matrix
+        == [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+    {
+        return String::new();
+    }
+    let expr = |row: usize| {
+        format!(
+            "'{}*r(X,Y)+{}*g(X,Y)+{}*b(X,Y)+{}'",
+            matrix[row][0],
+            matrix[row][1],
+            matrix[row][2],
+            matrix[row][3] * 255.0
+        )
+    };
+    format!(
+        ",format=rgba,geq=r={}:g={}:b={}:a='alpha(X,Y)'",
+        expr(0),
+        expr(1),
+        expr(2)
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -452,6 +570,8 @@ pub struct CompositionPlan {
     pub transitions: Vec<TransitionPlan>,
     #[serde(default = "default_composition_sample_rate")]
     pub sample_rate: u32,
+    #[serde(default = "default_composition_channels")]
+    pub channels: u16,
 }
 
 impl CompositionPlan {
@@ -518,6 +638,7 @@ impl CompositionPlan {
         let mut audio_layers = Vec::new();
         let mut audio_crossfades = Vec::new();
         let mut transitions = Vec::new();
+        let any_track_solo = project.tracks.iter().any(|track| track.solo);
 
         let asset_map: HashMap<String, (PathBuf, Option<AssetDimensions>)> = project
             .assets
@@ -590,6 +711,7 @@ impl CompositionPlan {
                             crop: item.crop.clone(),
                             placement_mode: item.placement_mode,
                             visual_effect: item.visual_effect,
+                            color_adjustments: item.color_adjustments,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: None,
@@ -606,7 +728,10 @@ impl CompositionPlan {
                         z_index += 1;
 
                         // Video item can also have audio if track is unmuted
-                        if item.kind == ItemKind::Video && !track.muted {
+                        if item.kind == ItemKind::Video
+                            && item.embedded_audio_enabled
+                            && !track.muted
+                        {
                             audio_layers.push(CompositionAudioLayer {
                                 layer_id: format!("al_{}", item.item_id),
                                 track_id: track.track_id.clone(),
@@ -617,7 +742,8 @@ impl CompositionPlan {
                                 source_range: item.source_range,
                                 speed: item.speed,
                                 volume: item.volume,
-                                muted: track.muted,
+                                track_volume: track.volume,
+                                muted: track.muted || (any_track_solo && !track.solo),
                                 fade_in: item.fade_in,
                                 fade_out: item.fade_out,
                                 keyframes: item.keyframes.clone(),
@@ -642,6 +768,7 @@ impl CompositionPlan {
                             crop: item.crop.clone(),
                             placement_mode: item.placement_mode,
                             visual_effect: VisualEffectPreset::None,
+                            color_adjustments: ColorAdjustments::default(),
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: Some(
@@ -685,7 +812,8 @@ impl CompositionPlan {
                             source_range: item.source_range,
                             speed: item.speed,
                             volume: item.volume,
-                            muted: track.muted,
+                            track_volume: track.volume,
+                            muted: track.muted || (any_track_solo && !track.solo),
                             fade_in: item.fade_in,
                             fade_out: item.fade_out,
                             keyframes: item.keyframes.clone(),
@@ -777,6 +905,7 @@ impl CompositionPlan {
             audio_crossfades,
             transitions,
             sample_rate: project.settings.sample_rate,
+            channels: project.settings.channels,
         })
     }
 }
@@ -831,6 +960,7 @@ fn sample_visual_layer_at(
         rotation,
         crop: layer.crop.clone(),
         visual_effect: layer.visual_effect,
+        color_adjustments: layer.color_adjustments,
         opacity,
         text: layer.text_content.clone(),
         font_family: layer.font_family.clone(),
@@ -999,7 +1129,7 @@ impl CompositionPlan {
             }
             if layer.timeline_range.contains_time(timestamp) {
                 let clip_offset = timestamp - layer.timeline_range.start;
-                let source_time = layer.source_range.start + clip_offset;
+                let source_time = layer.source_time_at(timestamp);
                 let opacity = layer.effective_opacity_at(clip_offset);
 
                 let sampled = sample_visual_layer_at(
@@ -1080,10 +1210,29 @@ impl CompositionPlan {
         schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
         overlays: &[TextOverlayInput],
     ) -> (String, String) {
+        self.build_video_filtergraph_with_layer_inputs(
+            input_paths,
+            base_duration,
+            sample_time,
+            schedule,
+            overlays,
+            None,
+        )
+    }
+
+    fn build_video_filtergraph_with_layer_inputs(
+        &self,
+        input_paths: &[PathBuf],
+        base_duration: f64,
+        sample_time: Option<RationalTime>,
+        schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
+        overlays: &[TextOverlayInput],
+        layer_input_indices: Option<&HashMap<String, usize>>,
+    ) -> (String, String) {
         let mut filter_complex = String::new();
 
         filter_complex.push_str(&format!(
-            "color=c={}:s={}x{}:r={}:d={:.3}[base];",
+            "color=c={}:s={}x{}:r={}:d={:.6}[base];",
             ffmpeg_canvas_color(&self.canvas_background_color),
             self.width,
             self.height,
@@ -1202,23 +1351,25 @@ impl CompositionPlan {
 
                             let mut filter_chain = String::new();
                             if let Some(ref path) = layer.asset_path {
-                                let input_idx =
-                                    input_paths.iter().position(|p| p == path).unwrap_or(0);
+                                let input_idx = layer_input_indices
+                                    .and_then(|indices| indices.get(&layer.item_id).copied())
+                                    .or_else(|| input_paths.iter().position(|p| p == path))
+                                    .unwrap_or(0);
 
                                 if ord_start_sec.abs() < 1e-5 {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=(PTS-STARTPTS)/{:.6}",
+                                        "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
                                         input_idx, ord_src_start, source_duration, layer.speed.as_f64()
                                     ));
                                 } else {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.3}:duration={:.3},setpts=(PTS-STARTPTS)/{:.6}+{:.3}/TB",
+                                        "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}+{:.6}/TB",
                                         input_idx, ord_src_start, source_duration, layer.speed.as_f64(), ord_start_sec
                                     ));
                                 }
                             } else {
                                 filter_chain.push_str(&format!(
-                                    "color=c=blue:s={}x{}:d={:.3}",
+                                    "color=c=blue:s={}x{}:d={:.6}",
                                     render_w.max(2),
                                     render_h.max(2),
                                     ord_duration
@@ -1236,8 +1387,6 @@ impl CompositionPlan {
                                     layer.crop.left, layer.crop.right, layer.crop.top, layer.crop.bottom, layer.crop.left, layer.crop.top
                                 ));
                             }
-                            filter_chain.push_str(ffmpeg_visual_effect_filter(layer.visual_effect));
-
                             let layer_idx = self
                                 .visual_layers
                                 .iter()
@@ -1250,12 +1399,18 @@ impl CompositionPlan {
                             if let Some(auto) = layer_auto {
                                 let init_angle_rad = rotation * std::f32::consts::PI / 180.0;
                                 filter_chain.push_str(&format!(
-                                    ",format=yuva420p,sendcmd=f='{}',scale@sc_{}=eval=frame:w={}:h={},rotate@rot_{}=angle={:.4}:ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=none,colorchannelmixer@ccm_{}=aa={:.3}[{}];",
+                                    ",format=yuva420p,sendcmd=f='{}',scale@sc_{}=eval=frame:w={}:h={},rotate@rot_{}=angle={:.4}:ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=none",
                                     auto.escaped_command_file,
                                     layer_idx, render_w, render_h,
-                                    layer_idx, init_angle_rad,
-                                    layer_idx, opacity,
-                                    layer_tag
+                                    layer_idx, init_angle_rad
+                                ));
+                                filter_chain.push_str(&ffmpeg_color_adjustment_filter(
+                                    layer.visual_effect,
+                                    layer.color_adjustments,
+                                ));
+                                filter_chain.push_str(&format!(
+                                    ",colorchannelmixer@ccm_{}=aa={:.3}[{}];",
+                                    layer_idx, opacity, layer_tag
                                 ));
                             } else {
                                 // Scale filter
@@ -1268,6 +1423,11 @@ impl CompositionPlan {
                                         rotation
                                     ));
                                 }
+
+                                filter_chain.push_str(&ffmpeg_color_adjustment_filter(
+                                    layer.visual_effect,
+                                    layer.color_adjustments,
+                                ));
 
                                 // Transition filters (FadeIn, FadeOut, CrossDissolve, FadeBlack)
                                 if let Some(ref trans) = layer.transition {
@@ -1339,7 +1499,7 @@ impl CompositionPlan {
                             }
                         }
                         ItemKind::Text => {
-                            if layer.text_rich.is_some() || layer.template_instance.is_some() {
+                            if layer.uses_shared_text_overlay() {
                                 // Rich items are rendered by the shared renderer.
                                 // A missing materialized overlay means the layer is
                                 // invisible at this boundary; never fall back to
@@ -1507,7 +1667,10 @@ impl CompositionPlan {
                     let left_clip_tag = format!("tr_l_clip_{}", trans_idx);
                     let mut left_clip_filter = String::new();
                     if let Some(ref path) = left_layer.asset_path {
-                        let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
+                        let input_idx = layer_input_indices
+                            .and_then(|indices| indices.get(&left_layer.item_id).copied())
+                            .or_else(|| input_paths.iter().position(|p| p == path))
+                            .unwrap_or(0);
                         left_clip_filter.push_str(&format!(
                             "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
                             input_idx,
@@ -1534,8 +1697,6 @@ impl CompositionPlan {
                         ));
                     }
                     left_clip_filter
-                        .push_str(ffmpeg_visual_effect_filter(left_layer.visual_effect));
-                    left_clip_filter
                         .push_str(&format!(",scale={}:{}", left_render_w, left_render_h));
                     if left_rotation.abs() > 0.01 {
                         left_clip_filter.push_str(&format!(
@@ -1543,6 +1704,10 @@ impl CompositionPlan {
                             left_rotation
                         ));
                     }
+                    left_clip_filter.push_str(&ffmpeg_color_adjustment_filter(
+                        left_layer.visual_effect,
+                        left_layer.color_adjustments,
+                    ));
                     left_clip_filter.push_str(&format!(
                         ",format=yuva420p,colorchannelmixer=aa={:.3}[{}];",
                         left_opacity, left_clip_tag
@@ -1612,7 +1777,10 @@ impl CompositionPlan {
                     let right_clip_tag = format!("tr_r_clip_{}", trans_idx);
                     let mut right_clip_filter = String::new();
                     if let Some(ref path) = right_layer.asset_path {
-                        let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
+                        let input_idx = layer_input_indices
+                            .and_then(|indices| indices.get(&right_layer.item_id).copied())
+                            .or_else(|| input_paths.iter().position(|p| p == path))
+                            .unwrap_or(0);
                         right_clip_filter.push_str(&format!(
                             "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
                             input_idx,
@@ -1639,8 +1807,6 @@ impl CompositionPlan {
                         ));
                     }
                     right_clip_filter
-                        .push_str(ffmpeg_visual_effect_filter(right_layer.visual_effect));
-                    right_clip_filter
                         .push_str(&format!(",scale={}:{}", right_render_w, right_render_h));
                     if right_rotation.abs() > 0.01 {
                         right_clip_filter.push_str(&format!(
@@ -1648,6 +1814,10 @@ impl CompositionPlan {
                             right_rotation
                         ));
                     }
+                    right_clip_filter.push_str(&ffmpeg_color_adjustment_filter(
+                        right_layer.visual_effect,
+                        right_layer.color_adjustments,
+                    ));
                     right_clip_filter.push_str(&format!(
                         ",format=yuva420p,colorchannelmixer=aa={:.3}[{}];",
                         right_opacity, right_clip_tag
@@ -1756,20 +1926,30 @@ impl CompositionPlan {
     ) -> (Vec<String>, String) {
         let mut args: Vec<String> = Vec::new();
 
-        // 1. Gather unique input assets
+        // Give each visual clip its own decoder input. Reusing one demuxed input
+        // for clips at later timeline offsets makes FFmpeg buffer unconsumed
+        // frames across filter branches until those offsets are reached.
         let mut input_paths: Vec<PathBuf> = Vec::new();
+        let mut layer_input_indices: HashMap<String, usize> = HashMap::new();
+        let mut audio_input_indices: HashMap<usize, usize> = HashMap::new();
         for layer in &self.visual_layers {
             if let Some(ref path) = layer.asset_path {
-                if !input_paths.contains(path) {
-                    input_paths.push(path.clone());
-                }
+                let input_index = input_paths.len();
+                input_paths.push(path.clone());
+                layer_input_indices.insert(layer.item_id.clone(), input_index);
             }
         }
-        for audio in &self.audio_layers {
-            if let Some(ref path) = audio.asset_path {
-                if !input_paths.contains(path) {
-                    input_paths.push(path.clone());
-                }
+        for (audio_index, audio) in self.audio_layers.iter().enumerate() {
+            if let Some(path) = &audio.asset_path {
+                let input_index =
+                    if let Some(video_input_index) = layer_input_indices.get(&audio.item_id) {
+                        *video_input_index
+                    } else {
+                        let input_index = input_paths.len();
+                        input_paths.push(path.clone());
+                        input_index
+                    };
+                audio_input_indices.insert(audio_index, input_index);
             }
         }
         for overlay in overlays {
@@ -1798,7 +1978,7 @@ impl CompositionPlan {
                 args.push("-ar".to_string());
                 args.push(audio_auto.sample_rate.to_string());
                 args.push("-ac".to_string());
-                args.push("1".to_string());
+                args.push(audio_auto.channels.to_string());
                 args.push("-i".to_string());
                 args.push(audio_auto.envelope_file.to_string_lossy().to_string());
             }
@@ -1806,25 +1986,40 @@ impl CompositionPlan {
 
         // 2. Build video filter chain:
         let duration_secs = self.duration.to_seconds();
-        let (mut filter_complex, current_base) = self.build_video_filtergraph_with_overlays(
-            &input_paths,
-            duration_secs,
-            None,
-            schedule,
-            overlays,
-        );
+        let (mut filter_complex, mut current_base) = self
+            .build_video_filtergraph_with_layer_inputs(
+                &input_paths,
+                duration_secs,
+                None,
+                schedule,
+                overlays,
+                Some(&layer_input_indices),
+            );
 
-        // Audio filter chain
+        let canonical_frames = self.duration.rescaled_to(self.frame_rate).value;
+        if canonical_frames > 0 {
+            let bounded_base = format!("{}_bounded", current_base);
+            filter_complex.push_str(&format!(
+                "[{}]trim=end_frame={}[{}];",
+                current_base, canonical_frames, bounded_base
+            ));
+            current_base = bounded_base;
+        }
+
+        // Each audio timeline item has its own decoder input. Splitting one
+        // decoded stream across clips at different timeline offsets can force
+        // FFmpeg to retain delayed audio branches until the mix catches up.
         let mut audio_tags = Vec::new();
         let mut audio_idx = 0;
         for (i, audio) in self.audio_layers.iter().enumerate() {
-            if audio.muted {
+            if audio.muted || !audio.can_become_audible() {
                 continue;
             }
-            if let Some(ref path) = audio.asset_path {
+            if audio.asset_path.is_some() {
                 let (render_start, render_source_start, render_duration) =
                     self.audio_render_window(audio);
-                let input_idx = input_paths.iter().position(|p| p == path).unwrap_or(0);
+                let input_idx = audio_input_indices.get(&i).copied().unwrap_or(0);
+                let audio_source = format!("[{}:a]", input_idx);
                 let tag = format!("a_{}", audio_idx);
                 audio_idx += 1;
 
@@ -1839,21 +2034,17 @@ impl CompositionPlan {
                 if let Some(env_pos) = audio_auto {
                     let env_input_idx = input_paths.len() + env_pos;
                     filter_complex.push_str(&format!(
-                        "[{}:a]pan=stereo|c0=c0|c1=c0[env_st_{}];",
-                        env_input_idx, i
+                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS,atempo={:.6}[a_trimmed_{}];",
+                        audio_source, src_start, src_dur, audio.speed.as_f64(), i
                     ));
                     filter_complex.push_str(&format!(
-                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS,atempo={:.6}[a_trimmed_{}];",
-                        input_idx, src_start, src_dur, audio.speed.as_f64(), i
-                    ));
-                    filter_complex.push_str(&format!(
-                        "[a_trimmed_{}][env_st_{}]amultiply,adelay={}|{}[{}];",
-                        i, i, timeline_start_ms, timeline_start_ms, tag
+                        "[a_trimmed_{}][{}:a]amultiply,adelay={}|{}[{}];",
+                        i, env_input_idx, timeline_start_ms, timeline_start_ms, tag
                     ));
                 } else {
                     let mut filter_chain = format!(
-                        "[{}:a]atrim=start={:.3}:duration={:.3},asetpts=PTS-STARTPTS,atempo={:.6},volume={:.3}",
-                        input_idx, src_start, src_dur, audio.speed.as_f64(), audio.volume
+                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS,atempo={:.6},volume={:.3}",
+                        audio_source, src_start, src_dur, audio.speed.as_f64(), audio.volume
                     );
 
                     if let Some(fade_in) = audio.fade_in {
@@ -1890,11 +2081,13 @@ impl CompositionPlan {
                 .map(|t| format!("[{}]", t))
                 .collect::<Vec<_>>()
                 .join("");
+            let channel_layout = ffmpeg_channel_layout(self.channels);
             filter_complex.push_str(&format!(
-                "{}amix=inputs={}:duration=longest,apad,atrim=duration={:.6}[outa];",
+                "{}amix=inputs={}:duration=longest:dropout_transition=0,asetpts=N/SR/TB,apad,atrim=duration={:.6},aformat=channel_layouts={}[outa];",
                 combined,
                 audio_tags.len(),
-                duration_secs
+                duration_secs,
+                channel_layout
             ));
             Some("outa")
         } else {
@@ -1926,6 +2119,11 @@ impl CompositionPlan {
         args.push(crf.to_string());
         args.push("-pix_fmt".to_string());
         args.push("yuv420p".to_string());
+        let canonical_frames = self.duration.rescaled_to(self.frame_rate).value;
+        if canonical_frames > 0 {
+            args.push("-frames:v".to_string());
+            args.push(canonical_frames.to_string());
+        }
         args.push("-f".to_string());
         args.push("mp4".to_string());
         args.push("-y".to_string());
@@ -2058,6 +2256,8 @@ pub struct PreviewSampledLayer {
     pub rotation: f32,
     pub crop: Crop,
     pub visual_effect: VisualEffectPreset,
+    #[serde(default)]
+    pub color_adjustments: ColorAdjustments,
     pub opacity: f32,
     pub text: Option<String>,
     pub font_family: Option<String>,
@@ -2094,6 +2294,46 @@ pub mod tests {
     };
     use crate::modules::media::resolver::MediaBinaryResolver;
     use std::fs;
+
+    #[test]
+    fn phase52_color_matrix_is_neutral_and_uses_shared_sdr_semantics() {
+        let neutral = visual_color_matrix(VisualEffectPreset::None, ColorAdjustments::default());
+        assert_eq!(
+            neutral,
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0]
+            ]
+        );
+        assert!(ffmpeg_color_adjustment_filter(
+            VisualEffectPreset::None,
+            ColorAdjustments::default()
+        )
+        .is_empty());
+
+        let vivid = visual_color_matrix(VisualEffectPreset::Vivid, ColorAdjustments::default());
+        assert!((vivid[0][0] - 1.12 * (0.2126 * (1.0 - 1.25) + 1.25)).abs() < 1e-10);
+        assert!(ffmpeg_color_adjustment_filter(
+            VisualEffectPreset::Vivid,
+            ColorAdjustments::default()
+        )
+        .contains("geq"));
+
+        let mono = visual_color_matrix(VisualEffectPreset::Mono, ColorAdjustments::default());
+        assert!((mono[0][0] - 0.2126).abs() < 1e-10);
+        assert!((mono[1][1] - 0.7152).abs() < 1e-10);
+
+        let warm = visual_color_matrix(
+            VisualEffectPreset::None,
+            ColorAdjustments {
+                temperature: 1.0,
+                ..Default::default()
+            },
+        );
+        assert!(warm[0][0] > neutral[0][0]);
+        assert!(warm[2][2] < neutral[2][2]);
+    }
 
     #[test]
     fn canvas_background_is_carried_to_the_export_filtergraph() {
@@ -2207,6 +2447,150 @@ pub mod tests {
         assert_eq!(
             preview.active_audio[0].item_id,
             plan.visual_layers[0].item_id
+        );
+
+        let video_item_id = plan.visual_layers[0].item_id.clone();
+        project.tracks[0].items[0].embedded_audio_enabled = false;
+        let muted_embedded_plan = CompositionPlan::from_project(&project)
+            .expect("video remains valid when embedded audio is disabled");
+        assert_eq!(muted_embedded_plan.visual_layers.len(), 1);
+        assert_eq!(muted_embedded_plan.visual_layers[0].item_id, video_item_id);
+        assert!(muted_embedded_plan.audio_layers.is_empty());
+    }
+
+    #[test]
+    fn track_solo_keeps_soloed_audio_and_mutes_other_audio_without_hiding_video() {
+        let rate = FrameRate::FPS_30;
+        let range = TimeRange::new(
+            RationalTime::zero(rate),
+            RationalTime::from_frames(30, rate),
+        );
+        let mut project = Project::new("Track solo mix".to_string());
+        project.assets.extend([
+            Asset {
+                asset_id: "solo_video_asset".to_string(),
+                name: "video.mp4".to_string(),
+                path: "D:/media/video.mp4".to_string(),
+                media_kind: MediaKind::Video,
+                duration: Some(RationalTime::from_frames(60, rate)),
+                file_size: 1,
+                dimensions: None,
+            },
+            Asset {
+                asset_id: "solo_music_asset".to_string(),
+                name: "music.wav".to_string(),
+                path: "D:/media/music.wav".to_string(),
+                media_kind: MediaKind::Audio,
+                duration: Some(RationalTime::from_frames(60, rate)),
+                file_size: 1,
+                dimensions: None,
+            },
+        ]);
+        let mut video_track = Track::new("Video".to_string(), TrackKind::Video);
+        let video = TimelineItem::new(
+            Some("solo_video_asset".to_string()),
+            "Video clip".to_string(),
+            ItemKind::Video,
+            range,
+            range,
+        )
+        .unwrap();
+        let video_id = video.item_id.clone();
+        video_track.items.push(video);
+        project.tracks.push(video_track);
+        let mut audio_track = Track::new("Music".to_string(), TrackKind::Audio);
+        audio_track.solo = true;
+        let music = TimelineItem::new(
+            Some("solo_music_asset".to_string()),
+            "Music".to_string(),
+            ItemKind::Audio,
+            range,
+            range,
+        )
+        .unwrap();
+        let music_id = music.item_id.clone();
+        audio_track.items.push(music);
+        project.tracks.push(audio_track);
+
+        let plan = CompositionPlan::from_project(&project).expect("solo mix compiles");
+        assert_eq!(plan.visual_layers.len(), 1, "solo must not hide video");
+        assert_eq!(plan.audio_layers.len(), 2);
+        assert!(
+            plan.audio_layers
+                .iter()
+                .find(|layer| layer.item_id == video_id)
+                .unwrap()
+                .muted
+        );
+        assert!(
+            !plan
+                .audio_layers
+                .iter()
+                .find(|layer| layer.item_id == music_id)
+                .unwrap()
+                .muted
+        );
+    }
+
+    #[test]
+    fn repeated_video_asset_clips_use_independent_ffmpeg_inputs() {
+        let rate = FrameRate::FPS_30;
+        let path = "D:/media/repeated.mp4";
+        let mut project = Project::new("Repeated source clips".to_string());
+        project.assets.push(Asset {
+            asset_id: "asset_repeated".to_string(),
+            name: "repeated.mp4".to_string(),
+            path: path.to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(120, rate)),
+            file_size: 1024,
+            dimensions: Some(AssetDimensions {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        for index in 0..2 {
+            let range = TimeRange::new(
+                RationalTime::from_frames(index * 30, rate),
+                RationalTime::from_frames(30, rate),
+            );
+            track.items.push(
+                TimelineItem::new(
+                    Some("asset_repeated".to_string()),
+                    format!("Clip {index}"),
+                    ItemKind::Video,
+                    range,
+                    TimeRange::new(RationalTime::from_frames(0, rate), range.duration),
+                )
+                .unwrap(),
+            );
+        }
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("compile composition");
+        let (args, graph) = plan.to_ffmpeg_export_args(Path::new("D:/output.mp4"), 23, "libx264");
+
+        let media_inputs = args
+            .windows(2)
+            .filter(|pair| pair[0] == "-i" && pair[1] == path)
+            .count();
+        assert_eq!(
+            media_inputs, 2,
+            "each timeline clip needs its own decoder input"
+        );
+        assert!(
+            graph.contains("[0:v]trim="),
+            "first clip should use input 0: {graph}"
+        );
+        assert!(
+            graph.contains("[1:v]trim="),
+            "second clip should use input 1: {graph}"
+        );
+        assert!(
+            graph.contains("[0:a]atrim=") && graph.contains("[1:a]atrim="),
+            "each repeated clip's embedded audio uses its clip decoder input: {graph}"
         );
     }
 
@@ -2394,14 +2778,18 @@ pub mod tests {
             {
                 let envelope = &schedule.audio_layers[audio_index];
                 assert_eq!(envelope.sample_rate, sample_rate);
+                assert_eq!(envelope.channels, 2);
                 let bytes = fs::read(&envelope.envelope_file).expect("read generated envelope");
                 let samples: Vec<f32> = bytes
                     .chunks_exact(std::mem::size_of::<f32>())
                     .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
                     .collect();
                 let expected = std::f32::consts::FRAC_1_SQRT_2;
+                let envelope_sample_index =
+                    timeline_midpoint_sample as usize * envelope.channels as usize;
                 assert!(
-                    (samples[timeline_midpoint_sample as usize] - expected).abs() < 0.0001,
+                    (samples[envelope_sample_index] - expected).abs() < 0.0001
+                        && (samples[envelope_sample_index + 1] - expected).abs() < 0.0001,
                     "sample rate {sample_rate}, audio index {audio_index}"
                 );
             }
@@ -2512,6 +2900,16 @@ pub mod tests {
             (1.0 - 0.5 * 42.0 / 48.0) * 0.5 * (std::f32::consts::FRAC_PI_8).cos();
         assert!(
             (plan.effective_audio_gain_at(left_layer, sample_time) - expected_keyframed_left).abs()
+                < 0.0001
+        );
+        let half_track_gain = CompositionAudioLayer {
+            track_volume: 0.5,
+            ..left_layer.clone()
+        };
+        assert!(
+            (plan.effective_audio_gain_at(&half_track_gain, sample_time)
+                - expected_keyframed_left * 0.5)
+                .abs()
                 < 0.0001
         );
         let volume_only_left = CompositionAudioLayer {
@@ -3263,8 +3661,11 @@ pub mod tests {
             2.0,
             None,
         );
-        assert!(filtergraph.contains("eq=contrast=1.12:saturation=1.25"));
-        assert!(filtergraph.contains("eq=saturation=0"));
+        assert!(
+            filtergraph.contains("geq=r='"),
+            "preset color transforms should use the shared RGB matrix: {filtergraph}"
+        );
+        assert!(!filtergraph.contains("eq=contrast="));
         assert!(filtergraph.contains("xfade=transition=fadeblack"));
     }
 
@@ -3410,6 +3811,572 @@ pub mod tests {
         assert!(
             metadata.len() > 1000,
             "Exported MP4 file must have non-trivial size"
+        );
+    }
+
+    #[test]
+    fn test_audio_layer_can_become_audible_semantics() {
+        let rate = FrameRate::FPS_30;
+        let mut layer = CompositionAudioLayer {
+            layer_id: "a1".to_string(),
+            track_id: "t1".to_string(),
+            item_id: "i1".to_string(),
+            asset_id: Some("asset1".to_string()),
+            asset_path: Some(PathBuf::from("audio.wav")),
+            timeline_range: TimeRange::new(RationalTime::new(0, rate), RationalTime::new(90, rate)),
+            source_range: TimeRange::new(RationalTime::new(0, rate), RationalTime::new(90, rate)),
+            speed: ClipSpeed::default(),
+            volume: 0.0,
+            track_volume: 1.0,
+            muted: false,
+            fade_in: None,
+            fade_out: None,
+            keyframes: Vec::new(),
+        };
+
+        // 1. Static volume 0.0 without keyframes is not audible
+        assert!(!layer.can_become_audible());
+
+        // 2. Fades on 0.0 volume still cannot produce sound
+        layer.fade_in = Some(RationalTime::new(15, rate));
+        layer.fade_out = Some(RationalTime::new(15, rate));
+        assert!(!layer.can_become_audible());
+
+        // 3. Normal positive volume is audible
+        layer.volume = 1.0;
+        assert!(layer.can_become_audible());
+
+        // 4. Muted layer is never audible
+        layer.muted = true;
+        assert!(!layer.can_become_audible());
+        layer.muted = false;
+
+        // 5. Volume 0.0 with positive keyframe can become audible
+        layer.volume = 0.0;
+        layer.keyframes.push(CompositionKeyframe::new(
+            KeyframeProperty::Volume,
+            RationalTime::new(30, rate),
+            0.8,
+        ));
+        assert!(layer.can_become_audible());
+
+        // 6. Positive base volume with only zero-gain keyframes is not audible
+        layer.volume = 1.0;
+        layer.keyframes.clear();
+        layer.keyframes.push(CompositionKeyframe::new(
+            KeyframeProperty::Volume,
+            RationalTime::new(0, rate),
+            0.0,
+        ));
+        layer.keyframes.push(CompositionKeyframe::new(
+            KeyframeProperty::Volume,
+            RationalTime::new(90, rate),
+            0.0,
+        ));
+        assert!(!layer.can_become_audible());
+    }
+
+    #[test]
+    fn test_zero_gain_audio_stream_does_not_attenuate_mix() {
+        use crate::modules::domain::{Asset, MediaKind, Track};
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Zero-gain Mix Attenuation Regression".to_string());
+
+        let video_asset_id = "asset_vid".to_string();
+        project.assets.push(Asset {
+            asset_id: video_asset_id.clone(),
+            name: "video.mp4".to_string(),
+            path: "D:/media/video.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(90, rate)),
+            file_size: 100,
+            dimensions: Some(AssetDimensions {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+
+        let audio_asset_id = "asset_wav".to_string();
+        project.assets.push(Asset {
+            asset_id: audio_asset_id.clone(),
+            name: "voice.wav".to_string(),
+            path: "D:/media/voice.wav".to_string(),
+            media_kind: MediaKind::Audio,
+            duration: Some(RationalTime::from_frames(90, rate)),
+            file_size: 100,
+            dimensions: None,
+        });
+
+        let item_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(90, rate),
+        );
+
+        // Track 1: Video track with video item having volume = 0.0
+        let mut v_track = Track::new("Video Track".to_string(), TrackKind::Video);
+        let mut video_item = TimelineItem::new(
+            Some(video_asset_id),
+            "Video Clip".to_string(),
+            ItemKind::Video,
+            item_range,
+            item_range,
+        )
+        .unwrap();
+        video_item.volume = 0.0;
+        v_track.items.push(video_item);
+        project.tracks.push(v_track);
+
+        // Track 2: Audio track with WAV item having full volume = 1.0
+        let mut a_track = Track::new("Audio Track".to_string(), TrackKind::Audio);
+        let mut audio_item = TimelineItem::new(
+            Some(audio_asset_id),
+            "WAV Track".to_string(),
+            ItemKind::Audio,
+            item_range,
+            item_range,
+        )
+        .unwrap();
+        audio_item.volume = 1.0;
+        a_track.items.push(audio_item);
+        project.tracks.push(a_track);
+
+        let plan = CompositionPlan::from_project(&project).expect("Plan compilation must succeed");
+        assert_eq!(plan.audio_layers.len(), 2);
+        assert_eq!(plan.audio_layers[0].volume, 0.0);
+        assert_eq!(plan.audio_layers[1].volume, 1.0);
+
+        let output_path = PathBuf::from("D:/export/output.mp4");
+        let (_args, filter_complex) = plan.to_ffmpeg_export_args(&output_path, 23, "libx264");
+
+        // The zero-gain video audio layer must NOT become an amix input!
+        // amix must receive only inputs=1 so the 1.0 WAV gain is NOT normalized/halved.
+        assert!(
+            filter_complex.contains("amix=inputs=1"),
+            "Expected single audible input into amix, got filtergraph: {}",
+            filter_complex
+        );
+        assert!(
+            !filter_complex.contains("amix=inputs=2"),
+            "Zero-gain audio stream must not create a second amix input: {}",
+            filter_complex
+        );
+        assert!(
+            filter_complex.contains("volume=1.000"),
+            "Audible WAV stream must be present in filtergraph: {}",
+            filter_complex
+        );
+        assert!(
+            !filter_complex.contains("volume=0.000"),
+            "Zero-gain stream must be omitted from filtergraph: {}",
+            filter_complex
+        );
+
+        // --- Normal two-audible-source mix behavior test ---
+        project.tracks[0].items[0].volume = 0.5;
+        let plan_two_audible = CompositionPlan::from_project(&project).unwrap();
+        let (_, filter_complex_two) =
+            plan_two_audible.to_ffmpeg_export_args(&output_path, 23, "libx264");
+        assert!(
+            filter_complex_two.contains("amix=inputs=2"),
+            "Normal two-audible-source mix must preserve inputs=2: {}",
+            filter_complex_two
+        );
+
+        // --- Keyframed volume test: volume=0.0 with positive keyframe must NOT be omitted ---
+        project.tracks[0].items[0].volume = 0.0;
+        project.tracks[0].items[0]
+            .keyframes
+            .push(crate::modules::domain::Keyframe::new(
+                KeyframeProperty::Volume,
+                RationalTime::from_frames(45, rate),
+                0.8,
+            ));
+        let plan_keyframed = CompositionPlan::from_project(&project).unwrap();
+        let (_, filter_complex_kfs) =
+            plan_keyframed.to_ffmpeg_export_args(&output_path, 23, "libx264");
+        assert!(
+            filter_complex_kfs.contains("amix=inputs=2"),
+            "Audio layer that becomes audible via keyframes must not be omitted: {}",
+            filter_complex_kfs
+        );
+
+        // Two adjacent fragments can reference the same media asset. Each
+        // timeline item gets an independent decoder input before trimming.
+        let split_audio_item = TimelineItem::new(
+            Some("asset_wav".to_string()),
+            "Split WAV fragment".to_string(),
+            ItemKind::Audio,
+            TimeRange::new(
+                RationalTime::from_frames(90, rate),
+                RationalTime::from_frames(90, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(90, rate),
+                RationalTime::from_frames(90, rate),
+            ),
+        )
+        .unwrap();
+        project.tracks[1].items.push(split_audio_item);
+        let split_plan = CompositionPlan::from_project(&project).unwrap();
+        let (split_args, split_graph) =
+            split_plan.to_ffmpeg_export_args(&output_path, 23, "libx264");
+        let wav_inputs = split_args
+            .windows(2)
+            .filter(|pair| pair[0] == "-i" && pair[1] == "D:/media/voice.wav")
+            .count();
+        assert!(
+            wav_inputs == 2,
+            "each repeated audio timeline item needs its own decoder input: {split_args:?}"
+        );
+        assert!(split_graph.contains("[1:a]atrim="));
+        assert!(split_graph.contains("[2:a]atrim="));
+    }
+
+    #[test]
+    fn test_phase26_preview_speed_source_time_sampling() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 26 Speed Preview".to_string());
+        project.settings.frame_rate = rate;
+
+        let asset = Asset {
+            asset_id: "ast_speed_fixture".to_string(),
+            name: "counter.mp4".to_string(),
+            path: "D:/media/counter.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(1800, rate)),
+            file_size: 1024,
+            dimensions: None,
+        };
+        project.assets.push(asset);
+
+        // Test Double speed: timeline start 2461f, duration 254f, source range [0, 508)
+        let mut track_double = Track::new("Video Double".to_string(), TrackKind::Video);
+        let mut item_double = TimelineItem::new(
+            Some("ast_speed_fixture".to_string()),
+            "Double Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(2461, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+        )
+        .unwrap();
+        item_double.speed = ClipSpeed::Double;
+        item_double.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(508, rate),
+        );
+        track_double.items.push(item_double);
+        project.tracks.push(track_double);
+
+        let plan = CompositionPlan::from_project(&project).unwrap();
+
+        // Sample at project frame 2551 (+90 frames into the clip)
+        // With Double speed, 90 timeline frames correspond to 180 source frames (6.000s)
+        let sample_2551 = plan.sample_preview_at(RationalTime::from_frames(2551, rate));
+        assert_eq!(sample_2551.active_layers.len(), 1);
+        assert_eq!(
+            sample_2551.active_layers[0].source_time,
+            RationalTime::from_frames(180, rate),
+            "Double speed visual layer preview must sample source frame 180 (6.000s) at +90f offset"
+        );
+
+        // Test Half speed: timeline start 0f, duration 180f, source range [0, 90)
+        let mut project_half = Project::new("Phase 26 Half Preview".to_string());
+        project_half.settings.frame_rate = rate;
+        project_half.assets.push(Asset {
+            asset_id: "ast_speed_fixture".to_string(),
+            name: "counter.mp4".to_string(),
+            path: "D:/media/counter.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(1800, rate)),
+            file_size: 1024,
+            dimensions: None,
+        });
+        let mut track_half = Track::new("Video Half".to_string(), TrackKind::Video);
+        let mut item_half = TimelineItem::new(
+            Some("ast_speed_fixture".to_string()),
+            "Half Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(180, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(180, rate),
+            ),
+        )
+        .unwrap();
+        item_half.speed = ClipSpeed::Half;
+        item_half.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(90, rate),
+        );
+        track_half.items.push(item_half);
+        project_half.tracks.push(track_half);
+
+        let plan_half = CompositionPlan::from_project(&project_half).unwrap();
+        let sample_half_90 = plan_half.sample_preview_at(RationalTime::from_frames(90, rate));
+        assert_eq!(sample_half_90.active_layers.len(), 1);
+        assert_eq!(
+            sample_half_90.active_layers[0].source_time,
+            RationalTime::from_frames(45, rate),
+            "Half speed visual layer preview must sample source frame 45 (1.500s) at +90f offset"
+        );
+    }
+
+    #[test]
+    fn test_phase26_synthetic_rev32_timeline_and_frame_precision() {
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 26 Synthetic Rev32".to_string());
+        project.settings = ProjectSettings {
+            width: 1920,
+            height: 1080,
+            canvas_background_color: "#000000".to_string(),
+            frame_rate: rate,
+            sample_rate: 48000,
+            channels: 2,
+        };
+
+        let ast = Asset {
+            asset_id: "ast_hoi_an".to_string(),
+            name: "sample.mp4".to_string(),
+            path: "sample.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(5000, rate)),
+            file_size: 1024,
+            dimensions: None,
+        };
+        project.assets.push(ast);
+
+        let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
+
+        // Clip 1: [0, 2461) at Normal speed (2461 timeline frames)
+        let item1 = TimelineItem::new(
+            Some("ast_hoi_an".to_string()),
+            "Clip 1".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(2461, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(2461, rate),
+            ),
+        )
+        .unwrap();
+
+        // Clip 2: [2461, 2715) at Double speed (254 timeline frames, 508 source frames)
+        let mut item2 = TimelineItem::new(
+            Some("ast_hoi_an".to_string()),
+            "Clip 2 Double".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(2461, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+        )
+        .unwrap();
+        item2.speed = ClipSpeed::Double;
+        item2.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(508, rate),
+        );
+
+        // Clip 3: [2715, 4261) at Half speed (1546 timeline frames, 773 source frames starting at 127f)
+        let mut item3 = TimelineItem::new(
+            Some("ast_hoi_an".to_string()),
+            "Clip 3 Half".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(2715, rate),
+                RationalTime::from_frames(1546, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(127, rate),
+                RationalTime::from_frames(1546, rate),
+            ),
+        )
+        .unwrap();
+        item3.speed = ClipSpeed::Half;
+        item3.source_range = TimeRange::new(
+            RationalTime::from_frames(127, rate),
+            RationalTime::from_frames(773, rate),
+        );
+
+        track.items.extend([item1, item2, item3]);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("synthetic rev32 plan compiles");
+        assert_eq!(
+            plan.duration.value, 4261,
+            "Total duration must be 2461 + 254 + 1546 = 4261 frames"
+        );
+        assert_eq!(plan.duration.rate, rate);
+
+        let (args, filter_complex) =
+            plan.to_ffmpeg_export_args(&PathBuf::from("dummy.mp4"), 23, "libx264");
+
+        // Verify base canvas duration formatted with microsecond precision: 4261 / 30 = 142.033333s
+        assert!(
+            filter_complex.contains("color=c=black:s=1920x1080:r=30:d=142.033333[base]"),
+            "Filtergraph base canvas must use microsecond precision: {}",
+            filter_complex
+        );
+        // Verify Half-speed clip trim start (127 / 30 = 4.233333s) and duration (773 / 30 = 25.766667s)
+        assert!(
+            filter_complex.contains("trim=start=4.233333:duration=25.766667"),
+            "Half-speed split clip trim must use microsecond precision: {}",
+            filter_complex
+        );
+        // Verify final stream is bounded to 4261 frames
+        assert!(
+            filter_complex.contains("trim=end_frame=4261"),
+            "Filtergraph must end with canonical frame bound trim: {}",
+            filter_complex
+        );
+        assert!(args.contains(&"-frames:v".to_string()));
+        assert!(args.contains(&"4261".to_string()));
+    }
+
+    #[test]
+    fn test_phase26_terminal_double_clip_exact_frame_count() {
+        let fixture_dir = get_fixture_dir();
+        let src_path = fixture_dir.join("p26_terminal_src.mp4");
+        generate_synthetic_mp4(&src_path, 18, "green");
+
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Phase 26 Terminal Double Clip".to_string());
+        project.settings = ProjectSettings {
+            width: 640,
+            height: 360,
+            canvas_background_color: "#000000".to_string(),
+            frame_rate: rate,
+            sample_rate: 48000,
+            channels: 2,
+        };
+
+        let ast = Asset {
+            asset_id: "ast_terminal".to_string(),
+            name: "p26_terminal_src.mp4".to_string(),
+            path: src_path.to_string_lossy().to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(540, rate)), // 18s
+            file_size: 1024,
+            dimensions: None,
+        };
+        project.assets.push(ast);
+
+        let mut track = Track::new("Video Track".to_string(), TrackKind::Video);
+        let mut item = TimelineItem::new(
+            Some("ast_terminal".to_string()),
+            "Terminal Double Clip".to_string(),
+            ItemKind::Video,
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+            TimeRange::new(
+                RationalTime::from_frames(0, rate),
+                RationalTime::from_frames(254, rate),
+            ),
+        )
+        .unwrap();
+        item.speed = ClipSpeed::Double;
+        item.source_range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(508, rate),
+        );
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("plan compiles");
+        assert_eq!(plan.duration, RationalTime::from_frames(254, rate));
+
+        let out_path = fixture_dir.join("p26_terminal_export.mp4");
+        let (args, filter_complex) = plan.to_ffmpeg_export_args(&out_path, 23, "libx264");
+
+        assert!(
+            filter_complex.contains("trim=end_frame=254"),
+            "Filtergraph must end with canonical frame bound trim: {}",
+            filter_complex
+        );
+        assert!(args.contains(&"-frames:v".to_string()));
+        assert!(args.contains(&"254".to_string()));
+
+        if let Ok(mut cmd) = MediaBinaryResolver::command("ffmpeg") {
+            let output = cmd.args(&args).output().expect("ffmpeg execution");
+            assert!(
+                output.status.success(),
+                "FFmpeg export failed with stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(out_path.exists());
+
+            if let Ok(mut probe_cmd) = MediaBinaryResolver::command("ffprobe") {
+                let probe_output = probe_cmd
+                    .args([
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-count_packets",
+                        "-show_entries",
+                        "stream=nb_read_packets",
+                        "-of",
+                        "csv=p=0",
+                        out_path.to_str().unwrap(),
+                    ])
+                    .output()
+                    .expect("ffprobe execution");
+                let count_str = String::from_utf8_lossy(&probe_output.stdout);
+                let packets: usize = count_str.trim().parse().expect("packet count integer");
+                assert_eq!(
+                    packets, 254,
+                    "Terminal Double clip must export exactly 254 frames, got {packets}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_phase26_rev32_split_double_export_frame_precision() {
+        let mut path = PathBuf::from("artifacts/media-samples/hoi-an-morning/phase26_native_qualification_rev32_disposable.tinix");
+        if !path.exists() {
+            path = PathBuf::from("../artifacts/media-samples/hoi-an-morning/phase26_native_qualification_rev32_disposable.tinix");
+        }
+        if !path.exists() {
+            println!("rev32 project fixture not present, skipping file-based check");
+            return;
+        }
+        let project = crate::modules::persistence::load_project(&path).expect("load rev32 project");
+        let plan = CompositionPlan::from_project(&project).expect("plan from rev32 project");
+        assert_eq!(plan.duration.value, 4261);
+        assert_eq!(plan.duration.rate, FrameRate::FPS_30);
+
+        let (_args, filter_complex) =
+            plan.to_ffmpeg_export_args(&PathBuf::from("dummy.mp4"), 23, "libx264");
+        // Verify microsecond precision on base canvas
+        assert!(
+            filter_complex.contains("color=c=black:s=1920x1080:r=30:d=142.033333[base]"),
+            "Filtergraph base canvas must use microsecond precision: {}",
+            filter_complex
+        );
+        // Verify microsecond precision on the Half-speed split clip trim (duration 25.766667 not rounded to 25.767)
+        assert!(
+            filter_complex.contains("trim=start=4.233333:duration=25.766667"),
+            "Half-speed split clip trim must use microsecond precision: {}",
+            filter_complex
         );
     }
 }

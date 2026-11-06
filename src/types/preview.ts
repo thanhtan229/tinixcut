@@ -4,6 +4,7 @@ import {
   TextStyle,
   TextTemplateReference,
   VisualEffectPreset,
+  ColorAdjustments,
   TextRichStyle,
   TextAnimation,
 } from "./project";
@@ -25,6 +26,7 @@ export interface PreviewSampledLayer {
   crop: Crop;
   opacity: number;
   visual_effect: VisualEffectPreset;
+  color_adjustments?: ColorAdjustments;
   text?: string | null;
   font_family?: string | null;
   font_size?: number | null;

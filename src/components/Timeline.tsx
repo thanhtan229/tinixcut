@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
-import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, TimelineItem } from "../types/project";
+import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, ProjectMarker, rationalTimeToFrames, TimelineItem } from "../types/project";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
 import { buildSnapTargets, calculateSnap, SnapCandidate } from "../utils/timelineSnapping";
+import { dbToLinearGain, formatGainDb, linearGainToDb, MAX_AUDIO_GAIN_DB, MIN_AUDIO_GAIN_DB } from "./audioGain";
+import { peakMeterPercent } from "./audioMeter";
+import { adjacentRollItems, timelineArrowDelta, TimelineClipEdge, trimRangeByKeyboard } from "./timelineKeyboard";
 
 interface TimelineProps {
   project: Project | null;
@@ -18,11 +21,15 @@ interface TimelineProps {
   onSelectTransition?: (transitionId: string | null) => void;
   onPlayheadChange: (frame: number) => void;
   onMoveClip: (itemId: string, newStartFrame: number) => void;
+  onSlipClip?: (itemId: string, deltaFrames: number) => void;
+  onRollClipBoundary?: (leftItemId: string, rightItemId: string, deltaFrames: number) => void;
   onGroupMoveClip?: (itemIds: string[], deltaFrames: number) => void;
   onTrimClip: (itemId: string, newStartFrame: number, newDurationFrames: number) => void;
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDeleteClip: (itemId: string) => void;
   onDuplicateClip: (itemId: string) => void;
+  canCloseGap?: boolean;
+  onCloseGap?: () => void;
   onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
   onCreateCutTransition?: (
     trackId: string,
@@ -33,13 +40,22 @@ interface TimelineProps {
   ) => void;
   onCreateAudioCrossfade?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;
   onToggleTrackMute?: (trackId: string, muted: boolean) => void;
+  onToggleTrackSolo?: (trackId: string, solo: boolean) => void;
+  onSetTrackVolume?: (trackId: string, volume: number) => void;
+  playbackTrackPeaks?: Record<string, number>;
+  onToggleTrackLock?: (trackId: string, locked: boolean) => void;
+  onReorderTrack?: (trackId: string, newIndex: number) => void;
+  onRenameTrack?: (trackId: string, name: string) => void;
+  onAddMarker?: (label: string, positionFrame: number) => void;
+  onRenameMarker?: (markerId: string, label: string) => void;
+  onDeleteMarker?: (markerId: string) => void;
   zoom?: number;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onSetZoom?: (zoom: number) => void;
 }
 
-const HEADER_WIDTH = 110; // Fixed width for track header column and ruler origin in pixels
+const HEADER_WIDTH = 160; // Fixed width for track header column and ruler origin in pixels
 const RULER_HEIGHT = 28; // Height of the time ruler in pixels
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -56,15 +72,28 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSelectTransition,
   onPlayheadChange,
   onMoveClip,
+  onSlipClip,
+  onRollClipBoundary,
   onGroupMoveClip,
   onTrimClip,
   onSplitClip,
   onDeleteClip,
   onDuplicateClip,
+  canCloseGap = false,
+  onCloseGap,
   onMoveKeyframe,
   onCreateCutTransition,
   onCreateAudioCrossfade,
   onToggleTrackMute,
+  onToggleTrackSolo,
+  onSetTrackVolume,
+  playbackTrackPeaks = {},
+  onToggleTrackLock,
+  onReorderTrack,
+  onRenameTrack,
+  onAddMarker,
+  onRenameMarker,
+  onDeleteMarker,
   zoom: externalZoom,
   onZoomIn,
   onZoomOut,
@@ -83,6 +112,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   const effectivePrimarySelectedItemId = primarySelectedItemId ?? selectedItemId ?? null;
 
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
+  const [trackNameDraft, setTrackNameDraft] = useState("");
   const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
   const [waveformPollTick, setWaveformPollTick] = useState(0);
   const waveformRequestsInFlight = useRef(new Set<string>());
@@ -90,12 +121,14 @@ export const Timeline: React.FC<TimelineProps> = ({
   // Transient gesture state (Workstream 3.4: local ephemeral state during drag)
   const [transientDrag, setTransientDrag] = useState<{
     itemId: string;
-    mode: "move" | "trim-left" | "trim-right";
+    mode: "move" | "trim-left" | "trim-right" | "slip" | "roll";
     initialPointerX: number;
     initialStartFrame: number;
     initialDurationFrames: number;
     currentDeltaFrames: number;
     isMulti: boolean;
+    rollLeftItemId?: string;
+    rollRightItemId?: string;
   } | null>(null);
 
   // Transient keyframe drag state (Section B6)
@@ -294,12 +327,12 @@ export const Timeline: React.FC<TimelineProps> = ({
 
     setTransientDrag({
       itemId: item.item_id,
-      mode: "move",
+      mode: e.altKey && item.asset_id && item.kind !== "Text" ? "slip" : "move",
       initialPointerX: e.clientX,
       initialStartFrame: item.timeline_range.start.value,
       initialDurationFrames: item.timeline_range.duration.value,
       currentDeltaFrames: 0,
-      isMulti,
+      isMulti: e.altKey && item.asset_id && item.kind !== "Text" ? false : isMulti,
     });
   };
 
@@ -309,6 +342,33 @@ export const Timeline: React.FC<TimelineProps> = ({
     mode: "trim-left" | "trim-right"
   ) => {
     e.stopPropagation();
+    if (e.shiftKey) {
+      const track = project?.tracks.find((candidate) => candidate.items.some((candidateItem) => candidateItem.item_id === item.item_id));
+      if (!track || track.locked) return;
+      const rate = project!.settings.frame_rate;
+      const itemStart = rationalTimeToFrames(item.timeline_range.start, rate);
+      const itemDuration = rationalTimeToFrames(item.timeline_range.duration, rate);
+      const pair = adjacentRollItems(track.items, item, mode === "trim-right" ? "right" : "left", rate);
+      if (!pair) return;
+      onSelectItem(item.item_id, false);
+      try {
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      setTransientDrag({
+        itemId: item.item_id,
+        mode: "roll",
+        initialPointerX: e.clientX,
+        initialStartFrame: itemStart,
+        initialDurationFrames: itemDuration,
+        currentDeltaFrames: 0,
+        isMulti: false,
+        rollLeftItemId: pair.left.item_id,
+        rollRightItemId: pair.right.item_id,
+      });
+      return;
+    }
     onSelectItem(item.item_id, false);
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -325,6 +385,60 @@ export const Timeline: React.FC<TimelineProps> = ({
       currentDeltaFrames: 0,
       isMulti: false,
     });
+  };
+
+  const handleClipKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, item: TimelineItem, trackLocked: boolean) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelectItem(item.item_id, event.ctrlKey || event.metaKey);
+      return;
+    }
+
+    const delta = timelineArrowDelta(event.key, event.shiftKey);
+    if (delta === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (trackLocked) return;
+
+    onSelectItem(item.item_id, false);
+    if (event.altKey && item.asset_id && item.kind !== "Text") {
+      onSlipClip?.(item.item_id, delta);
+      return;
+    }
+
+    if (effectiveSelectedItemIds.has(item.item_id) && effectiveSelectedItemIds.size > 1 && onGroupMoveClip) {
+      onGroupMoveClip(Array.from(effectiveSelectedItemIds), delta);
+      return;
+    }
+
+    onMoveClip(item.item_id, Math.max(0, rationalTimeToFrames(item.timeline_range.start, project!.settings.frame_rate) + delta));
+  };
+
+  const handleTrimKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, item: TimelineItem, edge: TimelineClipEdge, trackLocked: boolean) => {
+    const delta = timelineArrowDelta(event.key, event.shiftKey);
+    if (delta === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (trackLocked || !project) return;
+
+    onSelectItem(item.item_id, false);
+    if (event.altKey && item.asset_id && item.kind !== "Text") {
+      onSlipClip?.(item.item_id, delta);
+      return;
+    }
+    if (event.ctrlKey) {
+      const track = project.tracks.find((candidate) => candidate.items.some((candidateItem) => candidateItem.item_id === item.item_id));
+      const pair = track ? adjacentRollItems(track.items, item, edge, project.settings.frame_rate) : null;
+      if (pair) onRollClipBoundary?.(pair.left.item_id, pair.right.item_id, delta);
+      return;
+    }
+
+    const startFrame = rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate);
+    const durationFrames = rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate);
+    const trimmed = trimRangeByKeyboard(startFrame, durationFrames, edge, delta);
+    onTrimClip(item.item_id, trimmed.startFrame, trimmed.durationFrames);
   };
 
   const handleKfPointerDown = (
@@ -388,6 +502,10 @@ export const Timeline: React.FC<TimelineProps> = ({
         snapCandidates = [
           { anchorFrame: transientDrag.initialStartFrame + transientDrag.initialDurationFrames, anchorKind: "end" },
         ];
+      } else if (transientDrag.mode === "roll") {
+        snapCandidates = [
+          { anchorFrame: transientDrag.initialStartFrame + transientDrag.initialDurationFrames, anchorKind: "end" },
+        ];
       }
 
       const snapRes = calculateSnap(
@@ -439,10 +557,18 @@ export const Timeline: React.FC<TimelineProps> = ({
         const proposedStart = Math.max(0, initialStartFrame + currentDeltaFrames);
         const deltaApplied = proposedStart - initialStartFrame;
         const finalDur = Math.max(1, initialDurationFrames - deltaApplied);
-        onTrimClip(itemId, proposedStart, finalDur);
+        if (proposedStart !== initialStartFrame || finalDur !== initialDurationFrames) {
+          onTrimClip(itemId, proposedStart, finalDur);
+        }
       } else if (mode === "trim-right") {
         const finalDur = Math.max(1, initialDurationFrames + currentDeltaFrames);
-        onTrimClip(itemId, initialStartFrame, finalDur);
+        if (finalDur !== initialDurationFrames) {
+          onTrimClip(itemId, initialStartFrame, finalDur);
+        }
+      } else if (mode === "slip" && currentDeltaFrames !== 0) {
+        onSlipClip?.(itemId, currentDeltaFrames);
+      } else if (mode === "roll" && currentDeltaFrames !== 0 && transientDrag.rollLeftItemId && transientDrag.rollRightItemId) {
+        onRollClipBoundary?.(transientDrag.rollLeftItemId, transientDrag.rollRightItemId, currentDeltaFrames);
       }
     } else if (transientKfDrag) {
       try {
@@ -574,6 +700,22 @@ export const Timeline: React.FC<TimelineProps> = ({
             title="Duplicate selected primary clip (Ctrl+D)"
           >
             📋 Duplicate
+          </button>
+          <button
+            className="btn-action"
+            disabled={!canCloseGap}
+            onClick={onCloseGap}
+            title="Close the gap before the selected clip, shifting downstream clips on its track"
+          >
+            Close Gap
+          </button>
+          <button
+            className="btn-action"
+            disabled={!project}
+            onClick={() => onAddMarker?.(`Marker ${(project?.markers?.length ?? 0) + 1}`, playheadFrame)}
+            title="Add a project marker at the playhead"
+          >
+            ◆ Marker
           </button>
           <button
             className="btn-action"
@@ -730,7 +872,32 @@ export const Timeline: React.FC<TimelineProps> = ({
               </g>
             ))}
           </svg>
+          {(project?.markers ?? []).map((marker: ProjectMarker) => {
+            const frame = rationalTimeToFrames(marker.position, project!.settings.frame_rate);
+            return (
+              <button
+                key={marker.marker_id}
+                type="button"
+                aria-label={`Marker ${marker.label} at frame ${frame}`}
+                title={`${marker.label} — frame ${frame}; double-click to rename, right-click to delete`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => { event.stopPropagation(); onPlayheadChange(frame); }}
+                onDoubleClick={(event) => {
+                  event.stopPropagation();
+                  const label = window.prompt("Rename marker", marker.label)?.trim();
+                  if (label) onRenameMarker?.(marker.marker_id, label);
+                }}
+                onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); onDeleteMarker?.(marker.marker_id); }}
+                style={{ position: "absolute", zIndex: 26, top: 0, left: `${HEADER_WIDTH + frame * zoom - 5}px`, height: "100%", minWidth: "10px", padding: 0, border: 0, background: "transparent", color: "#fbbf24", cursor: "pointer", fontSize: "10px" }}
+              >◆</button>
+            );
+          })}
         </div>
+
+        {(project?.markers ?? []).map((marker: ProjectMarker) => {
+          const frame = rationalTimeToFrames(marker.position, project!.settings.frame_rate);
+          return <div key={`marker-line-${marker.marker_id}`} aria-hidden="true" style={{ position: "absolute", top: `${RULER_HEIGHT}px`, bottom: 0, left: `${HEADER_WIDTH + frame * zoom}px`, width: "1px", background: "rgba(251, 191, 36, 0.75)", zIndex: 15, pointerEvents: "none" }} />;
+        })}
 
         {/* PLAYHEAD INDICATOR (Spans across ruler and all tracks) */}
         <div
@@ -771,12 +938,12 @@ export const Timeline: React.FC<TimelineProps> = ({
             padding: "8px 0 24px 0",
           }}
         >
-          {project?.tracks.map((track) => (
+          {project?.tracks.map((track, trackIndex) => (
             <div
               key={track.track_id}
               data-track-lane="true"
               style={{
-                height: "46px",
+                height: "64px",
                 backgroundColor: "var(--bg-surface)",
                 position: "relative",
                 borderTop: "1px solid var(--border-color)",
@@ -791,12 +958,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                   left: 0,
                   width: `${HEADER_WIDTH}px`,
                   minWidth: `${HEADER_WIDTH}px`,
-                  height: "100%",
+                  height: "64px",
                   backgroundColor: "rgba(24, 24, 28, 0.95)",
                   borderRight: "1px solid var(--border-color)",
                   zIndex: 10,
                   display: "flex",
-                  alignItems: "center",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
                   padding: "0 10px",
                   fontSize: "11px",
                   fontWeight: 600,
@@ -804,17 +972,119 @@ export const Timeline: React.FC<TimelineProps> = ({
                   boxShadow: "2px 0 4px rgba(0, 0, 0, 0.3)",
                 }}
               >
-                <span
+                {renamingTrackId === track.track_id ? (
+                  <input
+                    autoFocus
+                    aria-label={`Rename ${track.name}`}
+                    value={trackNameDraft}
+                    maxLength={64}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => setTrackNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        const nextName = trackNameDraft.trim();
+                        if (nextName && nextName !== track.name) onRenameTrack?.(track.track_id, nextName);
+                        setRenamingTrackId(null);
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        setRenamingTrackId(null);
+                      }
+                    }}
+                    onBlur={() => setRenamingTrackId(null)}
+                    style={{ minWidth: 0, width: "90px", background: "#18181b", color: "white", border: "1px solid #52525b", borderRadius: "3px", fontSize: "11px" }}
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      setTrackNameDraft(track.name);
+                      setRenamingTrackId(track.track_id);
+                    }}
                   style={{
                     minWidth: 0,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
-                  title={track.name}
+                  title={`${track.name} — double-click to rename`}
                 >
                   {track.name}
-                </span>
+                  </span>
+                )}
+                {(track.kind === "Audio" || track.items.some((item) => item.kind === "Video" && item.embedded_audio_enabled !== false)) && playbackTrackPeaks[track.track_id] !== undefined && (
+                  <div
+                    role="meter"
+                    aria-label={`${track.name} playback peak`}
+                    aria-valuemin={-60}
+                    aria-valuemax={0}
+                    aria-valuenow={playbackTrackPeaks[track.track_id]}
+                    aria-valuetext={`${playbackTrackPeaks[track.track_id].toFixed(1)} dBFS`}
+                    title={`Live sample peak ${playbackTrackPeaks[track.track_id].toFixed(1)} dBFS`}
+                    style={{ position: "absolute", left: "8px", right: "8px", bottom: "16px", height: "5px", borderRadius: "3px", overflow: "hidden", background: "#27272a", pointerEvents: "none" }}
+                  >
+                    <div style={{
+                      width: `${peakMeterPercent(playbackTrackPeaks[track.track_id])}%`,
+                      height: "100%",
+                      background: playbackTrackPeaks[track.track_id] > -3 ? "#ef4444" : playbackTrackPeaks[track.track_id] > -9 ? "#f59e0b" : "#22c55e",
+                    }} />
+                  </div>
+                )}
+                <label style={{ position: "absolute", left: "8px", right: "8px", bottom: "2px", display: "flex", alignItems: "center", gap: "4px", fontSize: "9px" }}>
+                  <span aria-hidden="true">{formatGainDb(track.volume ?? 1)}</span>
+                  <input
+                    type="range"
+                    aria-label={`${track.name} gain`}
+                    min={MIN_AUDIO_GAIN_DB}
+                    max={MAX_AUDIO_GAIN_DB}
+                    step="1"
+                    value={linearGainToDb(track.volume ?? 1)}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => onSetTrackVolume?.(track.track_id, dbToLinearGain(Number(event.target.value)))}
+                    style={{ minWidth: 0, width: "100%", height: "12px" }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  aria-label={`Move ${track.name} up`}
+                  title={`Move ${track.name} up`}
+                  disabled={trackIndex === 0}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); onReorderTrack?.(track.track_id, trackIndex - 1); }}
+                  style={{ marginLeft: "auto", padding: "2px 4px", border: "1px solid var(--border-color)", borderRadius: "3px", background: "#27272a", color: "var(--text-muted)", cursor: trackIndex === 0 ? "default" : "pointer", fontSize: "10px" }}
+                >↑</button>
+                <button
+                  type="button"
+                  aria-label={`Move ${track.name} down`}
+                  title={`Move ${track.name} down`}
+                  disabled={trackIndex === (project?.tracks.length ?? 1) - 1}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); onReorderTrack?.(track.track_id, trackIndex + 1); }}
+                  style={{ padding: "2px 4px", border: "1px solid var(--border-color)", borderRadius: "3px", background: "#27272a", color: "var(--text-muted)", cursor: trackIndex === (project?.tracks.length ?? 1) - 1 ? "default" : "pointer", fontSize: "10px" }}
+                >↓</button>
+                <button
+                  type="button"
+                  aria-label={`${track.solo ? "Unsolo" : "Solo"} ${track.name}`}
+                  aria-pressed={Boolean(track.solo)}
+                  title={track.solo ? `Unsolo ${track.name}` : `Solo ${track.name}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleTrackSolo?.(track.track_id, !track.solo);
+                  }}
+                  style={{
+                    marginLeft: "auto",
+                    padding: "3px 6px",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "3px",
+                    backgroundColor: track.solo ? "#854d0e" : "#27272a",
+                    color: track.solo ? "#fef3c7" : "var(--text-muted)",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                  }}
+                >S</button>
                 <button
                   type="button"
                   aria-label={`${track.muted ? "Unmute" : "Mute"} ${track.name}`}
@@ -826,7 +1096,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     onToggleTrackMute?.(track.track_id, !track.muted);
                   }}
                   style={{
-                    marginLeft: "auto",
+                    marginLeft: "4px",
                     padding: "3px 6px",
                     border: "1px solid var(--border-color)",
                     borderRadius: "3px",
@@ -839,6 +1109,31 @@ export const Timeline: React.FC<TimelineProps> = ({
                   }}
                 >
                   {track.muted ? "Unmute" : "Mute"}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`${track.locked ? "Unlock" : "Lock"} ${track.name}`}
+                  aria-pressed={track.locked}
+                  title={track.locked ? `Unlock ${track.name}` : `Lock ${track.name}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleTrackLock?.(track.track_id, !track.locked);
+                  }}
+                  style={{
+                    marginLeft: "4px",
+                    padding: "3px 6px",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "3px",
+                    backgroundColor: track.locked ? "#854d0e" : "#27272a",
+                    color: track.locked ? "#fef3c7" : "var(--text-muted)",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {track.locked ? "Unlock" : "Lock"}
                 </button>
               </div>
 
@@ -860,6 +1155,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                     } else if (isDraggingThis) {
                       startF = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
                     }
+                  } else if (transientDrag.mode === "roll" && (item.item_id === transientDrag.rollLeftItemId || item.item_id === transientDrag.rollRightItemId)) {
+                    if (item.item_id === transientDrag.rollLeftItemId) {
+                      durF = Math.max(1, item.timeline_range.duration.value + transientDrag.currentDeltaFrames);
+                    } else {
+                      startF = item.timeline_range.start.value + transientDrag.currentDeltaFrames;
+                      durF = Math.max(1, item.timeline_range.duration.value - transientDrag.currentDeltaFrames);
+                    }
                   } else if (isDraggingThis) {
                     if (transientDrag.mode === "trim-left") {
                       const proposed = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
@@ -875,6 +1177,23 @@ export const Timeline: React.FC<TimelineProps> = ({
                 return (
                   <div
                     key={item.item_id}
+                    role="group"
+                    tabIndex={0}
+                    className="timeline-clip"
+                    data-timeline-clip="true"
+                    aria-label={`${item.name}, ${item.kind} clip${isSelected ? ", selected" : ""}, starts at frame ${startF}, duration ${durF} frames`}
+                    aria-description={`Use left and right arrows to move by one frame, Shift plus an arrow to move by ten frames${item.asset_id && item.kind !== "Text" ? ", or Alt plus an arrow to slip the source" : ""}.`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Pointer selection is handled on pointer down for dragging.
+                      // A detail-zero click is keyboard or assistive-technology activation.
+                      if (e.detail === 0 && e.target === e.currentTarget) {
+                        onSelectItem(item.item_id, e.ctrlKey || e.metaKey);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      handleClipKeyDown(e, item, track.locked ?? false);
+                    }}
                     onPointerDown={(e) => handlePointerDownMove(e, item)}
                     style={{
                       position: "absolute",
@@ -904,7 +1223,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                         ? "0 0 8px rgba(59, 130, 246, 0.6)"
                         : "none",
                       zIndex: isPrimary ? 9 : isSelected ? 8 : 5,
+                      outline: transientDrag?.itemId === item.item_id && transientDrag.mode === "slip"
+                        ? "2px dashed #fbbf24"
+                        : undefined,
                     }}
+                    title={transientDrag?.itemId === item.item_id && transientDrag.mode === "slip"
+                      ? `Slip source by ${transientDrag.currentDeltaFrames} frame(s)`
+                      : `${item.name} · Arrow keys move; Shift+Arrow moves 10 frames${item.asset_id && item.kind !== "Text" ? " · Alt+Arrow or Alt-drag slips source" : ""}`}
                   >
                     {/* Audio Waveform Visualization (Trim-aware & Zoom-resilient) */}
                     {item.asset_id &&
@@ -926,6 +1251,17 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                     {/* Left Trim Handle */}
                     <div
+                      role="slider"
+                      tabIndex={0}
+                      aria-label={`Trim start of ${item.name}`}
+                      aria-valuemin={0}
+                      aria-valuemax={totalFrames}
+                      aria-valuenow={startF}
+                      aria-valuetext={`Clip starts at frame ${startF}; use left and right arrows to trim, Control plus an arrow to roll, or Alt plus an arrow to slip source`}
+                      aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Control+ArrowLeft Control+ArrowRight Alt+ArrowLeft Alt+ArrowRight"
+                      aria-disabled={track.locked ?? false}
+                      className="timeline-trim-handle"
+                      onKeyDown={(e) => handleTrimKeyDown(e, item, "left", track.locked ?? false)}
                       onPointerDown={(e) => handlePointerDownTrim(e, item, "trim-left")}
                       style={{
                         width: "8px",
@@ -935,7 +1271,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                         borderRadius: "2px 0 0 2px",
                         zIndex: 7,
                       }}
-                      title="Drag to trim start"
+                      title="Drag to trim start; Shift-drag to roll the cut"
                     />
 
                     {/* Clip Title & Caption */}
@@ -1048,6 +1384,17 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                     {/* Right Trim Handle */}
                     <div
+                      role="slider"
+                      tabIndex={0}
+                      aria-label={`Trim end of ${item.name}`}
+                      aria-valuemin={startF + 1}
+                      aria-valuemax={totalFrames}
+                      aria-valuenow={startF + durF}
+                      aria-valuetext={`Clip ends at frame ${startF + durF}; use left and right arrows to trim, Control plus an arrow to roll, or Alt plus an arrow to slip source`}
+                      aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Control+ArrowLeft Control+ArrowRight Alt+ArrowLeft Alt+ArrowRight"
+                      aria-disabled={track.locked ?? false}
+                      className="timeline-trim-handle"
+                      onKeyDown={(e) => handleTrimKeyDown(e, item, "right", track.locked ?? false)}
                       onPointerDown={(e) => handlePointerDownTrim(e, item, "trim-right")}
                       style={{
                         width: "8px",
@@ -1057,7 +1404,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                         borderRadius: "0 2px 2px 0",
                         zIndex: 7,
                       }}
-                      title="Drag to trim end"
+                      title="Drag to trim end; Shift-drag to roll the cut"
                     />
                   </div>
                 );

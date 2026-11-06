@@ -376,24 +376,29 @@ fn test_qa_ac02_and_ac03_migration_and_atomic_save_roundtrip() {
     v9_val["schema_version"] = serde_json::json!(9);
     let v9_raw = serde_json::to_string(&v9_val).expect("to string");
 
-    // Migrate v9 -> current (v11)
+    // Migrate v9 through the current schema.
     let migrated_str = run_migrations_if_needed(&v9_raw).expect("migrate v9 to v11");
-    let migrated_proj: Project = serde_json::from_str(&migrated_str).expect("deserialize v11");
-    assert_eq!(migrated_proj.schema_version, 11);
+    let migrated_proj: Project =
+        serde_json::from_str(&migrated_str).expect("deserialize current project");
+    assert_eq!(migrated_proj.schema_version, CURRENT_SCHEMA_VERSION);
     let migrated_item = migrated_proj.tracks[1].find_item(&text_id).unwrap();
     assert!(migrated_item.text_rich.is_none());
     assert!(migrated_item.text_animation.is_none());
     assert_eq!(migrated_item.keyframes.len(), 1);
 
-    // Schema 12 (future) rejected
-    let schema_12_json = r#"{"schema_version": 12, "project_id": "proj_fut", "name": "Future"}"#;
-    let err = run_migrations_if_needed(schema_12_json).unwrap_err();
+    // The next schema after current is rejected until a migration exists.
+    let future_schema_json = format!(
+        r#"{{"schema_version": {}, "project_id": "proj_future", "name": "Future"}}"#,
+        CURRENT_SCHEMA_VERSION + 1
+    );
+    let err = run_migrations_if_needed(&future_schema_json).unwrap_err();
     assert!(matches!(
         err,
         PersistenceError::UnsupportedSchemaVersion {
-            found: 12,
-            max_supported: 11,
+            found,
+            max_supported,
         }
+            if found == CURRENT_SCHEMA_VERSION + 1 && max_supported == CURRENT_SCHEMA_VERSION
     ));
 
     // AC-03: Atomic save and recovery untouched

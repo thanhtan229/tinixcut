@@ -3,7 +3,7 @@
 ## 1. Plan Metadata
 
 **Project:** Automation-First CapCut-like Desktop Video Editor  
-**Plan status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–36 PLANNED
+**Plan status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–36 IMPLEMENTED WITH DEFERRED QUALIFICATION
 **Plan date:** 2026-10-03  
 **Inputs:** `RESEARCH.md`, `ARCHITECTURE.md`  
 **Primary target:** Windows 10/11 desktop first  
@@ -1832,16 +1832,16 @@ Phase 25 implements an opt-in local workflow using user-provided compatible `whi
 # Phase 26 — Final Integration and Qualification
 
 **Milestone:** `Phase 26 — Final Integration and Qualification`
-**Status:** PLANNED
+**Status:** IN PROGRESS — native desktop qualification remains open.
 
 Phase 26 consolidates all deferred manual acceptance into one native-desktop qualification pass after the feature phases stabilize. It includes creator workflows across canvas ratios, text templates, captions, playback, mute, transitions, export, save/reopen, undo/redo, and missing-media handling. Automated regression, parity, packaging, and exact local-runtime restart checks remain required throughout the preceding phases; manual testing is intentionally batched here rather than repeated after each intermediate slice.
 
-Use `Plans/phase26_manual_qualification.md` for the exact one-pass native qualification sequence and result format.
+Use `Plans/phase26_manual_qualification.md` for the exact one-pass native qualification sequence and result format. The 2026-10-28 native run completed P34-AC-09 checklist items A1-A10 and Phase 31 Gate T1 items B1-B6 on disposable projects; long text was clipped at the preview canvas edge and is recorded in the checklist. Remaining Phase 26 item-level gaps remain open; see `artifacts/animated-text-templates/native-qualification-checklist-p31-p34.md`.
 
 # Phases 27–36 — Rich Animated Text Templates, CapCut Conversion and Agent Generation
 
 **Planning authorization:** 2026-10-11 — the user approved the proposed native-template-first direction and requested a phased implementation plan, explicitly without writing code in this task.
-**Status:** PLANNED — no Phase 27–36 implementation has started.
+**Status:** IMPLEMENTED — Gate T5 passed for static, automated, and package scope; native GUI, clean Windows VM, and hardware-encoder qualification remain deferred.
 
 The authoritative extension roadmap is [Animated Text Templates — Phase 27–36](Plans/plan_animated_text_templates.md). It links ten individual phase plans with dependencies, bounded slices, acceptance IDs, stop conditions and required evidence.
 
@@ -1849,4 +1849,14 @@ Execution order: contract/baseline → renderer POC/ADR → typed domain/migrati
 
 The first mandatory product gate is the user's sample recreated as editable Tinix text with verified preview/export semantics. Automated CapCut conversion and agent generation follow the same canonical template system; baked MP4 import is not editable-template conversion. Renderer/dependency selection remains gated by the POC rather than being preselected by this plan.
 
-Phase 19 remains the completed basic-preset foundation. Phase 26 and all prior environment qualifications remain open until supported by evidence; the new program must preserve those gates. Implementation starts at Phase 27 when coding is requested, not during this planning-only task.
+Phase 19 remains the completed basic-preset foundation. Phases 27–36 are implemented, with the deferred qualification recorded in `PROJECT_STATUS.md` and `artifacts/phase-36/`. Phase 26 and prior environment qualifications remain open until supported by evidence; automated/static/package acceptance does not replace native GUI or clean-machine qualification.
+
+
+## Proposed continuation: editor, MCP and AI
+
+See Plans/plan_editor_mcp_ai_roadmap.md for Phases 37–47, dependencies and acceptance gates. Phases 37–47 are complete with documented limits. The Phase 26 physical A/V, clean-VM and installed hardware-encoder checks are optional claim-specific qualifications by user decision.
+
+
+The current editor/MCP/AI continuation roadmap is [Phase 37–47](Plans/plan_editor_mcp_ai_roadmap.md); Phase 47 acceptance is in [its phase plan](Plans/phase47_webview_profile_and_recovery_consistency.md).
+
+The next ten phases are defined in [Product completion — Phases 48–57](Plans/plan_product_completion_phases48_57.md). Phase-specific execution notes: [Phase 52](Plans/phase52_visual_canvas_keyframes.md), [Phase 53](Plans/phase53_caption_transcript_editor.md), [Phase 55](Plans/phase55_content_duration_edit_plans.md), and [Phase 56](Plans/phase56_mcp_edit_plan_duration_parity.md). Phases 48–53 automated implementation is complete with documented limits/native gates deferred; Phase 54 has validated synthetic workload fixtures and cache management but still lacks G54 UI/resource measurements; Phase 55 is in progress with reviewed source-range editing and exact/advisory duration scheduling implemented; Phase 56 now includes matching MCP duration semantics and a no-clobber workflow manifest, while resume checkpoints/retry/batch behavior remains open.

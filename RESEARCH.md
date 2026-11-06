@@ -3079,3 +3079,13 @@ Measured on Windows 11 Pro 24H2 (i5-13400F, 64 GB RAM, RTX 3090) and saved to `a
 
 All criteria `P28-AC-01` through `P28-AC-08` passed. Gate 28 is locked; system is approved for Phase 29 (Rich Text Domain & Commands).
 
+# Phase 44 — Local visual scene analysis feasibility (2026-11-03)
+
+The approved next milestone adds visual descriptions of selected source-video scenes using a local vision-language model. Host inspection found 64 GiB physical RAM, an NVIDIA GeForce RTX 3090, and a downloaded `google/gemma-4-e4b` model (6.33 GB). The LM Studio API was not running and no model was loaded during inspection; a local inference pass is an explicit acceptance item, not an assumed pass.
+
+Primary-source feasibility evidence:
+
+- [LM Studio OpenAI-compatible endpoints](https://lmstudio.ai/docs/developer/openai-compat) document `POST /v1/chat/completions` and chat with text/images. [LM Studio image input](https://lmstudio.ai/docs/python/llm-prediction/image-input) and [LM Studio chat REST API](https://lmstudio.ai/docs/developer/rest/chat) document base64 image data URLs.
+- [Google Gemma vision documentation](https://ai.google.dev/gemma/docs/capabilities/vision) documents image captioning, visual question answering, OCR and multi-image reasoning. [Gemma video understanding](https://ai.google.dev/gemma/docs/capabilities/vision/video) demonstrates processing video through its visual input path.
+
+Engineering decision: use the existing local LM Studio installation as the first adapter and pass only bounded, downscaled frame data from selected media. Never send project/source paths, unselected assets, or full project documents to the model. Keep descriptions and rankings rebuildable derived data, validate every model-returned scene identifier, and do not present model relevance as calibrated confidence. Remote providers and automatic edit application remain outside Phase 44.

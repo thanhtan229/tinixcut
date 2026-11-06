@@ -28,7 +28,9 @@ use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{is_hex_color, DomainError, ItemKind, Project, TimelineItem};
 use crate::modules::media::text_overlay::render_frame_overlay_buffer_at;
 use crate::modules::media::text_renderer_poc::RgbaBuffer;
-use crate::modules::persistence::{load_project, save_project_atomic};
+use crate::modules::persistence::{
+    load_project, save_project_atomic_if_revision, PersistenceError,
+};
 use crate::modules::templates::catalog::{TemplateCatalog, TemplateCatalogError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -124,6 +126,12 @@ pub enum AgentTemplateError {
 
     #[error("Project load error: {0}")]
     ProjectLoad(String),
+
+    #[error("Project revision conflict: expected disk revision {expected:?}, found {actual:?}; reload the project or save as a new file to preserve your edits")]
+    ProjectRevisionConflict {
+        expected: Option<u64>,
+        actual: Option<u64>,
+    },
 }
 
 /// A declared slot within a template draft (for agent authoring clarity).
@@ -3503,15 +3511,29 @@ impl AgentTemplateService {
         let mut service = CommandService::new(project);
         let receipt = service.execute(envelope)?;
 
-        if let Err(e) = save_project_atomic(service.project(), project_path) {
-            return Err(AgentTemplateError::ProjectLoad(e.to_string()));
+        if let Err(error) = save_project_atomic_if_revision(
+            service.project(),
+            project_path,
+            Some(prior_project.revision),
+        ) {
+            return Err(match error {
+                PersistenceError::RevisionConflict { expected, actual } => {
+                    AgentTemplateError::ProjectRevisionConflict { expected, actual }
+                }
+                other => AgentTemplateError::ProjectLoad(other.to_string()),
+            });
         }
 
         // Publish to catalog on disk ONLY after command transaction and persistence succeed
         if !def_existed_before {
             if let Err(e) = catalog.save_user_definition(&def) {
                 // Rollback project file to preserve consistency if catalog publish fails
-                let _ = save_project_atomic(&prior_project, project_path);
+                let committed_revision = service.project().revision;
+                let _ = save_project_atomic_if_revision(
+                    &prior_project,
+                    project_path,
+                    Some(committed_revision),
+                );
                 return Err(AgentTemplateError::Catalog(e));
             }
         }

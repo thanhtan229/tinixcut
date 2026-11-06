@@ -4,10 +4,19 @@
 
 use crate::modules::domain::time::FrameRate;
 use crate::modules::media::resolver::MediaBinaryResolver;
+use crate::modules::media::scene::{
+    parse_scene_metadata, SceneAnalysisReport, SCENE_ANALYSIS_ALGORITHM_VERSION,
+    SCENE_ANALYSIS_SCHEMA_VERSION,
+};
 use crate::modules::media::waveform::{WaveformData, WAVEFORM_SCHEMA_VERSION};
 use crate::modules::media::MediaError;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeStream {
@@ -32,6 +41,14 @@ pub struct MediaMetadata {
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
     pub streams: Vec<ProbeStream>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioLevelReport {
+    pub source_fingerprint: String,
+    pub mean_dbfs: Option<f32>,
+    pub peak_dbfs: Option<f32>,
+    pub measurement: String,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +77,104 @@ struct FFprobeStream {
 pub struct FFmpegService;
 
 impl FFmpegService {
+    /// Measures source audio mean and sample peak using FFmpeg volumedetect.
+    /// These are dBFS diagnostics, not EBU R128 integrated LUFS measurements.
+    pub fn analyze_audio_levels(source_path: &Path) -> Result<AudioLevelReport, MediaError> {
+        if !source_path.exists() {
+            return Err(MediaError::TargetNotFound(source_path.to_path_buf()));
+        }
+        let metadata = Self::probe_file(source_path)?;
+        if metadata.audio_codec.is_none() {
+            return Err(MediaError::VerificationFailed(
+                "Source media contains no audio stream".to_string(),
+            ));
+        }
+        #[cfg(windows)]
+        let null_sink = "NUL";
+        #[cfg(not(windows))]
+        let null_sink = "/dev/null";
+        let output = MediaBinaryResolver::command("ffmpeg")?
+            .arg("-hide_banner")
+            .arg("-nostats")
+            .arg("-v")
+            .arg("info")
+            .arg("-i")
+            .arg(source_path)
+            .arg("-map")
+            .arg("0:a:0")
+            .arg("-vn")
+            .arg("-af")
+            .arg("volumedetect")
+            .arg("-f")
+            .arg("null")
+            .arg(null_sink)
+            .output()
+            .map_err(|error| {
+                MediaError::VerificationFailed(format!(
+                    "Failed to spawn FFmpeg audio analysis: {error}"
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(MediaError::VerificationFailed(format!(
+                "FFmpeg audio level analysis failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let log = String::from_utf8_lossy(&output.stderr);
+        let (mean_dbfs, peak_dbfs) = parse_volume_detect(&log).ok_or_else(|| {
+            MediaError::VerificationFailed(
+                "FFmpeg did not report mean_volume/max_volume".to_string(),
+            )
+        })?;
+        Ok(AudioLevelReport {
+            source_fingerprint: Self::source_fingerprint(source_path)?,
+            mean_dbfs,
+            peak_dbfs,
+            measurement: "FFmpeg volumedetect mean/max dBFS (not LUFS)".to_string(),
+        })
+    }
+
+    /// Builds a cheap cache-invalidation fingerprint from canonical path and file metadata.
+    /// This avoids hashing the full media payload on every waveform lookup.
+    pub fn source_fingerprint(file_path: &Path) -> Result<String, MediaError> {
+        let canonical_path = file_path.canonicalize()?;
+        let metadata = std::fs::metadata(&canonical_path)?;
+        let modified_ns = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+
+        let mut digest = Sha256::new();
+        digest.update(canonical_path.to_string_lossy().as_bytes());
+        digest.update(metadata.len().to_le_bytes());
+        digest.update(modified_ns.to_le_bytes());
+        Ok(digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+
+    pub fn scene_analysis_config_fingerprint(
+        threshold: f32,
+        max_duration_seconds: u32,
+        max_candidates: usize,
+    ) -> String {
+        let config = format!(
+            "{}|{}|{}|{}",
+            SCENE_ANALYSIS_ALGORITHM_VERSION,
+            threshold.to_bits(),
+            max_duration_seconds,
+            max_candidates
+        );
+        Sha256::digest(config.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     /// Probe a media file using ffprobe with typed arguments.
     pub fn probe_file(file_path: &Path) -> Result<MediaMetadata, MediaError> {
         if !file_path.exists() {
@@ -162,6 +277,155 @@ impl FFmpegService {
         })
     }
 
+    /// Find a bounded set of scene-boundary candidates without changing a project.
+    /// FFmpeg runs in a killable child process and writes only selected-frame metadata
+    /// into a temporary directory. The media duration, candidate count and wall time
+    /// are capped to keep untrusted input bounded.
+    pub fn analyze_scene_candidates(
+        source_path: &Path,
+        threshold: f32,
+        max_duration_seconds: u32,
+        max_candidates: usize,
+        cancel_flag: &AtomicBool,
+    ) -> Result<SceneAnalysisReport, MediaError> {
+        if !source_path.is_file() {
+            return Err(MediaError::TargetNotFound(source_path.to_path_buf()));
+        }
+        if !threshold.is_finite() || !(0.05..=0.95).contains(&threshold) {
+            return Err(MediaError::VerificationFailed(
+                "Scene threshold must be between 0.05 and 0.95".to_string(),
+            ));
+        }
+        if !(1..=1_800).contains(&max_duration_seconds) {
+            return Err(MediaError::VerificationFailed(
+                "Scene analysis duration must be between 1 and 1800 seconds".to_string(),
+            ));
+        }
+        if !(1..=2_000).contains(&max_candidates) {
+            return Err(MediaError::VerificationFailed(
+                "Scene candidate limit must be between 1 and 2000".to_string(),
+            ));
+        }
+
+        let metadata = Self::probe_file(source_path)?;
+        if !metadata
+            .streams
+            .iter()
+            .any(|stream| stream.codec_type == "video")
+        {
+            return Err(MediaError::VerificationFailed(
+                "Scene analysis requires a video stream".to_string(),
+            ));
+        }
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(MediaError::Cancelled);
+        }
+
+        let source_fingerprint = Self::source_fingerprint(source_path)?;
+        let work_dir = std::env::temp_dir().join(format!(
+            "tinixcut-scene-analysis-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&work_dir)?;
+        let metadata_path = work_dir.join("scene_metadata.txt");
+        let log_path = work_dir.join("ffmpeg.log");
+        let filter = format!(
+            "select='gt(scene,{threshold:.3})',metadata=mode=print:key=lavfi.scene_score:file=scene_metadata.txt:direct=1"
+        );
+        let null_sink = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let mut command = MediaBinaryResolver::command("ffmpeg")?;
+        command
+            .current_dir(&work_dir)
+            .arg("-hide_banner")
+            .arg("-nostats")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-i")
+            .arg(source_path)
+            .arg("-t")
+            .arg(max_duration_seconds.to_string())
+            .arg("-vf")
+            .arg(filter)
+            .arg("-an")
+            .arg("-frames:v")
+            .arg(max_candidates.saturating_add(1).to_string())
+            .arg("-f")
+            .arg("null")
+            .arg(null_sink)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(std::fs::File::create(&log_path)?));
+
+        let process_result = (|| -> Result<Vec<u8>, MediaError> {
+            let mut child = command.spawn().map_err(|error| {
+                MediaError::VerificationFailed(format!(
+                    "FFmpeg scene analysis could not start: {error}"
+                ))
+            })?;
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let status = loop {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(MediaError::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(MediaError::VerificationFailed(
+                        "Scene analysis exceeded its 120-second runtime limit".to_string(),
+                    ));
+                }
+                if let Some(status) = child.try_wait().map_err(|error| {
+                    MediaError::VerificationFailed(format!(
+                        "FFmpeg scene analysis could not be monitored: {error}"
+                    ))
+                })? {
+                    break status;
+                }
+                thread::sleep(Duration::from_millis(50));
+            };
+            if !status.success() {
+                let details = std::fs::read_to_string(&log_path).unwrap_or_default();
+                return Err(MediaError::VerificationFailed(format!(
+                    "FFmpeg scene analysis failed with exit code {}: {}",
+                    status.code().unwrap_or(-1),
+                    details.trim()
+                )));
+            }
+            Ok(std::fs::read(&metadata_path).unwrap_or_default())
+        })();
+        let _ = std::fs::remove_dir_all(&work_dir);
+        let metadata_bytes = process_result?;
+        let parsed = parse_scene_metadata(
+            &String::from_utf8_lossy(&metadata_bytes),
+            max_candidates.saturating_add(1),
+        );
+        let truncated = metadata.duration_seconds > max_duration_seconds as f64
+            || parsed.len() > max_candidates;
+        let candidates = parsed.into_iter().take(max_candidates).collect();
+
+        Ok(SceneAnalysisReport {
+            schema_version: SCENE_ANALYSIS_SCHEMA_VERSION,
+            algorithm_version: SCENE_ANALYSIS_ALGORITHM_VERSION.to_string(),
+            source_fingerprint,
+            config_fingerprint: Self::scene_analysis_config_fingerprint(
+                threshold,
+                max_duration_seconds,
+                max_candidates,
+            ),
+            threshold,
+            analyzed_duration_micros: (metadata
+                .duration_seconds
+                .min(max_duration_seconds as f64)
+                .max(0.0)
+                * 1_000_000.0)
+                .round() as u64,
+            truncated,
+            candidates,
+        })
+    }
+
     /// Extract a single frame thumbnail at the given timestamp in seconds.
     pub fn extract_thumbnail(
         source_path: &Path,
@@ -201,6 +465,88 @@ impl FFmpegService {
         }
 
         Ok(())
+    }
+
+    /// Extract one JPEG frame with a strict maximum side and cancellable bounded runtime.
+    pub fn extract_bounded_frame(
+        source_path: &Path,
+        time_micros: u64,
+        out_path: &Path,
+        max_side: u32,
+        cancel_flag: &AtomicBool,
+    ) -> Result<(), MediaError> {
+        if !source_path.is_file() {
+            return Err(MediaError::TargetNotFound(source_path.to_path_buf()));
+        }
+        if !(64..=1024).contains(&max_side) {
+            return Err(MediaError::VerificationFailed(
+                "Visual frame size must be between 64 and 1024 pixels".to_string(),
+            ));
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let seconds = time_micros as f64 / 1_000_000.0;
+        let scale = format!("scale={max_side}:{max_side}:force_original_aspect_ratio=decrease");
+        let mut child = MediaBinaryResolver::command("ffmpeg")?
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-ss")
+            .arg(format!("{seconds:.6}"))
+            .arg("-i")
+            .arg(source_path)
+            .arg("-map")
+            .arg("0:v:0")
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-vf")
+            .arg(scale)
+            .arg("-q:v")
+            .arg("5")
+            .arg("-y")
+            .arg(out_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                MediaError::VerificationFailed(format!(
+                    "Could not start FFmpeg visual frame extraction: {error}"
+                ))
+            })?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(MediaError::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(MediaError::VerificationFailed(
+                    "Visual frame extraction exceeded its 15-second limit".to_string(),
+                ));
+            }
+            if let Some(status) = child.try_wait()? {
+                if !status.success() || !out_path.is_file() {
+                    return Err(MediaError::VerificationFailed(format!(
+                        "FFmpeg visual frame extraction failed with exit code {}",
+                        status.code().unwrap_or(-1)
+                    )));
+                }
+                let metadata = std::fs::metadata(out_path)?;
+                if metadata.len() > 512 * 1024 {
+                    let _ = std::fs::remove_file(out_path);
+                    return Err(MediaError::VerificationFailed(
+                        "Extracted visual frame exceeded the 512 KiB limit".to_string(),
+                    ));
+                }
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     /// Generate a downscaled proxy video for responsive playback.
@@ -353,6 +699,7 @@ impl FFmpegService {
         let data = WaveformData {
             schema_version: WAVEFORM_SCHEMA_VERSION,
             asset_id: asset_id.to_string(),
+            source_fingerprint: Self::source_fingerprint(source_path)?,
             source_duration: duration,
             bucket_rate: effective_rate,
             channels: 1,
@@ -374,6 +721,43 @@ impl FFmpegService {
     }
 }
 
+fn parse_volume_detect(log: &str) -> Option<(Option<f32>, Option<f32>)> {
+    fn read_value(log: &str, key: &str) -> Option<Option<f32>> {
+        let line = log.lines().find(|line| line.contains(key))?;
+        let value = line.split_once(key)?.1.trim().split_whitespace().next()?;
+        if value.eq_ignore_ascii_case("-inf") || value.eq_ignore_ascii_case("inf") {
+            Some(None)
+        } else {
+            value
+                .parse::<f32>()
+                .ok()
+                .filter(|number| number.is_finite())
+                .map(Some)
+        }
+    }
+    Some((
+        read_value(log, "mean_volume:")?,
+        read_value(log, "max_volume:")?,
+    ))
+}
+
+#[cfg(test)]
+mod phase51_audio_level_tests {
+    use super::parse_volume_detect;
+
+    #[test]
+    fn parses_mean_and_peak_dbfs() {
+        let log = "[Parsed_volumedetect] mean_volume: -21.5 dB\n[Parsed_volumedetect] max_volume: -0.1 dB";
+        assert_eq!(parse_volume_detect(log), Some((Some(-21.5), Some(-0.1))));
+    }
+
+    #[test]
+    fn represents_silence_as_absent_dbfs_values() {
+        let log = "mean_volume: -inf dB\nmax_volume: -inf dB";
+        assert_eq!(parse_volume_detect(log), Some((None, None)));
+    }
+}
+
 fn parse_fraction(s: &str) -> Option<(u32, u32)> {
     let parts: Vec<&str> = s.split('/').collect();
     if parts.len() == 2 {
@@ -390,6 +774,21 @@ fn parse_fraction(s: &str) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn source_fingerprint_changes_when_source_metadata_changes() {
+        let path = std::env::temp_dir().join(format!(
+            "tinixcut-source-fingerprint-{}.media",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::write(&path, b"source version one").unwrap();
+        let first = FFmpegService::source_fingerprint(&path).unwrap();
+        fs::write(&path, b"source version two with changed size").unwrap();
+        let second = FFmpegService::source_fingerprint(&path).unwrap();
+
+        assert_ne!(first, second);
+        fs::remove_file(path).unwrap();
+    }
 
     fn generate_synthetic_fixture(out_path: &Path) {
         // Generate a 1-second 640x360 30fps test video with audio
@@ -434,6 +833,13 @@ mod tests {
         assert!(meta.duration_seconds > 0.8 && meta.duration_seconds < 1.2);
         assert_eq!(meta.video_codec.as_deref(), Some("h264"));
         assert_eq!(meta.audio_codec.as_deref(), Some("aac"));
+
+        let levels = FFmpegService::analyze_audio_levels(&fixture_path)
+            .expect("generated audio stream should have measurable levels");
+        assert!(levels.mean_dbfs.is_some());
+        assert!(levels.peak_dbfs.is_some());
+        assert!(levels.mean_dbfs.unwrap() < 0.0);
+        assert!(levels.measurement.contains("not LUFS"));
 
         // 2. Test thumbnail extraction
         let thumb_path = temp_dir.join("thumb_test.jpg");

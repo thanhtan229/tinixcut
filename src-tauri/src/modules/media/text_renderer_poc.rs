@@ -232,6 +232,70 @@ impl RgbaBuffer {
         out
     }
 
+    /// Encodes a standard RGBA PNG using streaming zlib compression.
+    ///
+    /// Unlike `to_png_bytes`, this avoids allocating a second full-canvas buffer
+    /// for scanlines. Errors from the compressor are returned to the caller.
+    pub fn to_png_bytes_compressed(&self) -> Result<Vec<u8>, String> {
+        if self.width == 0 || self.height == 0 {
+            return Err("PNG dimensions must be non-zero".to_string());
+        }
+        let row_stride = (self.width as usize)
+            .checked_mul(4)
+            .ok_or_else(|| "PNG row size overflow".to_string())?;
+        let expected = row_stride
+            .checked_mul(self.height as usize)
+            .ok_or_else(|| "PNG pixel data size overflow".to_string())?;
+        if self.data.len() != expected {
+            return Err(format!(
+                "RGBA buffer size mismatch: got {}, expected {}",
+                self.data.len(),
+                expected
+            ));
+        }
+
+        let mut compressed = Vec::new();
+        {
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(&mut compressed, flate2::Compression::default());
+            let mut scanline = Vec::with_capacity(row_stride.saturating_add(1));
+            scanline.resize(row_stride.saturating_add(1), 0);
+            for row in self
+                .data
+                .chunks_exact(row_stride.max(1))
+                .take(self.height as usize)
+            {
+                scanline[1..].copy_from_slice(row);
+                encoder
+                    .write_all(&scanline)
+                    .map_err(|error| format!("PNG zlib compression failed: {error}"))?;
+            }
+            encoder
+                .finish()
+                .map_err(|error| format!("PNG zlib compression failed: {error}"))?;
+        }
+
+        if compressed.len() > u32::MAX as usize {
+            return Err("Compressed PNG IDAT chunk exceeds format limit".to_string());
+        }
+        let capacity = compressed
+            .len()
+            .checked_add(57)
+            .ok_or_else(|| "PNG output size overflow".to_string())?;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&self.width.to_be_bytes());
+        ihdr.extend_from_slice(&self.height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        write_chunk(&mut out, b"IHDR", &ihdr);
+        // `write_chunk` uses a u32 PNG chunk length; size was checked above.
+        write_chunk(&mut out, b"IDAT", &compressed);
+        write_chunk(&mut out, b"IEND", &[]);
+        Ok(out)
+    }
+
     /// Decodes a store-mode PNG produced by `to_png_bytes()` back into an `RgbaBuffer` for round-trip parity verification.
     pub fn from_png_bytes(png: &[u8]) -> Result<Self, String> {
         if png.len() < 33 || png[0..8] != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
@@ -503,6 +567,128 @@ fn zlib_compress_store(data: &[u8]) -> Vec<u8> {
     let adler = (s2 << 16) | s1;
     out.extend_from_slice(&adler.to_be_bytes());
     out
+}
+
+#[cfg(test)]
+mod compressed_png_tests {
+    use super::{png_chunk_crc, RgbaBuffer};
+    use std::io::Read;
+
+    fn assert_png_chunk_crcs(png: &[u8]) {
+        assert_eq!(
+            &png[..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            "invalid PNG signature"
+        );
+        let mut pos = 8usize;
+        let mut saw_ihdr = false;
+        let mut saw_idat = false;
+        let mut saw_iend = false;
+        while pos + 12 <= png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let data_start = pos + 8;
+            let data_end = data_start
+                .checked_add(len)
+                .expect("PNG chunk size overflow");
+            assert!(data_end + 4 <= png.len(), "truncated PNG chunk");
+            let chunk_type: [u8; 4] = png[pos + 4..pos + 8].try_into().unwrap();
+            let expected_crc = png_chunk_crc(&chunk_type, &png[data_start..data_end]);
+            let actual_crc = u32::from_be_bytes(png[data_end..data_end + 4].try_into().unwrap());
+            assert_eq!(actual_crc, expected_crc, "bad CRC for {:?}", chunk_type);
+            match &chunk_type {
+                b"IHDR" => saw_ihdr = true,
+                b"IDAT" => saw_idat = true,
+                b"IEND" => {
+                    saw_iend = true;
+                    pos = data_end + 4;
+                    break;
+                }
+                _ => {}
+            }
+            pos = data_end + 4;
+        }
+        assert!(saw_ihdr, "missing IHDR chunk");
+        assert!(saw_idat, "missing IDAT chunk");
+        assert!(saw_iend, "missing IEND chunk");
+        assert_eq!(pos, png.len(), "unexpected trailing PNG bytes");
+    }
+
+    fn decode_idat_with_limit(png: &[u8], expected_bytes: usize) -> Vec<u8> {
+        assert_png_chunk_crcs(png);
+        let mut pos = 8usize;
+        let mut idat = Vec::new();
+        while pos + 12 <= png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let data_start = pos + 8;
+            let data_end = data_start + len;
+            assert!(data_end + 4 <= png.len(), "truncated PNG chunk");
+            if &png[pos + 4..pos + 8] == b"IDAT" {
+                idat.extend_from_slice(&png[data_start..data_end]);
+            } else if &png[pos + 4..pos + 8] == b"IEND" {
+                break;
+            }
+            pos = data_end + 4;
+        }
+
+        let decoder = flate2::read::ZlibDecoder::new(idat.as_slice());
+        let mut decoded = Vec::with_capacity(expected_bytes);
+        decoder
+            .take(expected_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut decoded)
+            .expect("decode PNG IDAT");
+        assert_eq!(decoded.len(), expected_bytes, "unexpected inflated size");
+        decoded
+    }
+
+    #[test]
+    fn compressed_png_round_trips_pixels_and_is_smaller_than_store_encoding() {
+        // PNG's IEND chunk has a published CRC-32 for its type and empty data.
+        assert_eq!(png_chunk_crc(b"IEND", &[]), 0xAE42_6082);
+        let mut buffer = RgbaBuffer::new(32, 24);
+        for y in 0..buffer.height {
+            for x in 0..buffer.width {
+                buffer.set_pixel(x, y, (x * 7) as u8, (y * 9) as u8, 180, 255);
+            }
+        }
+
+        let compressed = buffer
+            .to_png_bytes_compressed()
+            .expect("encode compressed PNG");
+        let store = buffer.to_png_bytes();
+        assert!(compressed.len() < store.len());
+        let decoded_store = RgbaBuffer::from_png_bytes(&store).expect("decode store PNG");
+        assert_eq!(decoded_store.data, buffer.data);
+        let decoded = decode_idat_with_limit(
+            &compressed,
+            (buffer.width as usize * 4 + 1) * buffer.height as usize,
+        );
+        for y in 0..buffer.height as usize {
+            let stride = buffer.width as usize * 4;
+            let decoded_row = y * (stride + 1);
+            assert_eq!(decoded[decoded_row], 0, "expected filter-0 scanline");
+            assert_eq!(
+                &decoded[decoded_row + 1..decoded_row + stride + 1],
+                &buffer.data[y * stride..(y + 1) * stride]
+            );
+        }
+    }
+
+    #[test]
+    fn compressed_png_keeps_1080p_transparent_frames_bounded() {
+        let buffer = RgbaBuffer::new(1920, 1080);
+        let compressed = buffer
+            .to_png_bytes_compressed()
+            .expect("encode transparent frame");
+        assert!(
+            compressed.len() < 100_000,
+            "encoded {} bytes",
+            compressed.len()
+        );
+        let decoded = decode_idat_with_limit(&compressed, (1920 * 4 + 1) * 1080);
+        assert!(decoded
+            .chunks_exact(1920 * 4 + 1)
+            .all(|row| { row[0] == 0 && row[1..].iter().all(|byte| *byte == 0) }));
+    }
 }
 
 /// Computes uppercase SHA-256 hex digest of a byte slice.

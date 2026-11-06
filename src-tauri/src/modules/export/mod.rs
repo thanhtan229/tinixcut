@@ -11,13 +11,24 @@ pub use automation::{
     escape_ffmpeg_filter_path, AutomationArtifactsGuard, ExportAutomationSchedule,
 };
 
+fn remove_silent_video_audio_layers(
+    plan: &mut CompositionPlan,
+    silent_video_item_ids: &std::collections::HashSet<String>,
+) {
+    plan.audio_layers
+        .retain(|audio| !silent_video_item_ids.contains(&audio.item_id));
+}
+
 use crate::modules::composition::{CompositionPlan, TextOverlayInput};
 use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{Project, ProjectSettings};
+use crate::modules::media::ffmpeg::FFmpegService;
 use crate::modules::media::resolver::MediaBinaryResolver;
 use crate::modules::media::text_overlay;
 use crate::modules::media::text_renderer_poc::RgbaBuffer;
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -194,6 +205,24 @@ pub struct ExportReport {
     pub attempted_encoders: Vec<String>,
 }
 
+/// Read-only snapshot of export constraints shown before a render starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPreflightReport {
+    pub project_id: String,
+    pub project_revision: u64,
+    pub output_path: PathBuf,
+    pub output_exists: bool,
+    pub available_disk_bytes: u64,
+    pub source_count: usize,
+    pub duration_secs: f64,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate_numerator: u32,
+    pub frame_rate_denominator: u32,
+    pub warnings: Vec<String>,
+}
+
 /// Removes a disposable derived-artifact directory on every exit path.
 struct TempDirGuard(PathBuf);
 
@@ -233,6 +262,108 @@ fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 pub struct ExportEngine;
 
 impl ExportEngine {
+    /// Validate a frozen project snapshot and the selected destination before scheduling a render.
+    pub fn preflight(
+        snapshot: &Project,
+        target_path: &Path,
+        profile: &ExportProfile,
+    ) -> Result<ExportPreflightReport, ExportError> {
+        profile.validate_for_project(&snapshot.settings)?;
+        if target_path.as_os_str().is_empty() || target_path.file_name().is_none() {
+            return Err(ExportError::IoError(
+                "Choose a valid export file path".to_string(),
+            ));
+        }
+        let parent = target_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if !parent.is_dir() {
+            return Err(ExportError::IoError(format!(
+                "Export destination folder does not exist: {}",
+                parent.display()
+            )));
+        }
+        if target_path.is_dir() {
+            return Err(ExportError::IoError(
+                "Export destination points to a folder".to_string(),
+            ));
+        }
+
+        let plan = CompositionPlan::from_project(snapshot)
+            .map_err(|error| ExportError::Composition(error.to_string()))?;
+        let mut sources = HashMap::<PathBuf, String>::new();
+        for layer in &plan.visual_layers {
+            if layer.asset_id.is_some() && layer.asset_path.is_none() {
+                return Err(ExportError::RenderFailed(format!(
+                    "Video or image source for clip '{}' is unavailable",
+                    layer.item_id
+                )));
+            }
+            if let (Some(asset_id), Some(path)) = (&layer.asset_id, &layer.asset_path) {
+                sources
+                    .entry(path.clone())
+                    .or_insert_with(|| asset_id.clone());
+            }
+        }
+        for layer in &plan.audio_layers {
+            if layer.asset_id.is_some() && layer.asset_path.is_none() {
+                return Err(ExportError::RenderFailed(format!(
+                    "Audio source for clip '{}' is unavailable",
+                    layer.item_id
+                )));
+            }
+            if let (Some(asset_id), Some(path)) = (&layer.asset_id, &layer.asset_path) {
+                sources
+                    .entry(path.clone())
+                    .or_insert_with(|| asset_id.clone());
+            }
+        }
+        for (path, asset_id) in &sources {
+            if !path.is_file() {
+                return Err(ExportError::RenderFailed(format!(
+                    "Source media '{}' is offline or missing",
+                    asset_id
+                )));
+            }
+            FFmpegService::probe_file(path).map_err(|error| {
+                ExportError::RenderFailed(format!(
+                    "Source media '{}' cannot be read by the export toolchain: {error}",
+                    asset_id
+                ))
+            })?;
+        }
+
+        let available_disk_bytes = crate::modules::media::collect::available_space(parent)
+            .map_err(ExportError::IoError)?;
+        let output_exists = target_path.exists();
+        let mut warnings = Vec::new();
+        if output_exists {
+            warnings.push(
+                "An existing output file will be replaced only after a successful render."
+                    .to_string(),
+            );
+        }
+        warnings.push(
+            "Available disk space is a point-in-time value; final MP4 size depends on its content."
+                .to_string(),
+        );
+        Ok(ExportPreflightReport {
+            project_id: snapshot.project_id.clone(),
+            project_revision: snapshot.revision,
+            output_path: target_path.to_path_buf(),
+            output_exists,
+            available_disk_bytes,
+            source_count: sources.len(),
+            duration_secs: plan.duration.to_seconds(),
+            width: profile.width,
+            height: profile.height,
+            frame_rate_numerator: profile.frame_rate.numerator,
+            frame_rate_denominator: profile.frame_rate.denominator,
+            warnings,
+        })
+    }
+
     /// Ordered ladder candidates according to ADR-002: NVENC -> QSV -> AMF -> libx264
     pub fn get_encoder_candidates(requested: &str) -> Vec<&'static str> {
         match requested {
@@ -292,6 +423,22 @@ impl ExportEngine {
             || lower.contains("not supported")
     }
 
+    fn render_failure_message(codec: &str, stderr: &str) -> String {
+        let lower = stderr.to_lowercase();
+        if lower.contains("no space left on device")
+            || lower.contains("not enough space")
+            || lower.contains("disk is full")
+        {
+            return format!(
+                "Insufficient disk space to finish the export. Free up space and retry. FFmpeg encoder '{codec}' reported: {stderr}"
+            );
+        }
+
+        format!(
+            "FFmpeg render process failed with encoder '{codec}' (status error). Stderr: {stderr}"
+        )
+    }
+
     /// Renders a project snapshot to the target file safely and deterministically.
     /// Invariant: Edits made to other project instances do not affect this frozen snapshot.
     pub fn render_snapshot(
@@ -300,11 +447,73 @@ impl ExportEngine {
         profile: &ExportProfile,
         cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<ExportReport, ExportError> {
-        profile.validate()?;
+        Self::render_snapshot_with_progress(snapshot, target_path, profile, cancel_flag, |_| {})
+    }
+
+    /// Renders a frozen project snapshot while reporting monotonic progress.
+    /// Progress is derived from FFmpeg's out-time and never predicts completion.
+    pub fn render_snapshot_with_progress<F>(
+        snapshot: &Project,
+        target_path: &Path,
+        profile: &ExportProfile,
+        cancel_flag: Option<Arc<AtomicBool>>,
+        mut on_progress: F,
+    ) -> Result<ExportReport, ExportError>
+    where
+        F: FnMut(f32),
+    {
+        Self::preflight(snapshot, target_path, profile)?;
+        on_progress(0.05);
 
         // Compile normalized CompositionPlan from the frozen project snapshot
-        let plan = CompositionPlan::from_project(snapshot)
+        let mut plan = CompositionPlan::from_project(snapshot)
             .map_err(|e| ExportError::Composition(e.to_string()))?;
+        on_progress(0.12);
+
+        // Video items are also represented as audio layers so clips with embedded
+        // audio can be mixed. A silent video has no `[input:a]` stream, however,
+        // and must not contribute an audio filter branch to the FFmpeg graph.
+        let video_item_ids: std::collections::HashSet<_> = plan
+            .visual_layers
+            .iter()
+            .filter(|layer| layer.kind == crate::modules::domain::ItemKind::Video)
+            .map(|layer| layer.item_id.clone())
+            .collect();
+        let mut video_audio_presence = std::collections::HashMap::new();
+        for audio in &plan.audio_layers {
+            if !video_item_ids.contains(&audio.item_id) {
+                continue;
+            }
+            let path = audio.asset_path.as_ref().ok_or_else(|| {
+                ExportError::RenderFailed(format!(
+                    "Video clip '{}' is missing its media path while checking audio streams",
+                    audio.item_id
+                ))
+            })?;
+            if !video_audio_presence.contains_key(path) {
+                let metadata = FFmpegService::probe_file(path).map_err(|error| {
+                    ExportError::RenderFailed(format!(
+                        "Failed to inspect audio streams for video '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+                video_audio_presence.insert(path.clone(), metadata.audio_codec.is_some());
+            }
+        }
+        let silent_video_item_ids: std::collections::HashSet<_> = plan
+            .audio_layers
+            .iter()
+            .filter(|audio| {
+                video_item_ids.contains(&audio.item_id)
+                    && audio
+                        .asset_path
+                        .as_ref()
+                        .and_then(|path| video_audio_presence.get(path))
+                        .is_some_and(|has_audio| !has_audio)
+            })
+            .map(|audio| audio.item_id.clone())
+            .collect();
+        remove_silent_video_audio_layers(&mut plan, &silent_video_item_ids);
 
         // 1. Establish temporary output path for safe promotion
         let temp_filename = format!(
@@ -344,6 +553,7 @@ impl ExportEngine {
             profile.audio_sample_rate,
             cancel_flag.as_ref(),
         )?;
+        on_progress(0.2);
 
         // Materialize rich-text overlays through the shared Phase 30 renderer.
         // These PNGs are disposable derived artifacts, never project state.
@@ -353,7 +563,7 @@ impl ExportEngine {
         if plan
             .visual_layers
             .iter()
-            .any(|layer| layer.text_rich.is_some() || layer.template_instance.is_some())
+            .any(|layer| layer.uses_shared_text_overlay())
         {
             fs::create_dir_all(&overlay_dir).map_err(|error| {
                 ExportError::IoError(format!("Failed to create text overlay directory: {error}"))
@@ -364,7 +574,7 @@ impl ExportEngine {
                 if layer.item_id.contains("__layer_") {
                     continue;
                 }
-                if layer.text_rich.is_none() && layer.template_instance.is_none() {
+                if !layer.uses_shared_text_overlay() {
                     continue;
                 }
 
@@ -425,7 +635,12 @@ impl ExportEngine {
                         })?
                         .unwrap_or_else(|| RgbaBuffer::new(plan.width, plan.height));
 
-                        let png_bytes = buf.to_png_bytes();
+                        let png_bytes = buf.to_png_bytes_compressed().map_err(|error| {
+                            ExportError::RenderFailed(format!(
+                                "Animated text overlay PNG encoding failed for '{}': {error}",
+                                layer.name
+                            ))
+                        })?;
                         total_seq_bytes += png_bytes.len() as u64;
 
                         // Enforce documented byte quota (Finding 7)
@@ -507,6 +722,18 @@ impl ExportEngine {
                 Some(&schedule),
                 &overlays,
             );
+            let mut args = args;
+            let output_argument = args
+                .pop()
+                .expect("FFmpeg export arguments always end with an output path");
+            args.extend([
+                "-nostats".to_string(),
+                "-stats_period".to_string(),
+                "0.25".to_string(),
+                "-progress".to_string(),
+                "pipe:1".to_string(),
+            ]);
+            args.push(output_argument);
 
             // Spawn child FFmpeg process via centralized MediaBinaryResolver
             let mut cmd = match MediaBinaryResolver::command("ffmpeg") {
@@ -522,7 +749,7 @@ impl ExportEngine {
             let mut child: Child = cmd
                 .args(&args)
                 .stdin(Stdio::null())
-                .stdout(Stdio::null())
+                .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|e| {
@@ -540,17 +767,44 @@ impl ExportEngine {
                     stderr
                 })
             });
+            let (progress_tx, progress_rx) = std::sync::mpsc::channel::<f64>();
+            let mut progress_reader = child.stdout.take().map(|out_pipe| {
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader};
+                    let reader = BufReader::new(out_pipe);
+                    for line in reader.lines().flatten() {
+                        if let Some(value) = line
+                            .strip_prefix("out_time_us=")
+                            .or_else(|| line.strip_prefix("out_time_ms="))
+                            .and_then(|value| value.parse::<f64>().ok())
+                        {
+                            // FFmpeg labels both fields in microseconds in supported builds.
+                            let _ = progress_tx.send(value / 1_000_000.0);
+                        }
+                    }
+                })
+            });
             let mut cancelled = false;
             let mut render_success = false;
             let mut stderr_str = String::new();
 
             loop {
+                let duration = plan.duration.to_seconds().max(0.001);
+                for out_time in progress_rx.try_iter() {
+                    let encoder_fraction = (out_time / duration).clamp(0.0, 1.0);
+                    let candidate_fraction =
+                        (i as f64 + encoder_fraction) / candidates.len().max(1) as f64;
+                    on_progress((0.2 + candidate_fraction as f32 * 0.75).min(0.95));
+                }
                 if let Some(ref flag) = cancel_flag {
                     if flag.load(Ordering::SeqCst) {
                         cancelled = true;
                         let _ = child.kill();
                         let _ = child.wait();
                         if let Some(reader) = stderr_reader.take() {
+                            let _ = reader.join();
+                        }
+                        if let Some(reader) = progress_reader.take() {
                             let _ = reader.join();
                         }
                         break;
@@ -567,6 +821,9 @@ impl ExportEngine {
                                 .join()
                                 .unwrap_or_else(|_| "Failed to collect FFmpeg stderr".to_string());
                         }
+                        if let Some(reader) = progress_reader.take() {
+                            let _ = reader.join();
+                        }
                         break;
                     }
                     Ok(None) => {
@@ -576,6 +833,9 @@ impl ExportEngine {
                         let _ = child.kill();
                         let _ = child.wait();
                         if let Some(reader) = stderr_reader.take() {
+                            let _ = reader.join();
+                        }
+                        if let Some(reader) = progress_reader.take() {
                             let _ = reader.join();
                         }
                         let _ = fs::remove_file(&temp_output_path);
@@ -622,6 +882,7 @@ impl ExportEngine {
                 let duration_secs = plan.duration.to_seconds();
 
                 schedule.guard.cleanup();
+                on_progress(1.0);
 
                 return Ok(ExportReport {
                     output_path: target_path.to_path_buf(),
@@ -649,9 +910,9 @@ impl ExportEngine {
             }
 
             // Non-hardware error or final fallback candidate exhausted: fail explicitly
-            return Err(ExportError::RenderFailed(format!(
-                "FFmpeg render process failed with encoder '{}' (status error). Stderr: {}",
-                candidate, stderr_str
+            return Err(ExportError::RenderFailed(Self::render_failure_message(
+                candidate,
+                &stderr_str,
             )));
         }
 
@@ -696,6 +957,32 @@ pub mod tests {
         assert!(profile.validate().is_ok());
     }
 
+    #[test]
+    fn export_preflight_binds_snapshot_and_reports_replacement_and_disk_space() {
+        let directory = get_fixture_dir().join(format!("preflight_{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let output = directory.join("existing.mp4");
+        fs::write(&output, b"prior output must remain untouched").unwrap();
+        let project = Project::new("Preflight snapshot".to_string());
+        let profile = ExportProfile::from_project_settings(&project.settings);
+
+        let report = ExportEngine::preflight(&project, &output, &profile).unwrap();
+
+        assert_eq!(report.project_id, project.project_id);
+        assert_eq!(report.project_revision, project.revision);
+        assert!(report.output_exists);
+        assert!(report.available_disk_bytes > 0);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("replaced only after a successful render")));
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            b"prior output must remain untouched"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     fn generate_synthetic_mp4(path: &Path, duration_secs: u32, color: &str) {
         if path.exists() {
             return;
@@ -731,6 +1018,96 @@ pub mod tests {
                 }
             }
         }
+    }
+
+    fn generate_silent_synthetic_mp4(path: &Path) {
+        if let Ok(mut cmd) = MediaBinaryResolver::command("ffmpeg") {
+            let output = cmd
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=640x360:r=30:d=2",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    &path.to_string_lossy(),
+                ])
+                .output();
+            assert!(output.is_ok_and(|result| result.status.success()));
+        }
+    }
+
+    #[test]
+    fn silent_video_export_does_not_reference_a_missing_audio_stream() {
+        let test_dir = get_fixture_dir().join(format!("silent_video_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).unwrap();
+        let source = test_dir.join("silent.mp4");
+        let output = test_dir.join("silent_export.mp4");
+        generate_silent_synthetic_mp4(&source);
+
+        let mut project = Project::new("Silent video export".to_string());
+        project.settings.width = 640;
+        project.settings.height = 360;
+        let asset_id = "silent-video".to_string();
+        project.assets.push(Asset {
+            asset_id: asset_id.clone(),
+            name: "silent.mp4".to_string(),
+            path: source.to_string_lossy().to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::new(60, FrameRate::FPS_30)),
+            file_size: 100,
+            dimensions: None,
+        });
+        let clip_range = TimeRange::new(
+            RationalTime::new(0, FrameRate::FPS_30),
+            RationalTime::new(60, FrameRate::FPS_30),
+        );
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(
+            TimelineItem::new(
+                Some(asset_id),
+                "Silent clip".to_string(),
+                ItemKind::Video,
+                clip_range,
+                clip_range,
+            )
+            .unwrap(),
+        );
+        project.tracks.push(track);
+
+        let profile = ExportProfile::from_project_settings(&project.settings);
+        let mut progress = Vec::new();
+        let report = ExportEngine::render_snapshot_with_progress(
+            &project,
+            &output,
+            &profile,
+            None,
+            |value| progress.push(value),
+        )
+        .expect("silent video export should not require an audio stream");
+        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(progress.last().copied(), Some(1.0));
+        assert!(report.file_size_bytes > 0);
+        let metadata = FFmpegService::probe_file(&output).expect("probe rendered MP4");
+        assert!(metadata.video_codec.is_some());
+        assert!(metadata.audio_codec.is_none());
+        let decode = MediaBinaryResolver::command("ffmpeg")
+            .expect("resolve packaged FFmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&output)
+            .args(["-f", "null", "-"])
+            .output()
+            .expect("decode rendered MP4");
+        assert!(
+            decode.status.success(),
+            "FFmpeg full decode failed: {}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
+
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
@@ -1113,5 +1490,20 @@ pub mod tests {
             "No space left on device",
             "h264_qsv"
         ));
+    }
+
+    #[test]
+    fn test_phase57_disk_full_error_is_actionable_and_keeps_encoder_detail() {
+        let message = ExportEngine::render_failure_message(
+            "h264_qsv",
+            "Error writing trailer: No space left on device",
+        );
+
+        assert!(message.starts_with("Insufficient disk space to finish the export."));
+        assert!(message.contains("Free up space and retry."));
+        assert!(message.contains("No space left on device"));
+
+        let generic = ExportEngine::render_failure_message("libx264", "invalid filter graph");
+        assert!(generic.starts_with("FFmpeg render process failed with encoder 'libx264'"));
     }
 }

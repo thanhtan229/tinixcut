@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
 import { Project } from "../types/project";
-import { CommandEnvelope, CommandReceipt, DiffReport } from "../types/command";
+import { CommandEnvelope, CommandReceipt, DiffReport, OperationEnvelope } from "../types/command";
 import { ExportPreset } from "../types/export";
 import { TemplateDefinition, TemplatePackManifest } from "../types/template";
 import {
@@ -24,11 +24,46 @@ export interface CaptionsExportReport {
   cueCount: number;
 }
 
+export interface AudioLevelReport {
+  source_fingerprint: string;
+  mean_dbfs: number | null;
+  peak_dbfs: number | null;
+  measurement: string;
+}
+
+export interface MediaCacheCategoryStatus {
+  files: number;
+  bytes: number;
+}
+
+export interface MediaCacheStatus {
+  totalFiles: number;
+  totalBytes: number;
+  categories: Record<string, MediaCacheCategoryStatus>;
+}
+
 export interface AutoCaptionRequest {
   itemId: string;
   whisperCliPath: string;
   modelPath: string;
   language?: string;
+  analyzeOnly?: boolean;
+}
+
+export interface TranscriptSourceEntry {
+  sourceStart: { value: number; rate: { numerator: number; denominator: number } };
+  sourceDuration: { value: number; rate: { numerator: number; denominator: number } };
+  timelineStart: { value: number; rate: { numerator: number; denominator: number } } | null;
+  text: string;
+}
+
+export interface AppSettings {
+  schemaVersion: number;
+  whisperCliPath: string | null;
+  whisperModelPath: string | null;
+  transcriptionLanguage: "auto" | "vi" | "en";
+  recentProjects: string[];
+  legacyBrowserSettingsMigrated: boolean;
 }
 
 export interface AutoCaptionReport {
@@ -38,6 +73,61 @@ export interface AutoCaptionReport {
   message: string;
   captionCount?: number;
   trackId?: string;
+  transcript?: TranscriptSourceEntry[];
+}
+
+export interface VisualSceneDescription {
+  sceneId: string;
+  assetId: string;
+  assetName: string;
+  sourceStartMicros: number;
+  sourceEndMicros: number;
+  sampledAtMicros: number;
+  caption: string;
+  tags: string[];
+  relevanceScore: number;
+  rationale: string;
+}
+
+export interface VisualSceneAnalysisReport {
+  schemaVersion: number;
+  algorithmVersion: string;
+  provider: string;
+  model: string;
+  query: string;
+  sourceFingerprint: string;
+  configFingerprint: string;
+  truncated: boolean;
+  scenes: VisualSceneDescription[];
+  warnings: string[];
+}
+
+export interface SceneSelectionSuggestion {
+  provider: string;
+  model: string;
+  orderedSceneIds: string[];
+  rationale: string;
+  selectedDurationMicros: number;
+  targetDurationSeconds: number | null;
+  openingTitleSuggestion: string | null;
+  constraints: {
+    allowedAssetIds: string[];
+    mustKeepSceneIds: string[];
+    mustOmitSceneIds: string[];
+    captionIntent: string | null;
+    audioIntent: string | null;
+  };
+}
+
+export type SceneCanvasPreset = "landscape_16x9" | "portrait_9x16" | "square_1x1" | "portrait_4x5";
+export type SceneTitleTemplate = "clean_lower_third" | "bold_headline" | "center_pop" | "subtitle_card" | "quote_card" | "call_to_action";
+
+export interface VisualSceneAnalysisJobReport {
+  jobId: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  report: VisualSceneAnalysisReport | null;
 }
 
 export interface PreviewOverlayIpcResponse {
@@ -48,6 +138,123 @@ export interface PreviewOverlayIpcResponse {
   hasVisibleContent: boolean;
   fontSha256: string;
   renderElapsedMs: number;
+}
+
+export interface OfflineMediaAsset {
+  asset_id: string;
+  last_known_path: string;
+  permission_required: boolean;
+}
+
+export interface ProjectExportJobStatus {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  error: string | null;
+}
+
+export interface ProjectExportStartReceipt {
+  jobId: string;
+  status: string;
+  outputPath: string;
+}
+
+export interface EditPlanDraftReceipt {
+  provider: string;
+  plan: {
+    schemaVersion: number;
+    goal: string;
+    projectId: string;
+    baseRevision: number;
+    referencedMediaIds: string[];
+    assumptions: string[];
+    warnings: string[];
+    operations: Array<{ operationId: string; operation: OperationEnvelope["operation"] }>;
+  };
+  validation: {
+    valid: boolean;
+    issues: string[];
+    diff: DiffReport | null;
+  };
+}
+
+export type ProjectRecoveryStatus =
+  | "NoRecoveryFound"
+  | "RecoveryMatchesProject"
+  | {
+      NewerRecoveryAvailable: {
+        recovery_path: string;
+        recovery_revision: number;
+        project_revision: number;
+        recovery_fingerprint: string;
+      };
+    }
+  | {
+      RecoveryDiffersFromProject: {
+        recovery_path: string;
+        recovery_revision: number;
+        project_revision: number;
+        recovery_fingerprint: string;
+      };
+    }
+  | {
+      RecoveryUnreadable: {
+        recovery_path: string;
+        reason: string;
+      };
+    };
+
+export interface RecoverySnapshotReceipt {
+  projectRevision: number;
+  recoveryRevision: number;
+}
+
+export interface UnsavedRecoveryCandidate {
+  projectId: string;
+  name: string;
+  revision: number;
+  updatedAtMs: number;
+  assetCount: number;
+  trackCount: number;
+  clipCount: number;
+  previewItemNames: string[];
+}
+
+export interface UnsavedRecoveryReceipt {
+  projectRevision: number;
+  recoveryPath: string;
+}
+
+export interface RecoveryRestoreReceipt {
+  project: Project;
+  persistedRevision: number;
+}
+
+export interface ProjectVariantCreateReceipt {
+  path: string;
+  sourceProjectId: string;
+  sourceRevision: number;
+  project: Project;
+}
+
+export interface CollectedMediaReceipt {
+  projectPath: string;
+  mediaDirectory: string;
+  project: Project;
+  copiedAssets: number;
+  totalBytes: number;
+}
+
+export interface ProjectCompareReport {
+  left: { projectId: string; name: string; revision: number };
+  right: { projectId: string; name: string; revision: number };
+  contentEquivalent: boolean;
+  settingsChangedFields: string[];
+  assets: { added: string[]; removed: string[]; modified: Array<{ entityId: string; changedFields: string[] }> };
+  tracks: { added: string[]; removed: string[]; modified: Array<{ entityId: string; changedFields: string[] }> };
+  items: { added: string[]; removed: string[]; modified: Array<{ entityId: string; changedFields: string[] }> };
+  transitions: { added: string[]; removed: string[]; modified: Array<{ entityId: string; changedFields: string[] }> };
+  audioTransitions: { added: string[]; removed: string[]; modified: Array<{ entityId: string; changedFields: string[] }> };
 }
 
 export interface CapCutInspectionResult {
@@ -89,13 +296,150 @@ export interface CapCutInspectionResult {
   converted_definition: TemplateDefinition | null;
 }
 
+export interface CurrentProjectSession {
+  project: Project;
+  canonicalPath: string | null;
+  persistedRevision: number | null;
+}
+
 export const editorApi = {
+  getAppSettings: () => invoke<AppSettings>("app_settings_get"),
+  saveAppSettings: (settings: AppSettings) => invoke<AppSettings>("app_settings_save", { settings }),
+  addRecentProject: (projectPath: string) =>
+    invoke<AppSettings>("app_settings_add_recent_project", { projectPath }),
   async getHealth(): Promise<HealthStatus> {
     return invoke<HealthStatus>("app_health_check");
   },
 
   async getCurrentProject(): Promise<Project> {
     return invoke<Project>("project_get_current");
+  },
+
+  async getCurrentProjectSession(): Promise<CurrentProjectSession> {
+    return invoke<CurrentProjectSession>("project_get_current_session");
+  },
+
+  async createProjectVariant(path: string, name: string, expectedProjectId: string, expectedRevision: number): Promise<ProjectVariantCreateReceipt> {
+    return invoke<ProjectVariantCreateReceipt>("project_variant_create", { path, name, expectedProjectId, expectedRevision });
+  },
+  async collectProjectMedia(destinationDirectory: string, expectedProjectId: string, expectedRevision: number): Promise<CollectedMediaReceipt> {
+    return invoke<CollectedMediaReceipt>("project_collect_media", { destinationDirectory, expectedProjectId, expectedRevision });
+  },
+
+  async compareCurrentWithPath(path: string, expectedProjectId: string, expectedRevision: number): Promise<ProjectCompareReport> {
+    return invoke<ProjectCompareReport>("project_compare_current_with_path", { path, expectedProjectId, expectedRevision });
+  },
+
+  async previewEditPlanDraft(
+    goal: string,
+    mediaIds: string[],
+    targetDurationFrames: number,
+    audioAssetId: string | null,
+    subtitleFilePath: string | null,
+    plannerProvider: "deterministic-mock-v1" | "lm-studio-local",
+    localModel: string,
+    requestId: string,
+  ): Promise<EditPlanDraftReceipt> {
+    return invoke<EditPlanDraftReceipt>("edit_plan_draft_preview", {
+      goal,
+      mediaIds,
+      targetDurationFrames,
+      audioAssetId,
+      subtitleFilePath,
+      plannerProvider,
+      localModel,
+      requestId,
+    });
+  },
+
+  async previewSceneGuidedEditPlan(
+    goal: string,
+    report: VisualSceneAnalysisReport,
+    selectedSceneIds: string[],
+    targetDurationFrames: number | null,
+    exactDuration: boolean,
+    mustKeepSceneIds: string[] = [],
+    mustOmitSceneIds: string[] = [],
+    targetCanvas: SceneCanvasPreset | null = null,
+    openingTitle: string | null = null,
+    titleTemplate: SceneTitleTemplate | null = null,
+    allowedAssetIds: string[] = [],
+  ): Promise<EditPlanDraftReceipt> {
+    return invoke<EditPlanDraftReceipt>("edit_plan_scene_draft_preview", {
+      goal,
+      report,
+      selectedSceneIds,
+      targetDurationFrames,
+      exactDuration,
+      mustKeepSceneIds,
+      mustOmitSceneIds,
+      allowedAssetIds,
+      targetCanvas,
+      openingTitle,
+      titleTemplate,
+    });
+  },
+
+  async suggestVisualSceneSelection(
+    goal: string,
+    report: VisualSceneAnalysisReport,
+    targetDurationSeconds: number | null,
+    localModel: string,
+    mustKeepSceneIds: string[] = [],
+    mustOmitSceneIds: string[] = [],
+    allowedAssetIds: string[] = [],
+    captionIntent: string | null = null,
+    audioIntent: string | null = null,
+    suggestOpeningTitle = false,
+  ): Promise<SceneSelectionSuggestion> {
+    return invoke<SceneSelectionSuggestion>("edit_plan_scene_selection_suggest", {
+      goal,
+      report,
+      targetDurationSeconds,
+      mustKeepSceneIds,
+      mustOmitSceneIds,
+      allowedAssetIds,
+      captionIntent,
+      audioIntent,
+      suggestOpeningTitle,
+      localModel,
+    });
+  },
+
+  async previewEditPlanReorder(
+    goal: string,
+    trackId: string,
+    itemIds: string[],
+    orderedItemIds: string[],
+    plannerProvider: "caller-order-v1" | "lm-studio-local",
+    localModel: string,
+    requestId: string,
+  ): Promise<EditPlanDraftReceipt> {
+    return invoke<EditPlanDraftReceipt>("edit_plan_reorder_preview", {
+      goal,
+      trackId,
+      itemIds,
+      orderedItemIds,
+      plannerProvider,
+      localModel,
+      requestId,
+    });
+  },
+
+  async previewEditPlanTrim(
+    goal: string,
+    itemId: string,
+    targetDurationFrames: number,
+  ): Promise<EditPlanDraftReceipt> {
+    return invoke<EditPlanDraftReceipt>("edit_plan_trim_preview", {
+      goal,
+      itemId,
+      targetDurationFrames,
+    });
+  },
+
+  async cancelEditPlanDraft(requestId: string): Promise<boolean> {
+    return invoke<boolean>("edit_plan_draft_cancel", { requestId });
   },
 
   async newProject(name: string): Promise<Project> {
@@ -118,8 +462,58 @@ export const editorApi = {
     return invoke<Project>("project_open", { path });
   },
 
-  async checkRecovery(path: string): Promise<unknown> {
-    return invoke("project_check_recovery", { path });
+  async checkRecovery(path: string): Promise<ProjectRecoveryStatus> {
+    return invoke<ProjectRecoveryStatus>("project_check_recovery", { path });
+  },
+
+  async saveRecoverySnapshot(path: string, expectedRevision: number): Promise<RecoverySnapshotReceipt> {
+    return invoke<RecoverySnapshotReceipt>("project_save_recovery_snapshot", {
+      path,
+      expectedRevision,
+    });
+  },
+
+  async restoreRecovery(
+    path: string,
+    expectedProjectRevision: number,
+    expectedRecoveryRevision: number,
+    expectedRecoveryFingerprint: string,
+  ): Promise<RecoveryRestoreReceipt> {
+    return invoke<RecoveryRestoreReceipt>("project_restore_recovery", {
+      path,
+      expectedProjectRevision,
+      expectedRecoveryRevision,
+      expectedRecoveryFingerprint,
+    });
+  },
+
+  async saveUnsavedRecovery(projectId: string, expectedRevision: number): Promise<UnsavedRecoveryReceipt> {
+    return invoke<UnsavedRecoveryReceipt>("project_save_unsaved_recovery", {
+      expectedProjectId: projectId,
+      expectedRevision,
+    });
+  },
+
+  async listUnsavedRecoveries(): Promise<UnsavedRecoveryCandidate[]> {
+    return invoke<UnsavedRecoveryCandidate[]>("project_list_unsaved_recoveries");
+  },
+
+  async restoreUnsavedRecovery(
+    projectId: string,
+    expectedRecoveryRevision: number,
+    expectedCurrentProjectId: string,
+    expectedCurrentRevision: number,
+  ): Promise<Project> {
+    return invoke<Project>("project_restore_unsaved_recovery", {
+      projectId,
+      expectedRecoveryRevision,
+      expectedCurrentProjectId,
+      expectedCurrentRevision,
+    });
+  },
+
+  async discardUnsavedRecovery(projectId: string, expectedRecoveryRevision: number): Promise<void> {
+    return invoke<void>("project_discard_unsaved_recovery", { projectId, expectedRecoveryRevision });
   },
 
   async undo(): Promise<string | null> {
@@ -134,8 +528,41 @@ export const editorApi = {
     return invoke("project_export", { outputPath, preset });
   },
 
+  async startProjectExport(outputPath: string, preset?: ExportPreset): Promise<ProjectExportStartReceipt> {
+    return invoke("project_export_start", { outputPath, preset });
+  },
+
+  async getProjectExportStatus(jobId: string): Promise<ProjectExportJobStatus> {
+    return invoke("project_export_status", { jobId });
+  },
+
+  async cancelProjectExport(jobId: string): Promise<boolean> {
+    return invoke("project_export_cancel", { jobId });
+  },
+
+  async preflightExport(outputPath: string, preset?: ExportPreset): Promise<{
+    projectId: string;
+    projectRevision: number;
+    outputPath: string;
+    outputExists: boolean;
+    availableDiskBytes: number;
+    sourceCount: number;
+    durationSecs: number;
+    width: number;
+    height: number;
+    frameRateNumerator: number;
+    frameRateDenominator: number;
+    warnings: string[];
+  }> {
+    return invoke("project_export_preflight", { outputPath, preset });
+  },
+
   async importMedia(filePath: string): Promise<unknown> {
     return invoke("media_import", { filePath });
+  },
+
+  async listOfflineMedia(): Promise<OfflineMediaAsset[]> {
+    return invoke("media_list_offline_assets");
   },
 
   async importCaptions(filePath: string): Promise<CaptionsImportReport> {
@@ -156,6 +583,18 @@ export const editorApi = {
 
   async cancelAutoCaptions(jobId: string): Promise<void> {
     return invoke<void>("captions_auto_cancel", { jobId });
+  },
+
+  async startVisualSceneAnalysis(request: { assetIds: string[]; query: string; model: string; maxScenes: number }): Promise<VisualSceneAnalysisJobReport> {
+    return invoke<VisualSceneAnalysisJobReport>("visual_scene_analysis_start", { request });
+  },
+
+  async getVisualSceneAnalysisStatus(jobId: string): Promise<VisualSceneAnalysisJobReport> {
+    return invoke<VisualSceneAnalysisJobReport>("visual_scene_analysis_status", { jobId });
+  },
+
+  async cancelVisualSceneAnalysis(jobId: string): Promise<void> {
+    return invoke<void>("visual_scene_analysis_cancel", { jobId });
   },
 
   async samplePreviewAt(frame: number): Promise<PreviewFrameState> {
@@ -186,6 +625,18 @@ export const editorApi = {
 
   async getWaveform(assetId: string): Promise<import("../types/preview").WaveformStatus> {
     return invoke<import("../types/preview").WaveformStatus>("media_get_waveform", { assetId });
+  },
+
+  async getMediaCacheStatus(): Promise<MediaCacheStatus> {
+    return invoke<MediaCacheStatus>("media_cache_status");
+  },
+
+  async clearMediaCache(): Promise<MediaCacheStatus> {
+    return invoke<MediaCacheStatus>("media_cache_clear");
+  },
+
+  async analyzeAudioLevels(assetId: string): Promise<AudioLevelReport> {
+    return invoke<AudioLevelReport>("media_analyze_audio_levels", { assetId });
   },
 
   async renderTextTemplatePocPreview(

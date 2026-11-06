@@ -14,8 +14,54 @@ import {
   rationalTimeToFrames,
   rationalTimeToSeconds,
   TimelineItem,
+  Project,
+  Track,
 } from "./types/project";
 import { getPendingPreviewVideoSeekTarget, shouldSeekPreviewVideo } from "./components/previewVideoSync";
+import { shouldResetInspectorDrafts } from "./components/inspectorDraftSync";
+import { getMediaTimelinePlacement } from "./components/mediaTimelinePlacement";
+import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./components/frameSeek";
+
+describe("Exact frame seek input", () => {
+  it("accepts whole frame numbers within the timeline bounds", () => {
+    expect(parseFrameSeekInput("187", 1057)).toEqual({ frame: 187, error: null });
+    expect(parseFrameSeekInput(" 0 ", 1057)).toEqual({ frame: 0, error: null });
+  });
+
+  it("rejects fractions, negative values, unsafe integers, and frames past the timeline", () => {
+    expect(parseFrameSeekInput("1.5", 1057).frame).toBeNull();
+    expect(parseFrameSeekInput("-1", 1057).frame).toBeNull();
+    expect(parseFrameSeekInput("9007199254740992", 1057).frame).toBeNull();
+    expect(parseFrameSeekInput("1058", 1057)).toEqual({
+      frame: null,
+      error: "Enter a frame from 0 to 1057.",
+    });
+  });
+
+  it("prefers the actual input value when React draft state is stale", () => {
+    expect(resolveFrameSeekInputValue("7520", "1810", 1810)).toBe("7520");
+    expect(resolveFrameSeekInputValue(undefined, "1810", 1810)).toBe("1810");
+    expect(resolveFrameSeekInputValue(undefined, null, 1810)).toBe("1810");
+  });
+
+  it("commits a changed DOM value on blur even when onChange did not mark it dirty", () => {
+    expect(shouldCommitFrameSeekOnBlur("7520", 1810, false)).toBe(true);
+    expect(shouldCommitFrameSeekOnBlur("1810", 1810, false)).toBe(false);
+    expect(shouldCommitFrameSeekOnBlur("1810", 1810, true)).toBe(true);
+  });
+});
+
+describe("Inspector draft reconciliation", () => {
+  it("preserves transient drafts on same-revision refreshes", () => {
+    expect(shouldResetInspectorDrafts(4, 4, "text-1", "text-1")).toBe(false);
+  });
+
+  it("reconciles drafts after Undo/Redo revision transitions or selection changes", () => {
+    expect(shouldResetInspectorDrafts(4, 3, "text-1", "text-1")).toBe(true);
+    expect(shouldResetInspectorDrafts(3, 4, "text-1", "text-1")).toBe(true);
+    expect(shouldResetInspectorDrafts(4, 4, "text-1", "text-2")).toBe(true);
+  });
+});
 
 describe("HealthStatus Model", () => {
   it("validates healthy status response structure", () => {
@@ -41,6 +87,14 @@ describe("RationalTime frame conversion", () => {
         { numerator: 30, denominator: 1 }
       )
     ).toBe(37);
+  });
+
+  it("converts source offsets from their own timebase to project frames", () => {
+    const sourceStart = { value: 294, rate: { numerator: 5, denominator: 1 } };
+    const projectRate = { numerator: 30, denominator: 1 };
+
+    expect(rationalTimeToSeconds(sourceStart)).toBe(58.8);
+    expect(rationalTimeToFrames(sourceStart, projectRate)).toBe(1764);
   });
 
   it("chooses the longest default crossfade that fits known source and editorial handles", () => {
@@ -114,11 +168,112 @@ describe("Preview video synchronization", () => {
   it("settles an overlapping paused seek on the latest requested target", () => {
     expect(getPendingPreviewVideoSeekTarget(2.2, 8, false, true)).toBeNull();
     expect(getPendingPreviewVideoSeekTarget(4, 8, false, false)).toBe(8);
-    expect(getPendingPreviewVideoSeekTarget(8.01, 8, false, false)).toBeNull();
+    expect(getPendingPreviewVideoSeekTarget(8.001, 8, false, false)).toBeNull();
+  });
+
+  it("handles frame-accurate paused seeks on half-speed segments and small frame steps without suppression", () => {
+    // Phase 26 native evidence: rev32 terminal Half segment at 30fps
+    // Frame 4258: SRC 898 (898 / 30 = 29.933333s)
+    // Frame 4260: SRC 899 (899 / 30 = 29.966667s)
+    // Delta: 0.033333s (previously suppressed by 0.05s tolerance)
+    const src898Sec = 898 / 30;
+    const src899Sec = 899 / 30;
+    expect(getPendingPreviewVideoSeekTarget(src898Sec, src899Sec, false, false)).toBe(src899Sec);
+
+    // 1-frame step at 30fps half speed (delta = 1/60 = 0.016667s)
+    const halfSpeedStepSec = 1 / 60;
+    expect(getPendingPreviewVideoSeekTarget(10, 10 + halfSpeedStepSec, false, false)).toBe(10 + halfSpeedStepSec);
+
+    // 1-frame step at 60fps (delta = 1/60 = 0.016667s)
+    expect(getPendingPreviewVideoSeekTarget(5, 5 + 1 / 60, false, false)).toBe(5 + 1 / 60);
+
+    // 1-frame step at 120fps (delta = 1/120 = 0.008333s)
+    expect(getPendingPreviewVideoSeekTarget(5, 5 + 1 / 120, false, false)).toBe(5 + 1 / 120);
+
+    // Decoder settling jitter <= 2ms is tolerated to prevent infinite seek loops
+    expect(getPendingPreviewVideoSeekTarget(8.001, 8, false, false)).toBeNull();
+    expect(getPendingPreviewVideoSeekTarget(7.999, 8, false, false)).toBeNull();
+  });
+
+  it("retargets an in-flight decoder seek to the newest rapid scrub position", () => {
+    const firstPendingTarget = 5;
+    expect(getPendingPreviewVideoSeekTarget(2.2, firstPendingTarget, false, true)).toBeNull();
+
+    const latestPendingTarget = 8;
+    expect(getPendingPreviewVideoSeekTarget(2.2, latestPendingTarget, false, true)).toBeNull();
+    expect(getPendingPreviewVideoSeekTarget(4, latestPendingTarget, false, false)).toBe(8);
+    expect(getPendingPreviewVideoSeekTarget(8, latestPendingTarget, false, false)).toBeNull();
   });
 
   it("seeks a newly loaded video element to the pending timeline target", () => {
     expect(getPendingPreviewVideoSeekTarget(0, 12, false, false)).toBe(12);
+  });
+});
+
+describe("Media timeline placement", () => {
+  const rate = { numerator: 30, denominator: 1 };
+  const textItem = {
+    kind: "Text",
+    timeline_range: {
+      start: { value: 0, rate },
+      duration: { value: 315, rate },
+    },
+  } as TimelineItem;
+  const makeTrack = (track_id: string, kind: "Video" | "Audio", muted: boolean, items: TimelineItem[]): Track => ({
+    track_id,
+    name: track_id,
+    kind,
+    muted,
+    locked: false,
+    items,
+  });
+  const makeProject = (tracks: Track[]) => ({
+    tracks,
+    settings: { frame_rate: rate },
+  } as Project);
+  const videoAsset = {
+    asset_id: "video",
+    name: "fixture.mp4",
+    path: "fixture.mp4",
+    media_kind: "Video",
+    file_size: 1,
+  } as Asset;
+
+  it("creates video below text-only tracks instead of appending it to a muted caption track", () => {
+    const project = makeProject([
+      makeTrack("audio", "Audio", false, []),
+      makeTrack("muted-captions", "Video", true, [textItem]),
+      makeTrack("captions", "Video", false, [textItem]),
+    ]);
+
+    expect(getMediaTimelinePlacement(project, videoAsset)).toEqual({
+      track: null,
+      startFrame: 0,
+      insertBeforeIndex: 1,
+    });
+  });
+
+  it("prefers an unmuted video media track and appends after its existing clips", () => {
+    const mediaItem = {
+      ...textItem,
+      kind: "Video",
+      timeline_range: {
+        start: { value: 30, rate },
+        duration: { value: 60, rate },
+      },
+    } as TimelineItem;
+    const mediaTrack = makeTrack("video-media", "Video", false, [mediaItem]);
+    const project = makeProject([
+      makeTrack("muted-video", "Video", true, [mediaItem]),
+      makeTrack("captions", "Video", false, [textItem]),
+      mediaTrack,
+    ]);
+
+    expect(getMediaTimelinePlacement(project, videoAsset)).toEqual({
+      track: mediaTrack,
+      startFrame: 90,
+      insertBeforeIndex: null,
+    });
   });
 });
 
