@@ -11,11 +11,13 @@
 
 ## Git worktree inventory (captured 2026-11-06)
 
-``text
+```text
 worktree D:/___TOOLS/__TINIX/TinixCut
 HEAD 264a719b69f3e976efb8a54c61e2d36eba4f161a
 branch refs/heads/master
 worktree C:/Users/Admin/.paseo/worktrees/2i4g6tux/audio-mix-zero-gain
 HEAD 8347f52a8173d58064fda550b71f9e58ecf699c2
 branch refs/heads/fix/audio-mix-zero-gain
-``
+```
+
+- Paseo workspace metadata also lists stale/missing MediaCrawler workspaces under C:/Users/Admin/.paseo/worktrees/2gq91trm/ for phases 32, 33, 35, 36, 37 and phase38-persist-library-view-mode; Git worktree list showed only the phase38 real worktree and the duplicate-detection nested worktree. These stale directory entries were preserved and not removed.
