@@ -18,4 +18,4 @@ branch refs/heads/master
 worktree C:/Users/Admin/.paseo/worktrees/2i4g6tux/audio-mix-zero-gain
 HEAD 8347f52a8173d58064fda550b71f9e58ecf699c2
 branch refs/heads/fix/audio-mix-zero-gain
-`` 
+``
