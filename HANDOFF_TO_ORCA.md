@@ -8,3 +8,14 @@
 - Continue: inspect this WIP commit and current `PROJECT_STATUS.md`; fix the 64x64 fixture to use canvas size; investigate Rust failures; retry G54 using reliable native input instrumentation; close remaining gates with real evidence.
 - Environment: Windows/Tauri + React/TS + Rust; use `DEVELOPMENT_WORKFLOW.md`. No push, merge, cleanup, or deletion performed.
 - Other worktree: `fix/audio-mix-zero-gain` HEAD `8347f52` WIP checkpoint; test blocked by the fixture mismatch above. No merge.
+
+## Git worktree inventory (captured 2026-11-06)
+
+``text
+worktree D:/___TOOLS/__TINIX/TinixCut
+HEAD 264a719b69f3e976efb8a54c61e2d36eba4f161a
+branch refs/heads/master
+worktree C:/Users/Admin/.paseo/worktrees/2i4g6tux/audio-mix-zero-gain
+HEAD 8347f52a8173d58064fda550b71f9e58ecf699c2
+branch refs/heads/fix/audio-mix-zero-gain
+`` 
