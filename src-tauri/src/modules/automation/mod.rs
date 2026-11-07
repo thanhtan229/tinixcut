@@ -1812,6 +1812,8 @@ pub mod tests {
         let rate = FrameRate::FPS_30;
         let mut project = Project::new("Export Auto Test".to_string());
         project.settings.frame_rate = rate;
+        project.settings.width = 640;
+        project.settings.height = 360;
         project.assets.push(Asset {
             asset_id: "ast_exp_1".to_string(),
             name: "media.mp4".to_string(),

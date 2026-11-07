@@ -1931,14 +1931,15 @@ mod tests {
 
     #[test]
     fn test_schema_17_rejected() {
-        let raw_json = r#"{"schema_version": 17, "name": "Future Project"}"#;
+        // Schema 17 is CURRENT_SCHEMA_VERSION; future schema version 18 must be rejected.
+        let raw_json = r#"{"schema_version": 18, "name": "Future Project"}"#;
         let err = run_migrations_if_needed(raw_json).unwrap_err();
         match err {
             PersistenceError::UnsupportedSchemaVersion {
                 found,
                 max_supported,
             } => {
-                assert_eq!(found, 17);
+                assert_eq!(found, 18);
                 assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
             }
             other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
