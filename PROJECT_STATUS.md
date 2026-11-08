@@ -57,6 +57,8 @@
 
 **Native runtime recovery (2026-11-08):** The exact authorized Tauri runtime was restarted after the UIA stall: old PID 48000 was replaced by PID 24472, the binary resolved to the authorized worktree, and Vite returned HTTP 200 on port 1420. The exact Phase 54 fixture was selected and `Open saved project` was sent from the recovery prompt; accessibility snapshots then stopped returning for at least 45 seconds while the window remained alive. No new seek result is valid, and G54 remains NOT PASSED/OPEN.
 
+**G54 R5 gate continuation (2026-11-08):** Targeted R5 harness verification passed `g54_revision5_acceptance` 23/23 and `g54_wp2_ledger` 15/15 on the authorized worktree. A fresh native run opened the exact 100-clip/600-second fixture on PID 31340, but the first target (frame 300) stalled during `set-value` after spinner readback; the follow-up accessibility snapshot also timed out. Zero fresh targets were admitted, and the historical 25/30 and p95 2556.53 ms values were not reused. G54 remains NOT PASSED/OPEN pending a reliable native input acknowledgement path.
+
 ### Phase 26 qualification reconciliation ??? 2026-10-29
 
 - The current P34/Phase 31 native checklist records P34-AC-09 A1-A10 and Phase 31 T1 B1-B6 as PASS, including save/reopen, export/decode, invalid-input rejection, edit/undo/redo, and frame-difference reporting. Keep the documented visual-difference limitation; these results do not claim pixel parity.
