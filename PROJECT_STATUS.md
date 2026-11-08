@@ -59,6 +59,10 @@
 
 **G54 R5 gate continuation (2026-11-08):** Targeted R5 harness verification passed `g54_revision5_acceptance` 23/23 and `g54_wp2_ledger` 15/15 on the authorized worktree. A fresh native run opened the exact 100-clip/600-second fixture on PID 31340, but the first target (frame 300) stalled during `set-value` after spinner readback; the follow-up accessibility snapshot also timed out. Zero fresh targets were admitted, and the historical 25/30 and p95 2556.53 ms values were not reused. G54 remains NOT PASSED/OPEN pending a reliable native input acknowledgement path.
 
+**G54 Computer Use retry (2026-11-08):** The exact authorized runtime was restarted to PID 8512 and Vite returned HTTP 200. The exact 600-second/100-clip fixture loaded successfully. After leaving recovery copies intact, a fresh keyboard click/select-all/type attempt on `Go to frame` remained unverified and the field stayed at `0`; zero targets were admitted. This confirms the native input acknowledgement blocker persists. No code, source media, recovery copy, or untracked evidence was changed.
+
+**Remaining-plan disposition (2026-11-08):** G54 implementation harness is PASS (23/23 and 15/15), but native qualification remains OPEN. G48–G53 still require their gate-specific native evidence and stable input/capture paths; no repeated audit is warranted without new evidence. G55 is externally blocked on two additional approved real project/brief samples and an independent reviewer. G57 is externally blocked on an authentic previous-version installer and provenance. G56 remains PASS. No synthetic evidence or old G54 benchmark values are used.
+
 ### Phase 26 qualification reconciliation ??? 2026-10-29
 
 - The current P34/Phase 31 native checklist records P34-AC-09 A1-A10 and Phase 31 T1 B1-B6 as PASS, including save/reopen, export/decode, invalid-input rejection, edit/undo/redo, and frame-difference reporting. Keep the documented visual-difference limitation; these results do not claim pixel parity.
