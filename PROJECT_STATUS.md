@@ -69,6 +69,8 @@
 
 **G54 frame-14700 targeted follow-up (2026-11-08):** Two isolated retries of the failed target synchronized at 150 ms and 31 ms using direct native UI Automation. These retries are excluded from the 30-sample denominator; the original 5043 ms timeout remains valid evidence and the zero-failure veto remains active. No reproducible implementation cause was established, so no code change was made.
 
+**G54 frame-14700 A/B investigation (2026-11-08):** Frames 14400 and 15000 synchronized on both attempts. Frame 14700 reproduced one 5057 ms timeout and one 168 ms success. The target is inside clip 41 on both active video layers, not at a timeline boundary; source keyframes near 490 s are present at 485.341667, 490.341667 and 495.375000 s. The failure remains intermittent and unexplained; no renderer change or project/media mutation was made.
+
 **Remaining-plan disposition (2026-11-08):** G54 implementation harness is PASS (23/23 and 15/15), but native qualification remains OPEN. G48–G53 still require their gate-specific native evidence and stable input/capture paths; no repeated audit is warranted without new evidence. G55 is externally blocked on two additional approved real project/brief samples and an independent reviewer. G57 is externally blocked on an authentic previous-version installer and provenance. G56 remains PASS. No synthetic evidence or old G54 benchmark values are used.
 
 ### Phase 26 qualification reconciliation ??? 2026-10-29
