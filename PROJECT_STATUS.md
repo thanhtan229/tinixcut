@@ -61,6 +61,8 @@
 
 **G54 Computer Use retry (2026-11-08):** The exact authorized runtime was restarted to PID 8512 and Vite returned HTTP 200. The exact 600-second/100-clip fixture loaded successfully. After leaving recovery copies intact, a fresh keyboard click/select-all/type attempt on `Go to frame` remained unverified and the field stayed at `0`; zero targets were admitted. This confirms the native input acknowledgement blocker persists. No code, source media, recovery copy, or untracked evidence was changed.
 
+**G54 native window recovery (2026-11-08):** An authorized restore-window check recovered PID 8512 to a normal `1942×1256` TinixCut window. UIA now reports `Core Healthy`, the exact Phase 54 600-second/100-clip fixture at revision 0, and `Go to frame` at 0. No recovery copy was restored/discarded, and no save, media edit, or seek was performed. The next action is one Owner-observed frame-300 validity check, excluded from the 30-target denominator.
+
 **Remaining-plan disposition (2026-11-08):** G54 implementation harness is PASS (23/23 and 15/15), but native qualification remains OPEN. G48–G53 still require their gate-specific native evidence and stable input/capture paths; no repeated audit is warranted without new evidence. G55 is externally blocked on two additional approved real project/brief samples and an independent reviewer. G57 is externally blocked on an authentic previous-version installer and provenance. G56 remains PASS. No synthetic evidence or old G54 benchmark values are used.
 
 ### Phase 26 qualification reconciliation ??? 2026-10-29
