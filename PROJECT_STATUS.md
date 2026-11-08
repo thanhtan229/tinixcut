@@ -55,6 +55,8 @@
 
 **Native qualification continuation (2026-11-08):** Computer Use retried the exact Phase 54 disposable workload on authorized TinixCut PID 48000. The UI showed `Unable to play media.` at frame 1080; frame 1800 was read back in the input field, but Go was unverified and the field reverted to 1080. A subsequent accessibility snapshot did not return within 10 seconds while the window remained listed. No project/recovery/media state was changed. G54 remains NOT PASSED/OPEN; no new sample is admitted to the 30-target denominator.
 
+**Native runtime recovery (2026-11-08):** The exact authorized Tauri runtime was restarted after the UIA stall: old PID 48000 was replaced by PID 24472, the binary resolved to the authorized worktree, and Vite returned HTTP 200 on port 1420. The exact Phase 54 fixture was selected and `Open saved project` was sent from the recovery prompt; accessibility snapshots then stopped returning for at least 45 seconds while the window remained alive. No new seek result is valid, and G54 remains NOT PASSED/OPEN.
+
 ### Phase 26 qualification reconciliation ??? 2026-10-29
 
 - The current P34/Phase 31 native checklist records P34-AC-09 A1-A10 and Phase 31 T1 B1-B6 as PASS, including save/reopen, export/decode, invalid-input rejection, edit/undo/redo, and frame-difference reporting. Keep the documented visual-difference limitation; these results do not claim pixel parity.
