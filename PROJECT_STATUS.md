@@ -67,6 +67,8 @@
 
 **G54 fresh 30-target native run (2026-11-08):** Direct Windows UI Automation patterns removed full-tree snapshot overhead. All 30 field values read back; 29/30 presentations synchronized. Frame 14700 timed out/mismatched at 5043 ms. Nearest-rank p95 was 200 ms (linear 193.7 ms), but the single failure triggers the zero-failure veto, so G54 remains NOT PASSED. The fresh run is separate from all historical 25/30 and 29/30 runs. The app status bar later reported `Discarded recovery copy "Untitled Project"`; this was not performed by the coordinator and was not part of the Phase 54 fixture measurement.
 
+**G54 frame-14700 targeted follow-up (2026-11-08):** Two isolated retries of the failed target synchronized at 150 ms and 31 ms using direct native UI Automation. These retries are excluded from the 30-sample denominator; the original 5043 ms timeout remains valid evidence and the zero-failure veto remains active. No reproducible implementation cause was established, so no code change was made.
+
 **Remaining-plan disposition (2026-11-08):** G54 implementation harness is PASS (23/23 and 15/15), but native qualification remains OPEN. G48–G53 still require their gate-specific native evidence and stable input/capture paths; no repeated audit is warranted without new evidence. G55 is externally blocked on two additional approved real project/brief samples and an independent reviewer. G57 is externally blocked on an authentic previous-version installer and provenance. G56 remains PASS. No synthetic evidence or old G54 benchmark values are used.
 
 ### Phase 26 qualification reconciliation ??? 2026-10-29
