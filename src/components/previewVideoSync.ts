@@ -37,3 +37,22 @@ export function getPendingPreviewVideoSeekTarget(
     ? Math.max(0, pendingTargetTime)
     : null;
 }
+
+// WebView2 can leave a paused element in `seeking` without ever raising `seeked`
+// (G54: frame 14700 stalled for 5 s on both layers while an isolated retry of the
+// same target settled in ~150 ms). A seek issued while one is pending is queued
+// behind the stalled one, so recovery reloads the element and re-seeks from
+// `loadedmetadata`. Recovery is bounded per stall episode to avoid reload loops.
+// Normal paused seeks on the G54 workload settle in up to ~770 ms, so the threshold
+// leaves headroom before treating a seek as stalled.
+export const SEEK_STALL_RECOVERY_DELAY_MS = 1_500;
+export const MAX_SEEK_STALL_RECOVERIES = 1;
+
+export function shouldRecoverStalledSeek(
+  isSeeking: boolean,
+  isCurrentElement: boolean,
+  recoveriesUsed: number,
+  maxRecoveries: number = MAX_SEEK_STALL_RECOVERIES
+): boolean {
+  return isSeeking && isCurrentElement && recoveriesUsed < maxRecoveries;
+}

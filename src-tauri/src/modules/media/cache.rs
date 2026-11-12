@@ -22,6 +22,9 @@ pub struct MediaCacheStatus {
     pub categories: BTreeMap<String, CacheCategoryStatus>,
 }
 
+/// Bump when proxy encoding changes so older cache entries are not reused.
+pub const PREVIEW_PROXY_PROFILE: &str = "seek05";
+
 pub struct CacheManager {
     root_dir: PathBuf,
 }
@@ -44,10 +47,19 @@ impl CacheManager {
             .join(format!("{}_{}ms.jpg", asset_id, ts_key))
     }
 
-    pub fn proxy_path(&self, asset_id: &str, target_height: u32) -> PathBuf {
-        self.root_dir
-            .join("proxies")
-            .join(format!("{}_{}p_proxy.mp4", asset_id, target_height))
+    /// Proxy cache entries are keyed by source fingerprint and encoding profile, so a
+    /// relinked/replaced source or a changed encoder setting never reuses a stale proxy.
+    pub fn proxy_path(
+        &self,
+        asset_id: &str,
+        source_fingerprint: &str,
+        target_height: u32,
+    ) -> PathBuf {
+        let fingerprint: String = source_fingerprint.chars().take(16).collect();
+        self.root_dir.join("proxies").join(format!(
+            "{}_{}_{}p_{}.mp4",
+            asset_id, fingerprint, target_height, PREVIEW_PROXY_PROFILE
+        ))
     }
 
     pub fn waveform_path(&self, asset_id: &str, source_fingerprint: &str) -> PathBuf {
@@ -244,8 +256,9 @@ impl CacheManager {
             .then_some(waveform)
     }
 
-    pub fn has_proxy(&self, asset_id: &str, target_height: u32) -> bool {
-        self.proxy_path(asset_id, target_height).exists()
+    pub fn has_proxy(&self, asset_id: &str, source_fingerprint: &str, target_height: u32) -> bool {
+        self.proxy_path(asset_id, source_fingerprint, target_height)
+            .is_file()
     }
 
     pub fn status(&self) -> std::io::Result<MediaCacheStatus> {
@@ -394,7 +407,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let cache = CacheManager::new(root.clone());
-        fs::write(cache.proxy_path("asset-a", 360), b"proxy-bytes").unwrap();
+        fs::write(cache.proxy_path("asset-a", "source-a", 360), b"proxy-bytes").unwrap();
         fs::write(cache.waveform_path("asset-a", "source-a"), b"waveform").unwrap();
 
         let status = cache.status().unwrap();
@@ -404,6 +417,25 @@ mod tests {
         assert_eq!(status.categories["proxies"].bytes, 11);
         assert_eq!(status.categories["waveforms"].files, 1);
         assert_eq!(status.categories["waveforms"].bytes, 8);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn proxy_cache_is_isolated_by_source_fingerprint_and_profile() {
+        let root = std::env::temp_dir().join(format!(
+            "tinixcut-proxy-key-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let cache = CacheManager::new(root.clone());
+        fs::write(cache.proxy_path("asset-a", "source-a", 720), b"proxy").unwrap();
+
+        assert!(cache.has_proxy("asset-a", "source-a", 720));
+        // A relinked or replaced source must not reuse the old proxy.
+        assert!(!cache.has_proxy("asset-a", "source-b", 720));
+        assert!(cache
+            .proxy_path("asset-a", "source-a", 720)
+            .to_string_lossy()
+            .contains(PREVIEW_PROXY_PROFILE));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -427,7 +459,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let cache = CacheManager::new(root.clone());
-        fs::write(cache.proxy_path("asset-a", 360), b"derived").unwrap();
+        fs::write(cache.proxy_path("asset-a", "source-a", 360), b"derived").unwrap();
         let unmanaged = root.join("keep.txt");
         fs::write(&unmanaged, b"keep").unwrap();
 

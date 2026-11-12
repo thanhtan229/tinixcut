@@ -152,6 +152,7 @@ export function App() {
   } | null>(null);
   const [isAutoCaptionOpen, setIsAutoCaptionOpen] = useState(false);
   const [isMediaCacheOpen, setIsMediaCacheOpen] = useState(false);
+  const [previewProxyMode, setPreviewProxyMode] = useState<"off" | "auto">("off");
   const [isCaptionEditorOpen, setIsCaptionEditorOpen] = useState(false);
   const [isEditPlanDraftOpen, setIsEditPlanDraftOpen] = useState(false);
   const [isAudioMixDraftOpen, setIsAudioMixDraftOpen] = useState(false);
@@ -237,6 +238,12 @@ export function App() {
     }).catch(console.warn);
 
     hydrateProjectSession();
+
+    editorApi.getAppSettings().then((settings) => {
+      if (!cancelled) setPreviewProxyMode(settings.previewProxyMode);
+    }).catch((error) => {
+      if (!cancelled) setStatusMsg(`Could not read app settings; preview proxies stay off: ${error}`);
+    });
 
     editorApi.listUnsavedRecoveries().then((recoveries) => {
       if (!cancelled) setUnsavedRecoveries(recoveries);
@@ -2918,6 +2925,7 @@ export function App() {
               audioUnlockRef.current = unlock;
             }}
             onPlaybackTrackPeaksChange={handlePlaybackTrackPeaksChange}
+            previewProxyMode={previewProxyMode}
           />
 
           <Timeline
@@ -3158,7 +3166,16 @@ export function App() {
         frameRate={project?.settings.frame_rate ?? { numerator: 30, denominator: 1 }}
       />
 
-      <MediaCacheDialog isOpen={isMediaCacheOpen} onClose={() => setIsMediaCacheOpen(false)} />
+      <MediaCacheDialog
+        isOpen={isMediaCacheOpen}
+        onClose={() => setIsMediaCacheOpen(false)}
+        previewProxyMode={previewProxyMode}
+        onPreviewProxyModeChange={async (mode) => {
+          const current = await editorApi.getAppSettings();
+          const saved = await editorApi.saveAppSettings({ ...current, previewProxyMode: mode });
+          setPreviewProxyMode(saved.previewProxyMode);
+        }}
+      />
 
       <CaptionEditorDialog
         project={project}

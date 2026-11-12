@@ -64,6 +64,7 @@ export interface AppSettings {
   transcriptionLanguage: "auto" | "vi" | "en";
   recentProjects: string[];
   legacyBrowserSettingsMigrated: boolean;
+  previewProxyMode: "off" | "auto";
 }
 
 export interface AutoCaptionReport {

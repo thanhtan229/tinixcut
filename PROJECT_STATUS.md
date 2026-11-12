@@ -71,6 +71,14 @@
 
 **G54 frame-14700 A/B investigation (2026-11-08):** Frames 14400 and 15000 synchronized on both attempts. Frame 14700 reproduced one 5057 ms timeout and one 168 ms success. The target is inside clip 41 on both active video layers, not at a timeline boundary; source keyframes near 490 s are present at 485.341667, 490.341667 and 495.375000 s. The failure remains intermittent and unexplained; no renderer change or project/media mutation was made.
 
+**G54 proxy setting (2026-11-12):** Preview proxy setting (`previewProxyMode`, Media cache checkbox, default off) implemented with 0.5 s-keyframe, fingerprint-keyed, atomically written proxies; also fixed unreadable proxies (asset scope), stuck queued proxy jobs and partial-file readiness. Native: app-built proxy, 30/30 seeks, p95 205.9 ms — seek budget with proxy ready MET on the 10 min workload. G54 still OPEN for UI p95, RAM cycles, proxy clear/recreate, frame drops and the 30 min workload.
+
+**G54 proxy feasibility (2026-11-12):** Preview uses proxies only as a codec fallback, so the "proxy ready" seek budget is unreachable today. Probe via relinked disposable copies: product proxy encoding (8.3 s GOP) p95 705 ms; a 0.5 s-GOP 720p proxy p95 138 ms (30/30). Next G54 step is implementing the Phase 54 proxy policy with short-GOP proxies. Not gate evidence.
+
+**G54 native runs + focus fix (2026-11-12):** Four fresh native 30-target runs on the exact fixture. Failures in runs 1–3 were all the frame field discarding an accessibility-set value on focus (no decoder stalls). After fixing `onFocus`, run 4 synchronized 30/30 with zero failures and exact media time; p95 733 ms Go→seeked (609 ms in-page) on original source without proxy. G54 remains OPEN for the proxy-ready seek budget, UI p95, RAM cycles and proxy clear/recreate. Evidence: `artifacts/phase54/native_ui/g54_20261112/`.
+
+**G54 stalled-seek recovery candidate (2026-11-12):** The frame-14700 timeout capture shows `seeking` without `seeked` on both layers. Preview now reloads a still-seeking element once after 1500 ms and re-seeks to the latest target. Helper test, typecheck, frontend 178/178 and build pass; not natively verified. G54 remains NOT PASSED pending a fresh native 30-target run. See `Plans/phase54_preview_performance.md`.
+
 **Remaining-plan disposition (2026-11-08):** G54 implementation harness is PASS (23/23 and 15/15), but native qualification remains OPEN. G48–G53 still require their gate-specific native evidence and stable input/capture paths; no repeated audit is warranted without new evidence. G55 is externally blocked on two additional approved real project/brief samples and an independent reviewer. G57 is externally blocked on an authentic previous-version installer and provenance. G56 remains PASS. No synthetic evidence or old G54 benchmark values are used.
 
 ### Phase 26 qualification reconciliation ??? 2026-10-29

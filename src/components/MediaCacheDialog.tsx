@@ -4,6 +4,9 @@ import { editorApi, MediaCacheStatus } from "../services/editorApi";
 interface MediaCacheDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  previewProxyMode: "off" | "auto";
+  // Persists the app setting; rejects with the reason when the save fails.
+  onPreviewProxyModeChange: (mode: "off" | "auto") => Promise<void>;
 }
 
 function formatBytes(bytes: number): string {
@@ -18,7 +21,8 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-export function MediaCacheDialog({ isOpen, onClose }: MediaCacheDialogProps) {
+export function MediaCacheDialog({ isOpen, onClose, previewProxyMode, onPreviewProxyModeChange }: MediaCacheDialogProps) {
+  const [savingProxyMode, setSavingProxyMode] = useState(false);
   const [status, setStatus] = useState<MediaCacheStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,6 +62,18 @@ export function MediaCacheDialog({ isOpen, onClose }: MediaCacheDialogProps) {
     }
   };
 
+  const changeProxyMode = async (enabled: boolean) => {
+    setSavingProxyMode(true);
+    setError(null);
+    try {
+      await onPreviewProxyModeChange(enabled ? "auto" : "off");
+    } catch (cause) {
+      setError(`Could not save the preview proxy setting: ${cause}`);
+    } finally {
+      setSavingProxyMode(false);
+    }
+  };
+
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <section
@@ -75,6 +91,23 @@ export function MediaCacheDialog({ isOpen, onClose }: MediaCacheDialogProps) {
           </div>
           <button className="btn-action" type="button" onClick={onClose} aria-label="Close media cache">×</button>
         </div>
+
+        <fieldset style={{ border: "1px solid var(--border-color)", borderRadius: 4, padding: "8px 12px", margin: "0 0 12px" }}>
+          <legend>Preview proxies</legend>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <input
+              type="checkbox"
+              checked={previewProxyMode === "auto"}
+              disabled={savingProxyMode}
+              onChange={(event) => void changeProxyMode(event.currentTarget.checked)}
+              aria-describedby="preview-proxy-help"
+            />
+            <span>Use seek-optimized proxies for video preview</span>
+          </label>
+          <p id="preview-proxy-help" style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+            Builds a 720p copy of each project video in the background, then previews from it for faster seeking. Proxies use extra disk space, sometimes more than the original files, and appear under "proxies" below. Export always uses the original media.
+          </p>
+        </fieldset>
 
         {error && <p className="form-message form-message-error" role="alert">{error}</p>}
         {loading && <p role="status">Reading local cache…</p>}

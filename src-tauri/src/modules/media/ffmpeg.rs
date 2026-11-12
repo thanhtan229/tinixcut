@@ -74,6 +74,9 @@ struct FFprobeStream {
     channels: Option<u16>,
 }
 
+/// Maximum spacing between keyframes in preview proxies (see `generate_proxy`).
+pub const PREVIEW_PROXY_KEYFRAME_INTERVAL_SECS: f64 = 0.5;
+
 pub struct FFmpegService;
 
 impl FFmpegService {
@@ -549,7 +552,12 @@ impl FFmpegService {
         }
     }
 
-    /// Generate a downscaled proxy video for responsive playback.
+    /// Generate a downscaled preview proxy optimized for seeking.
+    ///
+    /// A keyframe every 0.5 s (frame-rate independent) bounds decode-from-keyframe
+    /// work per seek; with x264's default GOP (~8 s at 30 fps) a proxy seeks no
+    /// faster than the original. Output is written to a sibling partial file and
+    /// renamed, so a reader that checks for the final path never sees a partial proxy.
     pub fn generate_proxy(
         source_path: &Path,
         out_path: &Path,
@@ -560,6 +568,7 @@ impl FFmpegService {
         }
 
         let scale_filter = format!("scale=-2:{}", target_height);
+        let partial_path = out_path.with_extension("partial.mp4");
 
         let output = MediaBinaryResolver::command("ffmpeg")?
             .arg("-i")
@@ -578,18 +587,25 @@ impl FFmpegService {
             .arg("ultrafast")
             .arg("-crf")
             .arg("28")
+            .arg("-force_key_frames")
+            .arg(format!(
+                "expr:gte(t,n_forced*{PREVIEW_PROXY_KEYFRAME_INTERVAL_SECS})"
+            ))
+            .arg("-sc_threshold")
+            .arg("0")
             .arg("-c:a")
             .arg("aac")
             .arg("-movflags")
             .arg("+faststart")
             .arg("-y")
-            .arg(out_path)
+            .arg(&partial_path)
             .output()
             .map_err(|e| {
                 MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {}", e))
             })?;
 
         if !output.status.success() {
+            let _ = std::fs::remove_file(&partial_path);
             let err = String::from_utf8_lossy(&output.stderr);
             return Err(MediaError::VerificationFailed(format!(
                 "Proxy generation failed: {}",
@@ -597,7 +613,13 @@ impl FFmpegService {
             )));
         }
 
-        Ok(())
+        std::fs::rename(&partial_path, out_path).map_err(|error| {
+            let _ = std::fs::remove_file(&partial_path);
+            MediaError::VerificationFailed(format!(
+                "Could not finalize preview proxy at {}: {error}",
+                out_path.display()
+            ))
+        })
     }
 
     /// Extracts compact waveform peak buckets from an audio or video file.
@@ -854,6 +876,37 @@ mod tests {
         assert!(proxy_res.is_ok());
         assert!(proxy_path.exists());
         assert!(proxy_path.metadata().unwrap().len() > 0);
+        assert!(
+            !proxy_path.with_extension("partial.mp4").exists(),
+            "partial proxy must be renamed into place"
+        );
+        // The 1 s fixture must carry keyframes at 0 s and 0.5 s; the x264 default
+        // GOP would leave a single keyframe and make proxy seeks slow.
+        let keyframes = MediaBinaryResolver::command("ffprobe")
+            .expect("ffprobe resolves when ffmpeg does")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-skip_frame",
+                "nokey",
+                "-show_entries",
+                "frame=pts_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&proxy_path)
+            .output()
+            .expect("ffprobe runs");
+        let keyframe_count = String::from_utf8_lossy(&keyframes.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        assert!(
+            keyframe_count >= 2,
+            "expected short-GOP proxy, got {keyframe_count} keyframe(s)"
+        );
 
         // 4. Test waveform extraction
         let wave_path = temp_dir

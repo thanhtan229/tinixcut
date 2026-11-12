@@ -7,6 +7,17 @@ pub const APP_SETTINGS_SCHEMA_VERSION: u32 = 1;
 const MAX_RECENT_PROJECTS: usize = 20;
 const MAX_SETTING_STRING_LENGTH: usize = 4096;
 
+/// Whether the preview switches decodable video to seek-optimized proxies.
+/// `Off` keeps proxies as a codec-compatibility fallback only, so enabling the
+/// background encoding and its disk use is an explicit user choice.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PreviewProxyMode {
+    #[default]
+    Off,
+    Auto,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -16,6 +27,9 @@ pub struct AppSettings {
     pub transcription_language: String,
     pub recent_projects: Vec<String>,
     pub legacy_browser_settings_migrated: bool,
+    /// Added within schema v1; files written before it load as `Off`.
+    #[serde(default)]
+    pub preview_proxy_mode: PreviewProxyMode,
 }
 
 impl Default for AppSettings {
@@ -27,6 +41,7 @@ impl Default for AppSettings {
             transcription_language: "auto".to_string(),
             recent_projects: Vec::new(),
             legacy_browser_settings_migrated: false,
+            preview_proxy_mode: PreviewProxyMode::Off,
         }
     }
 }
@@ -179,6 +194,7 @@ mod tests {
             whisper_model_path: Some("C:/models/ggml-base.bin".to_string()),
             transcription_language: "vi".to_string(),
             recent_projects: vec!["C:/projects/test.tinix".to_string()],
+            preview_proxy_mode: PreviewProxyMode::Auto,
             ..AppSettings::default()
         };
 
@@ -196,6 +212,17 @@ mod tests {
         assert!(error.contains("the file was preserved"));
         assert_eq!(fs::read(&path).unwrap(), b"{broken");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settings_written_before_preview_proxy_mode_load_as_off() {
+        let legacy = r#"{"schemaVersion":1,"whisperCliPath":null,"whisperModelPath":null,"transcriptionLanguage":"auto","recentProjects":[],"legacyBrowserSettingsMigrated":true}"#;
+        let settings: AppSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(settings.preview_proxy_mode, PreviewProxyMode::Off);
+        assert!(settings.validate().is_ok());
+        assert!(serde_json::to_string(&settings)
+            .unwrap()
+            .contains(r#""previewProxyMode":"off""#));
     }
 
     #[test]

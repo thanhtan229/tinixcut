@@ -3,12 +3,18 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Crop, Project, TimelineItem, Transform, rationalTimeToFrames } from "../types/project";
 import { PreviewFrameState, PreviewSampledLayer, BenchmarkReport, ParitySuiteReport } from "../types/preview";
 import { editorApi } from "../services/editorApi";
-import { getPendingPreviewVideoSeekTarget, shouldSeekPreviewAudio } from "./previewVideoSync";
+import {
+  getPendingPreviewVideoSeekTarget,
+  SEEK_STALL_RECOVERY_DELAY_MS,
+  shouldRecoverStalledSeek,
+  shouldSeekPreviewAudio,
+} from "./previewVideoSync";
 import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./frameSeek";
 import { getPlaybackMeterElement, hasAudioCaptureTrack, peakDbfs, peakMeterPercent, playbackMeterStatus, playbackMeterValueText } from "./audioMeter";
 import { formatPreviewPlaybackFailure } from "./previewPlaybackErrors";
 import { currentVideoPreviewFailure, hasPendingCompatiblePreview, previewMediaFailurePresentation, VideoPreviewFailure } from "./previewMediaFailure";
 import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorAdjustments";
+import { PreviewProxyMode, PreviewProxySource, policyProxyAssetIds, proxyAssetIdsToPoll, resolvePreviewVideoPath } from "./previewProxyPolicy";
 import {
   canvasCropFromPointerDelta,
   CanvasCropEdge,
@@ -29,6 +35,7 @@ type VideoSyncDiagnosticType =
   | "seeked"
   | "seeking-timeout"
   | "seeked-timeout"
+  | "seek-stall-recovery"
   | "frame-presented"
   | "frame-observation-ended"
   | "rvfc-unavailable";
@@ -116,6 +123,7 @@ interface PreviewVideoLayerProps {
   mixBlendMode?: React.CSSProperties["mixBlendMode"];
   videoRefs: React.MutableRefObject<Record<string, HTMLVideoElement | null>>;
   cancelVideoSeekWatchdog: (video: HTMLVideoElement) => void;
+  settleVideoSeek: (video: HTMLVideoElement) => void;
   syncVideoToLatestTarget: (itemId: string, video: HTMLVideoElement) => void;
   recordVideoDiagnostic: RecordVideoDiagnostic;
   onMediaError: (layer: PreviewSampledLayer) => void;
@@ -128,6 +136,7 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
   mixBlendMode,
   videoRefs,
   cancelVideoSeekWatchdog,
+  settleVideoSeek,
   syncVideoToLatestTarget,
   recordVideoDiagnostic,
   onMediaError,
@@ -330,6 +339,7 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
         }}
         onSeeking={(event) => observeSeeking(event.currentTarget)}
         onSeeked={(event) => {
+          settleVideoSeek(event.currentTarget);
           const seek = recordVideoDiagnostic(event.currentTarget, "seeked");
           if (seekedTimeoutRef.current !== null) {
             window.clearTimeout(seekedTimeoutRef.current);
@@ -365,6 +375,7 @@ interface PreviewCanvasProps {
   onTogglePlay?: () => void;
   onRegisterAudioUnlock?: (unlock: () => void) => void;
   onPlaybackTrackPeaksChange?: (levels: Record<string, number> | null) => void;
+  previewProxyMode?: PreviewProxyMode;
 }
 
 function safeConvertFileSrc(path?: string | null): string {
@@ -460,6 +471,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   onTogglePlay,
   onRegisterAudioUnlock,
   onPlaybackTrackPeaksChange,
+  previewProxyMode = "off",
 }) => {
   const [sampledState, setSampledState] = useState<PreviewFrameState | null>(null);
   const [internalIsPlaying, setInternalIsPlaying] = useState<boolean>(false);
@@ -546,7 +558,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
     setRichTextOverlays((previous) => ({ ...previous, [key]: entry }));
   }, []);  const [proxyRequestedAssetIds, setProxyRequestedAssetIds] = useState<Record<string, true>>({});
-  const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, string>>({});
+  const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, PreviewProxySource>>({});
+  // Policy proxies that could not be built: the preview keeps the original quietly.
+  const [policyProxyUnavailable, setPolicyProxyUnavailable] = useState<Record<string, string>>({});
   const [proxyPollAttempt, setProxyPollAttempt] = useState(0);
   const [showSafeZones, setShowSafeZones] = useState(false);
   const [canvasDrag, setCanvasDrag] = useState<{ itemId: string; x: number; y: number } | null>(null);
@@ -602,6 +616,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     pendingTargets: new WeakMap<HTMLVideoElement, PendingVideoSeek>(),
     seekWatchdogs: new Map<HTMLVideoElement, number>(),
   });
+  // Stall recovery is product behavior, independent of the opt-in diagnostics.
+  const seekStallRecoveriesRef = useRef(
+    new Map<HTMLVideoElement, { timer: number | null; recoveriesUsed: number }>()
+  );
   const recordVideoDiagnosticRef = useRef<RecordVideoDiagnostic | null>(null);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
   const playheadFrameRef = useRef(playheadFrame);
@@ -883,18 +901,58 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   }, []);
   recordVideoDiagnosticRef.current = recordVideoDiagnostic;
 
+  const settleVideoSeek = useCallback((video: HTMLVideoElement) => {
+    const recovery = seekStallRecoveriesRef.current.get(video);
+    if (!recovery) return;
+    if (recovery.timer !== null) window.clearTimeout(recovery.timer);
+    seekStallRecoveriesRef.current.delete(video);
+  }, []);
+
   const cancelVideoSeekWatchdog = useCallback((video: HTMLVideoElement) => {
+    settleVideoSeek(video);
     const watchdogs = videoDiagnosticStateRef.current.seekWatchdogs;
     const timeout = watchdogs.get(video);
     if (timeout === undefined) return;
     window.clearTimeout(timeout);
     watchdogs.delete(video);
-  }, []);
+  }, [settleVideoSeek]);
 
   useEffect(() => () => {
     const watchdogs = videoDiagnosticStateRef.current.seekWatchdogs;
     watchdogs.forEach((timeout) => window.clearTimeout(timeout));
     watchdogs.clear();
+    const recoveries = seekStallRecoveriesRef.current;
+    recoveries.forEach(({ timer }) => {
+      if (timer !== null) window.clearTimeout(timer);
+    });
+    recoveries.clear();
+  }, []);
+
+  const scheduleSeekStallRecovery = useCallback((itemId: string, video: HTMLVideoElement) => {
+    const recoveries = seekStallRecoveriesRef.current;
+    const existing = recoveries.get(video);
+    if (existing?.timer != null) window.clearTimeout(existing.timer);
+    const entry = { timer: null as number | null, recoveriesUsed: existing?.recoveriesUsed ?? 0 };
+    entry.timer = window.setTimeout(() => {
+      entry.timer = null;
+      if (
+        !shouldRecoverStalledSeek(
+          video.seeking,
+          videoRefs.current[itemId] === video,
+          entry.recoveriesUsed
+        )
+      ) {
+        return;
+      }
+      entry.recoveriesUsed += 1;
+      recordVideoDiagnosticRef.current?.(video, "seek-stall-recovery", {
+        stalledForMs: SEEK_STALL_RECOVERY_DELAY_MS,
+        recoveryAttempt: entry.recoveriesUsed,
+      });
+      // `loadedmetadata` re-enters syncVideoToLatestTarget with the latest target.
+      video.load();
+    }, SEEK_STALL_RECOVERY_DELAY_MS);
+    recoveries.set(video, entry);
   }, []);
 
   const syncVideoToLatestTarget = useCallback((itemId: string, video: HTMLVideoElement) => {
@@ -915,8 +973,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         isPlaying: desired.isPlaying,
       });
       video.currentTime = seekTarget;
+      scheduleSeekStallRecovery(itemId, video);
     }
-  }, [recordVideoDiagnostic]);
+  }, [recordVideoDiagnostic, scheduleSeekStallRecovery]);
   const handleVideoMediaError = useCallback((layer: PreviewSampledLayer) => {
     if (!layer.asset_id) {
       setVideoPreviewErrors((previous) => ({
@@ -928,7 +987,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       }));
       return;
     }
-    if (compatibleVideoSources[layer.asset_id]) {
+    if (compatibleVideoSources[layer.asset_id]?.sourcePath === (layer.asset_path ?? null)) {
       setVideoPreviewErrors((previous) => ({
         ...previous,
         [layer.item_id]: {
@@ -943,15 +1002,38 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     );
   }, [compatibleVideoSources]);
 
-  // A proxy is created only when the WebView rejects the original video's codec.
-  // It is a disposable cache entry; project serialization and export keep the source asset.
+  // A proxy is requested when the WebView rejects the original video's codec, or for
+  // every video asset when the user enables preview proxies. It is a disposable cache
+  // entry; project serialization and export keep the source asset.
+  const policyAssetIds = policyProxyAssetIds(project?.assets, previewProxyMode);
+  const policyAssetKey = JSON.stringify(policyAssetIds);
+  useEffect(() => {
+    if (previewProxyMode === "auto") return;
+    // Turning the policy off returns to originals, except codec-fallback proxies.
+    setCompatibleVideoSources((previous) => {
+      const kept = Object.fromEntries(
+        Object.entries(previous).filter(([assetId]) => proxyRequestedAssetIds[assetId])
+      );
+      return Object.keys(kept).length === Object.keys(previous).length ? previous : kept;
+    });
+    setPolicyProxyUnavailable((previous) => (Object.keys(previous).length === 0 ? previous : {}));
+  }, [previewProxyMode, proxyRequestedAssetIds]);
+
   useEffect(() => {
     const allVideoLayers = [
       ...(sampledState?.active_layers ?? []),
       ...((sampledState?.transition_groups ?? []).flatMap((group) => [group.left_layer, group.right_layer])),
     ];
-    const requestedAssetIds = Object.keys(proxyRequestedAssetIds).filter(
-      (assetId) => !compatibleVideoSources[assetId]
+    const assetPaths = new Map((project?.assets ?? []).map((asset) => [asset.asset_id, asset.path]));
+    const requestedAssetIds = proxyAssetIdsToPoll(
+      Object.keys(proxyRequestedAssetIds),
+      JSON.parse(policyAssetKey) as string[],
+      new Set(
+        Object.entries(compatibleVideoSources)
+          .filter(([assetId, source]) => source.sourcePath === (assetPaths.get(assetId) ?? null))
+          .map(([assetId]) => assetId)
+      ),
+      new Set(Object.keys(policyProxyUnavailable))
     );
     if (requestedAssetIds.length === 0) return;
 
@@ -964,7 +1046,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             const result = await editorApi.getCompatiblePreviewVideo(assetId);
             if (disposed) return;
             if (result.status === "Ready") {
-              setCompatibleVideoSources((previous) => ({ ...previous, [assetId]: result.payload.path }));
+              setCompatibleVideoSources((previous) => ({
+                ...previous,
+                [assetId]: { proxyPath: result.payload.path, sourcePath: assetPaths.get(assetId) ?? null },
+              }));
               setVideoPreviewErrors((previous) => {
                 const next = { ...previous };
                 allVideoLayers
@@ -974,6 +1059,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
               });
             } else if (result.status === "Pending") {
               shouldPollAgain = true;
+            } else if (!proxyRequestedAssetIds[assetId]) {
+              // A policy proxy failure is not a preview failure: keep the original.
+              setPolicyProxyUnavailable((previous) => ({ ...previous, [assetId]: result.payload.reason }));
             } else {
               setVideoPreviewErrors((previous) => {
                 const next = { ...previous };
@@ -1003,7 +1091,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     return () => {
       disposed = true;
     };
-  }, [proxyRequestedAssetIds, compatibleVideoSources, proxyPollAttempt]);
+  }, [proxyRequestedAssetIds, compatibleVideoSources, proxyPollAttempt, policyAssetKey, policyProxyUnavailable, project?.assets]);
 
   // 4. Synchronize video elements to exact source times when paused or seeking
   useEffect(() => {
@@ -1321,7 +1409,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     });
     const hasError = failure !== null;
     const assetUrl = safeConvertFileSrc(
-      layer.asset_id ? compatibleVideoSources[layer.asset_id] ?? layer.asset_path : layer.asset_path
+      resolvePreviewVideoPath(layer.asset_id, layer.asset_path, compatibleVideoSources)
     );
 
     // Rich text is rasterized once by the shared native renderer with placement
@@ -1389,6 +1477,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           mixBlendMode={mixBlendMode}
           videoRefs={videoRefs}
           cancelVideoSeekWatchdog={cancelVideoSeekWatchdog}
+          settleVideoSeek={settleVideoSeek}
           syncVideoToLatestTarget={syncVideoToLatestTarget}
           recordVideoDiagnostic={recordVideoDiagnostic}
           onMediaError={handleVideoMediaError}
@@ -2231,6 +2320,12 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
           <span>Superseded: {supersededRequests}</span>
+          {previewProxyMode === "auto" && (
+            <span title={Object.values(policyProxyUnavailable).join("\n") || undefined}>
+              Proxies: {policyAssetIds.filter((assetId) => compatibleVideoSources[assetId]).length}/{policyAssetIds.length} ready
+              {Object.keys(policyProxyUnavailable).length > 0 ? ` · ${Object.keys(policyProxyUnavailable).length} unavailable` : ""}
+            </span>
+          )}
           <span>Text overlays: {Object.keys(richTextOverlays).length}</span>
           <span>Blank: {Object.values(richTextOverlays).filter((entry) => !entry.dataUrl).length}</span>
           <span>Overlay errors: {Object.keys(richTextErrors).length}</span>
@@ -2335,10 +2430,12 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
               aria-invalid={frameSeekError !== null}
               aria-describedby={frameSeekError ? "preview-frame-seek-error" : undefined}
               title={`Enter a frame from 0 to ${maxTimelineFrame}`}
-              onFocus={() => {
-                setFrameSeekDraft(String(playheadFrame));
+              onFocus={(event) => {
+                // Keep the field's current value: assistive technology can set the
+                // value before focus arrives, and resetting to the playhead here
+                // silently discarded that entry (G54 native input failures).
+                setFrameSeekDraft(event.currentTarget.value);
                 setFrameSeekError(null);
-                setIsFrameSeekDirty(false);
               }}
               onChange={(event) => {
                 setFrameSeekDraft(event.target.value);

@@ -2879,8 +2879,25 @@ fn preview_rich_text_overlay(
         .map_err(|error| error.to_string())
 }
 
-/// Returns an H.264/AAC preview proxy after the WebView cannot decode an original video.
-/// The proxy is derived cache only: the project and export pipeline keep using the original asset.
+/// The asset protocol scope starts empty and only grows through user file choices, so the
+/// WebView cannot load a derived proxy until this exact cache file is allowed. Granting the
+/// single file (not the cache directory) keeps the scope minimal.
+fn ready_preview_proxy(app: &AppHandle, proxy_path: &Path) -> PreviewVideoSourceStatus {
+    match app.asset_protocol_scope().allow_file(proxy_path) {
+        Ok(()) => PreviewVideoSourceStatus::Ready {
+            path: proxy_path.to_string_lossy().to_string(),
+            is_proxy: true,
+        },
+        Err(error) => PreviewVideoSourceStatus::Unavailable {
+            reason: format!("Preview proxy could not be made readable by the preview: {error}"),
+        },
+    }
+}
+
+/// Returns an H.264/AAC seek-optimized preview proxy, generating it in the background.
+/// Used both when the WebView cannot decode an original video and, when the user enables
+/// preview proxies, for responsive seeking. The proxy is derived cache only: the project
+/// and export pipeline keep using the original asset.
 #[tauri::command]
 fn media_get_compatible_preview_video(
     app: AppHandle,
@@ -2923,21 +2940,34 @@ fn media_get_compatible_preview_video(
         return Ok(PreviewVideoSourceStatus::Unavailable { reason });
     }
 
-    let proxy_path = engine.cache.proxy_path(&asset_id, PREVIEW_PROXY_HEIGHT);
-    if engine.cache.has_proxy(&asset_id, PREVIEW_PROXY_HEIGHT) {
-        return Ok(PreviewVideoSourceStatus::Ready {
-            path: proxy_path.to_string_lossy().to_string(),
-            is_proxy: true,
-        });
+    let source_fingerprint = match FFmpegService::source_fingerprint(&source_path) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return Ok(PreviewVideoSourceStatus::Unavailable {
+                reason: format!("Could not read source media metadata: {error}"),
+            });
+        }
+    };
+    let proxy_path = engine
+        .cache
+        .proxy_path(&asset_id, &source_fingerprint, PREVIEW_PROXY_HEIGHT);
+    if engine
+        .cache
+        .has_proxy(&asset_id, &source_fingerprint, PREVIEW_PROXY_HEIGHT)
+    {
+        return Ok(ready_preview_proxy(&app, &proxy_path));
     }
 
-    let dedupe_key = format!("preview-proxy:{}:{}", asset_id, PREVIEW_PROXY_HEIGHT);
+    let dedupe_key = format!(
+        "preview-proxy:{}:{}:{}",
+        asset_id, source_fingerprint, PREVIEW_PROXY_HEIGHT
+    );
     let job_id_candidate = format!(
         "preview_proxy_{}_{}",
         asset_id,
         uuid::Uuid::new_v4().simple()
     );
-    let (job_id, is_deduped) =
+    let (job_id, _is_deduped) =
         engine
             .jobs
             .submit_job(job_id_candidate, JobKind::Proxy, dedupe_key, 10);
@@ -2945,11 +2975,11 @@ fn media_get_compatible_preview_video(
     if let Some(job) = engine.jobs.get_job(&job_id) {
         match &job.status {
             JobStatus::Completed => {
-                if engine.cache.has_proxy(&asset_id, PREVIEW_PROXY_HEIGHT) {
-                    return Ok(PreviewVideoSourceStatus::Ready {
-                        path: proxy_path.to_string_lossy().to_string(),
-                        is_proxy: true,
-                    });
+                if engine
+                    .cache
+                    .has_proxy(&asset_id, &source_fingerprint, PREVIEW_PROXY_HEIGHT)
+                {
+                    return Ok(ready_preview_proxy(&app, &proxy_path));
                 }
                 return Ok(PreviewVideoSourceStatus::Unavailable {
                     reason: "Compatible preview generation completed without a usable file"
@@ -2967,7 +2997,9 @@ fn media_get_compatible_preview_video(
                 });
             }
             JobStatus::Running => return Ok(PreviewVideoSourceStatus::Pending),
-            JobStatus::Queued if !is_deduped && engine.jobs.can_start() => {
+            // A job queued behind the concurrency limit is started by a later poll;
+            // requiring a non-deduplicated submit here left it Pending forever.
+            JobStatus::Queued if engine.jobs.can_start() => {
                 let cancel_flag = engine.jobs.start_job(&job_id).map_err(|e| e.to_string())?;
                 let state_arc = Arc::clone(&state.0);
                 let job_id = job_id.clone();

@@ -17,7 +17,12 @@ import {
   Project,
   Track,
 } from "./types/project";
-import { getPendingPreviewVideoSeekTarget, shouldSeekPreviewVideo } from "./components/previewVideoSync";
+import {
+  getPendingPreviewVideoSeekTarget,
+  MAX_SEEK_STALL_RECOVERIES,
+  shouldRecoverStalledSeek,
+  shouldSeekPreviewVideo,
+} from "./components/previewVideoSync";
 import { shouldResetInspectorDrafts } from "./components/inspectorDraftSync";
 import { getMediaTimelinePlacement } from "./components/mediaTimelinePlacement";
 import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./components/frameSeek";
@@ -163,6 +168,15 @@ describe("Preview video synchronization", () => {
   it("keeps paused scrubbing frame-accurate and avoids interrupting an active seek", () => {
     expect(shouldSeekPreviewVideo(2, 2.1, false, false)).toBe(true);
     expect(shouldSeekPreviewVideo(2, 8, false, true)).toBe(false);
+  });
+
+  it("recovers a stalled WebView seek a bounded number of times (G54 frame 14700)", () => {
+    // seeking without seeked on the current element triggers one recovery
+    expect(shouldRecoverStalledSeek(true, true, 0)).toBe(true);
+    // a settled seek, a detached/replaced element, or an exhausted budget does not
+    expect(shouldRecoverStalledSeek(false, true, 0)).toBe(false);
+    expect(shouldRecoverStalledSeek(true, false, 0)).toBe(false);
+    expect(shouldRecoverStalledSeek(true, true, MAX_SEEK_STALL_RECOVERIES)).toBe(false);
   });
 
   it("settles an overlapping paused seek on the latest requested target", () => {
