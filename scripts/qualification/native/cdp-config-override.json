@@ -1,0 +1,1 @@
+{"app":{"windows":[{"label":"main","title":"TinixCut","width":1280,"height":800,"additionalBrowserArgs":"--remote-debugging-port=9333 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"}]}}
