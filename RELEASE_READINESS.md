@@ -1,0 +1,41 @@
+# RELEASE_READINESS.md
+
+> Release scope decision and evidence summary for TinixCut v0.1.0 (Windows, local desktop).
+> Recorded 2026-11-12 by the Product Owner's delegate under the Product Owner's instruction to finish the repository without further manual qualification. Decisions below narrow **claims**; they never turn missing evidence into PASS.
+
+## 1. Gate status
+
+| Gate | Status | Basis |
+|---|---|---|
+| G54 preview/seek, UI response, RAM, proxy, offline source | **PASS** | Budgets locked before measurement; 10 min/100 clip and 30 min/300 clip. `Plans/phase54_preview_performance.md`. |
+| G56 saved-project ownership | **PASS** | Native stale-save conflict, Save a Copy, MCP parity. |
+| G50 timeline editing | PASS for the keyboard/command path; pointer drag not qualified | 2026-11-12 keyboard workflow, locked-track message, undo/redo, save/reopen, export duration/decode. |
+| G51 audio | PASS for export; live meter not qualified | Export audio inside locked tolerance (gain/fade, speed, mute, detach). |
+| G52 visual canvas | PASS for geometry, animation, reset, history, persistence; **pixel parity not claimed** | Layer positions within 3.6 px; SSIM 0.900–0.932 vs locked 0.92 (3 of 5 points below). |
+| G53 captions | PASS for SRT round trip, preview/export visibility, unit suites; other native caption flows not re-run | `Plans/phase53_caption_transcript_editor.md`. |
+| G48/G49 | Automated suites pass; native flows not re-run | 43 settings/recovery/persistence tests; earlier native smoke runs. |
+| G55 AI editorial usefulness | **Not claimed** | Needs independent reviewer and additional real briefs (external). |
+| G57 installer | Build, install, installed render, uninstall pass; **upgrade not claimed** | No authentic earlier installer exists (only 0.1.0). |
+
+## 2. Release claims (what v0.1.0 may say)
+
+- Local editing, export, MCP/CLI automation, captions (SRT/VTT), preview with optional seek-optimized proxies.
+- Preview vs export agree on layer **geometry, timing and animation**; they are **not** guaranteed pixel-identical (different resampling).
+- Playback performance qualified on the two published workloads (10 min/100 clip, 30 min/300 clip, Windows 11 reference host). 4K-via-proxy, dropped-frame and GPU figures are not published.
+- Audio export fidelity qualified; live level meter is indicative only.
+
+## 3. Explicit non-claims (deferred, not hidden)
+
+1. **AI edit-planning quality (G55)** is experimental; the feature ships as a reviewable draft with provenance and must not be marketed as quality-assured.
+2. **Upgrade from an earlier installer** is untested; v0.1.0 is the first release, so no upgrade path exists yet. Test it when 0.2.0 is cut.
+3. **Pixel-level preview/export parity** is not claimed (decision 2026-11-12: do not change preview resampling for v0.1.0; revisit if users report visible mismatch).
+4. **Pointer-drag editing** was not qualified; keyboard and command paths are.
+5. Physical calibrated A/V sync, clean-VM install and hardware encoders remain optional per the 2026-11-03 decision.
+
+## 4. Automated test status (2026-11-12)
+
+Frontend 184/184, typecheck, production build, `cargo fmt`. Rust: library 317 (the long-project scalability benchmark is timing-sensitive and can fail when run in parallel with other suites; it passes alone), and every integration suite passes when run individually, including `phase28_text_renderer_poc` under `CARGO_PROFILE_TEST_OPT_LEVEL=3` as documented. Four integration tests and one fixture had drifted from the current export contract (export size must match the canvas; a new `background_corner_radius` field) and were updated. Not run in this pass because they are long benchmark/POC suites: `phase35_agent_template_generation` (ran > 35 min without finishing), `phase17_performance_benchmarks`, `phase16_research_poc`.
+
+## 5. Reproducing the evidence
+
+Native runs use `scripts/qualification/native/` (see its README); Rust and frontend suites run with `cargo test` and `pnpm test`. Evidence artifacts are under `artifacts/` (untracked by repository convention).

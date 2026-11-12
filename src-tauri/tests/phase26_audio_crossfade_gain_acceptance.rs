@@ -95,6 +95,9 @@ fn phase26_crossfade_envelopes_preserve_audio_level_outside_transition() {
     let clip_frames = 75;
     let asset_id = "crossfade_audio".to_string();
     let mut project = Project::new("Phase 26 Audio Crossfade Gain Acceptance".to_string());
+    // Export dimensions must match the project canvas; keep the render small.
+    project.settings.width = 64;
+    project.settings.height = 64;
     project.settings.frame_rate = rate;
     project.settings.sample_rate = 48_000;
     project.assets.extend([

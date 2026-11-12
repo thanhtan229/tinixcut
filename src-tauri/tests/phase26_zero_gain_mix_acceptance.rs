@@ -92,6 +92,9 @@ fn phase26_zero_gain_video_audio_does_not_reduce_wav_export_rms() {
     let rate = FrameRate::FPS_30;
     let clip_range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(150, rate));
     let mut project = Project::new("Phase 26 Zero-Gain Audio Mix Acceptance".to_string());
+    // Export dimensions must match the project canvas; keep the render small.
+    project.settings.width = 64;
+    project.settings.height = 64;
     project.settings.frame_rate = rate;
     project.settings.sample_rate = 48_000;
     project.assets.extend([

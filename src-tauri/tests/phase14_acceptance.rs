@@ -963,6 +963,9 @@ fn test_p14_ac29_ac30_full_audio_volume_export() {
 
     let rate = FrameRate::FPS_30;
     let mut project = Project::new("Export Audio Test".to_string());
+    // Export dimensions must match the project canvas; keep the render small.
+    project.settings.width = 64;
+    project.settings.height = 64;
     project.settings.sample_rate = 48000;
     project.settings.frame_rate = rate;
 
@@ -1036,6 +1039,9 @@ fn test_p14_ac29_audio_volume_export_non_48k_sample_rate() {
 
     let rate = FrameRate::FPS_30;
     let mut project = Project::new("Export Audio 44.1k Test".to_string());
+    // Export dimensions must match the project canvas; keep the render small.
+    project.settings.width = 64;
+    project.settings.height = 64;
     project.settings.sample_rate = 44100;
     project.settings.frame_rate = rate;
 

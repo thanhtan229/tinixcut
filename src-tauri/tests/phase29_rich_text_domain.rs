@@ -1221,6 +1221,7 @@ fn test_bf02_v9_to_v10_fixture_comprehensive_preservation() {
         accent_color: Some("#AABBCC".to_string()),
         background_color: Some("#333333".to_string()),
         background_opacity: 0.8,
+        background_corner_radius: 0.0,
         padding_x: 10.0,
         padding_y: 5.0,
         alignment: TextAlignment::Left,

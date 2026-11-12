@@ -89,6 +89,9 @@ fn phase18_crossfade_export_preserves_duration_and_both_tones() {
 
     let rate = FrameRate::FPS_30;
     let mut project = Project::new("Phase 18 Audio Crossfade Export".to_string());
+    // Export dimensions must match the project canvas; keep the render small.
+    project.settings.width = 64;
+    project.settings.height = 64;
     project.settings.frame_rate = rate;
     project.settings.sample_rate = 48_000;
     project.assets.extend([
