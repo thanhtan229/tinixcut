@@ -156,3 +156,8 @@ Loaded the exact saved disposable revision 36 fixture and sampled its compositio
 
 - On the current build, the G52 parity fixture (legacy text `G52 Hội An – kiểm tra` with a PositionY keyframe 55→−200, EaseIn) shows the caption in the native preview and in the export at all five sampled frames (30, 90, 150, 209, 210); the Vietnamese diacritics render in both. The earlier preview-missing/export-present mismatch does not reproduce. See `artifacts/phase52/disposable/g52_parity_20261112/side_by_side_all.png` (pre-fix export column differs only in layer geometry, fixed under G52).
 - Caption edit/split/merge/reorder with Undo/Redo, SRT/WebVTT round trip, transcript-derived ranges and analysis cancel were not re-run natively in this pass. **G53 stays OPEN** for those workflows.
+
+### G53 SRT native round trip and automated caption suites — 2026-11-12
+
+- Native **Export captions** wrote `artifacts/phase53/g53_20261112/captions.srt` (`00:00:01,000 → 00:00:06,000`, text `G52 Hội An – kiểm tra`: frame 30 / 150-frame duration, diacritics intact). Native **Import captions** of that file created a new track with a caption at start 30, duration 150 (exact frame match); Undo removed it.
+- Frontend 184/184 and Rust caption/SRT/VTT unit tests (9) pass. Native caption split/merge/reorder, WebVTT, transcript-derived ranges and analysis cancel were not re-run: **G53 stays OPEN**.

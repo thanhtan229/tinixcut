@@ -228,3 +228,7 @@ The runtime displayed the exact recovery conflict `Recovery save failed: Project
 - Undo×2 khôi phục đúng bố cục clip rev 22; chuỗi Undo đến "Nothing to undo" rồi Redo×3 khôi phục lock → CrossDissolve → ripple delete (11→10 clip). Lịch sử chỉ tính từ lúc mở lại project nên không lùi về 10 clip gốc.
 - Save/reopen: bố cục 11 clip và trạng thái khóa giữ nguyên (rev 27).
 - **Chưa làm:** export và so khớp vị trí/source range sau reopen; selection sau Undo của clip đã xóa chỉ quan sát một lần (selected rỗng); không kéo thả pointer; project 60–120 s chưa đạt (80 s timeline gồm 10 clip × 8 s, nhưng đã cắt bớt). **G50 vẫn OPEN.** Evidence: `artifacts/phase50/g50_workflow_20261112/`.
+
+### G50 export after save/reopen — 2026-11-12
+
+- Rendering the saved `g50_workflow.tinix` (rev 27) gives a 2580-frame, 86.000 s H.264/AAC file that decodes fully and equals the timeline end. Spot frames at timeline 1400 match source frame 10820 (mean luma diff 0.4) and not offsets of +150 frames (24.0); the synthetic source repeats over short offsets, so only coarse source-range errors are excluded. Pointer drag and a 60–120 s, ≥10-clip full-length edit remain: **G50 stays OPEN**.
