@@ -151,3 +151,8 @@ Loaded the exact saved disposable revision 36 fixture and sampled its compositio
 
 - On restarted PID 26364, selected Later in the recovery chooser without restoring or discarding a copy. Opened the exact disposable revision 36 fixture by its named file-picker row; frame input read back 60 before invoking Go. Core Healthy and ROI starting `0,1079-392` were observed.
 - Native screenshot `artifacts/phase53/native_ui/g53_frame60_fixed_runtime_20261105.png` (SHA-256 `16BFFA49FE4E1EE51325312E31B03F15BF649676CAA1BBF91BF1751298236780`) agrees with the fixed export on the observed caption placement: the editable text is clipped at the canvas edge by its +55 px keyframe; source-burned subtitles remain visible. The fixture hash was unchanged. This single frame does not close the complete G53 gate.
+
+### G53 preview/export caption visibility recheck — 2026-11-12
+
+- On the current build, the G52 parity fixture (legacy text `G52 Hội An – kiểm tra` with a PositionY keyframe 55→−200, EaseIn) shows the caption in the native preview and in the export at all five sampled frames (30, 90, 150, 209, 210); the Vietnamese diacritics render in both. The earlier preview-missing/export-present mismatch does not reproduce. See `artifacts/phase52/disposable/g52_parity_20261112/side_by_side_all.png` (pre-fix export column differs only in layer geometry, fixed under G52).
+- Caption edit/split/merge/reorder with Undo/Redo, SRT/WebVTT round trip, transcript-derived ranges and analysis cancel were not re-run natively in this pass. **G53 stays OPEN** for those workflows.
