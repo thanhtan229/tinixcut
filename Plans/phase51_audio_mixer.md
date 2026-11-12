@@ -307,3 +307,16 @@ Chosen by the Product Owner on 2026-11-12 before any measurement below. Do not r
 - Sample peak: ±**0.5 dB**. Integrated loudness (EBU R128): ±**0.5 LU**.
 - Envelope: RMS in 50 ms windows at fade, crossfade and automation points: ±**1 dB**.
 - Detach/link: no doubled audio (the detached pair must not exceed the single-source level by more than the peak tolerance).
+
+### G51 export audio against the locked tolerance — 2026-11-12
+
+Fixture `artifacts/phase51/disposable/g51_export_20261112/` (Phase 44 clip, AAC stereo 48 kHz, 7 s), built with `tinixcut apply`, rendered with `tinixcut render`, decoded and compared with an FFmpeg-built expectation.
+
+| Case | Result vs tolerance |
+|---|---|
+| Clip gain 0.5 + 1 s fade in/out | sample count 336000 = expected; peak −29.04 vs −29.01 dB (±0.5); LUFS −35.3 vs −35.3 (±0.5); max 50 ms RMS diff 0.62 dB (±1) — PASS |
+| Speed Double (14 s source in 7 s) | peak −23.21 vs −23.32 dB; max 50 ms RMS diff 0.12 dB — PASS |
+| Track mute | export has no audio stream (silent) — PASS |
+| Detach audio | single level (peak −29.04 dB, equals the single-source case), no doubling — PASS |
+
+Stereo/48 kHz layout is preserved. Not covered here: solo, volume automation keyframes, crossfade (crossfade gain parity was recorded 2026-10-29). Live meter accuracy and audio-clock/audible output remain OPEN, so **G51 stays OPEN**.
