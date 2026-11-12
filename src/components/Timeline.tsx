@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { waveformPathD } from "./waveformPath";
 import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, ProjectMarker, rationalTimeToFrames, TimelineItem } from "../types/project";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
@@ -611,39 +612,8 @@ export const Timeline: React.FC<TimelineProps> = ({
     widthPx: number,
     heightPx: number
   ) => {
-    const rate = frameRate || 30;
-    const sourceStartSec = sourceStartF / rate;
-    const sourceDurSec = sourceDurF / rate;
-    const bucketStart = Math.max(0, Math.floor(sourceStartSec * wf.bucket_rate));
-    const bucketCount = Math.max(1, Math.ceil(sourceDurSec * wf.bucket_rate));
-    const totalBuckets = Math.floor(wf.peaks.length / 2);
-    const bucketEnd = Math.min(totalBuckets, bucketStart + bucketCount);
-
-    const availableBuckets = bucketEnd - bucketStart;
-    if (availableBuckets <= 1 || widthPx <= 4) return null;
-
-    // Resample adaptively: up to 1 sample per 2 pixels
-    const numSamples = Math.min(availableBuckets, Math.max(20, Math.floor(widthPx / 2)));
-    const step = availableBuckets / numSamples;
-    const midY = heightPx / 2;
-    const ampScale = midY * 0.85;
-
-    const topPoints: string[] = [];
-    const bottomPoints: string[] = [];
-
-    for (let i = 0; i < numSamples; i++) {
-      const bIdx = Math.min(totalBuckets - 1, Math.floor(bucketStart + i * step));
-      const minVal = wf.peaks[bIdx * 2] ?? 0;
-      const maxVal = wf.peaks[bIdx * 2 + 1] ?? 0;
-      const x = ((i / (numSamples - 1)) * widthPx).toFixed(1);
-      const yTop = (midY - maxVal * ampScale).toFixed(1);
-      const yBottom = (midY - minVal * ampScale).toFixed(1);
-
-      topPoints.push(`${x},${yTop}`);
-      bottomPoints.unshift(`${x},${yBottom}`);
-    }
-
-    const pathD = `M ${topPoints.join(" L ")} L ${bottomPoints.join(" L ")} Z`;
+    const pathD = waveformPathD(wf, sourceStartF, sourceDurF, frameRate, widthPx, heightPx);
+    if (pathD === null) return null;
 
     return (
       <svg

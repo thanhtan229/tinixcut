@@ -376,6 +376,8 @@ interface PreviewCanvasProps {
   onRegisterAudioUnlock?: (unlock: () => void) => void;
   onPlaybackTrackPeaksChange?: (levels: Record<string, number> | null) => void;
   previewProxyMode?: PreviewProxyMode;
+  // Increments when the derived media cache is cleared; cached proxy paths become invalid.
+  mediaCacheGeneration?: number;
 }
 
 function safeConvertFileSrc(path?: string | null): string {
@@ -472,6 +474,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   onRegisterAudioUnlock,
   onPlaybackTrackPeaksChange,
   previewProxyMode = "off",
+  mediaCacheGeneration = 0,
 }) => {
   const [sampledState, setSampledState] = useState<PreviewFrameState | null>(null);
   const [internalIsPlaying, setInternalIsPlaying] = useState<boolean>(false);
@@ -561,6 +564,23 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, PreviewProxySource>>({});
   // Policy proxies that could not be built: the preview keeps the original quietly.
   const [policyProxyUnavailable, setPolicyProxyUnavailable] = useState<Record<string, string>>({});
+  // Proxy load failures per asset; the first drops the proxy and re-requests it, since the
+  // file may have been removed from the cache. A repeat failure is reported.
+  const proxyLoadFailuresRef = useRef<Record<string, number>>({});
+
+  // An unavailable policy proxy may become buildable after a relink, an access grant
+  // (both bump the revision) or a project switch, so retry on those changes.
+  useEffect(() => {
+    setPolicyProxyUnavailable((previous) => (Object.keys(previous).length === 0 ? previous : {}));
+  }, [project?.project_id, project?.revision]);
+
+  useEffect(() => {
+    if (mediaCacheGeneration === 0) return;
+    proxyLoadFailuresRef.current = {};
+    setCompatibleVideoSources({});
+    setPolicyProxyUnavailable({});
+    setVideoPreviewErrors({});
+  }, [mediaCacheGeneration]);
   const [proxyPollAttempt, setProxyPollAttempt] = useState(0);
   const [showSafeZones, setShowSafeZones] = useState(false);
   const [canvasDrag, setCanvasDrag] = useState<{ itemId: string; x: number; y: number } | null>(null);
@@ -988,6 +1008,17 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       return;
     }
     if (compatibleVideoSources[layer.asset_id]?.sourcePath === (layer.asset_path ?? null)) {
+      const assetId = layer.asset_id;
+      const failures = (proxyLoadFailuresRef.current[assetId] ?? 0) + 1;
+      proxyLoadFailuresRef.current[assetId] = failures;
+      if (failures === 1) {
+        setCompatibleVideoSources((previous) => {
+          const next = { ...previous };
+          delete next[assetId];
+          return next;
+        });
+        return;
+      }
       setVideoPreviewErrors((previous) => ({
         ...previous,
         [layer.item_id]: {
@@ -2322,7 +2353,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           <span>Superseded: {supersededRequests}</span>
           {previewProxyMode === "auto" && (
             <span title={Object.values(policyProxyUnavailable).join("\n") || undefined}>
-              Proxies: {policyAssetIds.filter((assetId) => compatibleVideoSources[assetId]).length}/{policyAssetIds.length} ready
+              Proxies: {policyAssetIds.filter((assetId) => {
+                const asset = project?.assets.find((candidate) => candidate.asset_id === assetId);
+                return compatibleVideoSources[assetId]?.sourcePath === (asset?.path ?? null);
+              }).length}/{policyAssetIds.length} ready
               {Object.keys(policyProxyUnavailable).length > 0 ? ` · ${Object.keys(policyProxyUnavailable).length} unavailable` : ""}
             </span>
           )}

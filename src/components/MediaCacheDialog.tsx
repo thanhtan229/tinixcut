@@ -7,6 +7,8 @@ interface MediaCacheDialogProps {
   previewProxyMode: "off" | "auto";
   // Persists the app setting; rejects with the reason when the save fails.
   onPreviewProxyModeChange: (mode: "off" | "auto") => Promise<void>;
+  // Called after derived cache files were removed, so consumers drop stale proxy paths.
+  onCacheCleared: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -21,7 +23,7 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-export function MediaCacheDialog({ isOpen, onClose, previewProxyMode, onPreviewProxyModeChange }: MediaCacheDialogProps) {
+export function MediaCacheDialog({ isOpen, onClose, previewProxyMode, onPreviewProxyModeChange, onCacheCleared }: MediaCacheDialogProps) {
   const [savingProxyMode, setSavingProxyMode] = useState(false);
   const [status, setStatus] = useState<MediaCacheStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +56,7 @@ export function MediaCacheDialog({ isOpen, onClose, previewProxyMode, onPreviewP
     setError(null);
     try {
       setStatus(await editorApi.clearMediaCache());
+      onCacheCleared();
       setConfirmClear(false);
     } catch (cause) {
       setError(`Could not clear the media cache: ${cause}`);

@@ -153,6 +153,7 @@ export function App() {
   const [isAutoCaptionOpen, setIsAutoCaptionOpen] = useState(false);
   const [isMediaCacheOpen, setIsMediaCacheOpen] = useState(false);
   const [previewProxyMode, setPreviewProxyMode] = useState<"off" | "auto">("off");
+  const [mediaCacheGeneration, setMediaCacheGeneration] = useState(0);
   const [isCaptionEditorOpen, setIsCaptionEditorOpen] = useState(false);
   const [isEditPlanDraftOpen, setIsEditPlanDraftOpen] = useState(false);
   const [isAudioMixDraftOpen, setIsAudioMixDraftOpen] = useState(false);
@@ -2926,6 +2927,7 @@ export function App() {
             }}
             onPlaybackTrackPeaksChange={handlePlaybackTrackPeaksChange}
             previewProxyMode={previewProxyMode}
+            mediaCacheGeneration={mediaCacheGeneration}
           />
 
           <Timeline
@@ -3170,6 +3172,7 @@ export function App() {
         isOpen={isMediaCacheOpen}
         onClose={() => setIsMediaCacheOpen(false)}
         previewProxyMode={previewProxyMode}
+        onCacheCleared={() => setMediaCacheGeneration((generation) => generation + 1)}
         onPreviewProxyModeChange={async (mode) => {
           const current = await editorApi.getAppSettings();
           const saved = await editorApi.saveAppSettings({ ...current, previewProxyMode: mode });

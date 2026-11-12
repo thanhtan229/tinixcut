@@ -253,3 +253,30 @@ Validate that preview remains responsive and resource use remains bounded on dis
 - Verification: Rust lib 316/316 (new: fingerprint/profile isolation, legacy settings load as `off`, proxy keyframes ≥ 2 on the 1 s fixture with no partial left), frontend 181/181 (new policy tests), typecheck, build, fmt.
 - Native: toggled on via UI → app built the proxy itself (~2 min, 561 MB, keyframes every 0.5 s) → exact fixture 30/30 synchronized, **Go→seeked p95 205.9 ms** (in-page 49.1 ms), 0 failures. Toggled off → preview returned to the original; setting restored to `off`.
 - **Disposition: G54 seek budget with proxy ready is MET on the 10 min/100 clip workload. G54 remains OPEN** for UI-response p95 ≤ 100 ms, 30-cycle RAM, proxy clear/recreate, frame-drop, and the 30 min/300 clip workload. Evidence: `artifacts/phase54/native_ui/g54_20261112/g54_proxy_setting_native_20261112.json`.
+
+### G54 locked budgets and measurement definitions — 2026-11-12 (set before measurement)
+
+Decided by the Product Owner on 2026-11-12, recorded before any of the measurements below were taken. Do not change these after seeing results; a miss is reported as a miss.
+
+- **Workloads:** 10 min/100 clip (`phase54_10m_100clips_workload.tinix`) and 30 min/300 clip (`phase54_30m_300clips_workload.tinix`), preview proxy setting on with the proxy ready unless stated.
+- **Seek (existing budget):** Go invoke → last video layer `seeked`, 30 targets spread over the timeline, p95 ≤ 500 ms, zero failures.
+- **UI response p95 ≤ 100 ms:** measured on an app built with the production frontend bundle. For each action — Play, Pause, step forward one frame, Go-to-frame submit, timeline clip select — latency is the input event's `timeStamp` to the second `requestAnimationFrame` after the DOM first shows the result (Pause/Play label flips; timecode label changes; selected clip/inspector shows the clip). 20 samples per action per workload; each action's p95 must be ≤ 100 ms on each workload. Video decode completion is excluded (covered by the seek budget).
+- **RAM:** process tree = `tinixcut.exe` plus all descendants (WebView2, FFmpeg); metric = summed private bytes sampled every 500 ms. One cycle = Go to a new target, Play 2 s, Pause, then a superseded seek (a second Go issued before the first seek settles) as the cancel step. 30 cycles per workload. PASS if peak ≤ **1.5 GiB (1536 MiB)** and the mean of end-of-cycle samples for cycles 21–30 is ≤ 1.10 × the mean for cycles 1–10.
+- **Proxy clear/recreate:** Media cache → Clear derived cache (user path; Product Owner approved clearing the existing derived cache, including the 110 GB leftover `frames.yuv`), then the preview must fall back to the original without errors and rebuild the proxy, ending with `Proxies: 1/1 ready` and the proxy in use.
+- **Offline source:** with the source missing, the preview must show the offline state and must not silently use a cached proxy; export must fail clearly rather than render from a proxy.
+
+### G54 final qualification against the locked budgets — 2026-11-12
+
+| Criterion (locked) | 10 min / 100 clip (main) | 30 min / 300 clip |
+|---|---|---|
+| Seek p95 ≤ 500 ms, proxy ready, zero failures | 30/30, p95 205.9 ms | 30/30, p95 188.3 ms |
+| UI response p95 ≤ 100 ms (Play / Pause / Step / Go / Select, 20 each, production frontend) | 31.4 / 42.6 / 29.8 / 31.1 / 18.8 ms | 30.3 / 40.5 / 31.2 / 31.8 / 16.8 ms |
+| RAM peak ≤ 1536 MiB; cycles 21–30 ≤ 1.10 × cycles 1–10 (30 cycles) | peak 688.3 MiB, ratio 1.042 | peak 850.8 MiB, ratio 1.024 |
+| Proxy clear and recreate | PASS (UI clear while in use; external deletion also recovers) | — |
+| Offline source: visible, no silent proxy, export fails clearly | PASS (disposable probe with its own source copy) | — |
+
+- Found and fixed on the way: on the 300-clip project each seek blocked the UI thread for 3.6–5.9 s because `Timeline` rebuilt every clip's waveform path on every playhead change (CPU profile). Waveform paths are now built in linear time and cached per waveform object (`src/components/waveformPath.ts`, identical geometry verified against the old algorithm). Before the fix: 29/30, p95 4745 ms; after: 30/30, p95 188.3 ms.
+- Also fixed: after **Clear derived cache** the preview kept the deleted proxy path and showed a decode error; the preview now drops proxy state on clear and retries a failed proxy load once. A policy proxy marked unavailable (e.g. before access was granted) is retried after a relink, access grant or project switch; the HUD ready count only counts proxies for the current source path.
+- Seek runs used the dev build (the seek recorder only exists there; React dev mode is slower). UI-response and RAM runs used a debug-Rust build with the production frontend bundle. One 30 min RAM run had two UIA step hiccups (28/30 complete cycles); it was excluded and re-run cleanly.
+- Not measured: the 30-second reference workload, the conditional 4K-via-proxy workload, dropped frames and GPU use (Phase 54 plan items outside the G54 gate text).
+- **Disposition: G54 PASS** on the main 10 min/100 clip workload and the 30 min/300 clip workload for every locked criterion; the 30 s reference and 4K-via-proxy workloads are reported as not measured. Evidence: `artifacts/phase54/native_ui/g54_20261112/g54_final_qualification_20261112.json`.
