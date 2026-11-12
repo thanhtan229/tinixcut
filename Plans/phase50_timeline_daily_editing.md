@@ -220,3 +220,11 @@ The runtime displayed the exact recovery conflict `Recovery save failed: Project
 
 - Computer Use selected the workspace TinixCut window and reported the disposable roll project at revision 3. Attempting to click the accessibility element `Zoom In (+)` to establish a keyboard navigation starting point failed with `coordinate input geometry is unavailable`; the input outcome is unknown.
 - A fresh accessibility read after the error reported Core Healthy, revision 3 and focus on the WebView pane, not a trim handle. No roll shortcut was sent. Native handle focus and positive roll remain NOT QUALIFIED; do not repeat blind input when geometry is unavailable.
+### G50 native keyboard workflow — 2026-11-12
+
+- Dự án mới tạo trong app, import 2 nguồn qua dialog, **10 clip** dựng bằng Source Viewer (In/Out đặt qua UIA, mỗi clip 8 s) → rev 12. Sau đó, toàn bộ qua bàn phím/nút UI: trim cuối 3 frame (Shift+Left×3), Close Gap (30 f), Shift+Delete ripple, Delete + Close Gap (240 f), Ctrl+C / Ctrl+V tại playhead, Insert asset tại playhead, roll Ctrl+Right (210/211 và 240/239 frame, giữ tổng độ dài), tạo CrossDissolve rồi ripple delete clip có transition (transition bị gỡ theo).
+- Từ chối rõ ràng: overlap khi di chuyển (lỗi validation nêu cả hai clip), roll vượt hết media ("beyond the end of its media"), track khóa (xem bên dưới).
+- **Lỗi UX đã sửa:** phím mũi tên/trim trên track khóa trước đây bị bỏ qua im lặng; nay hiển thị `Cannot edit "<clip>": <track> is locked…` (`onLockedTrackEdit`). Shift+Delete trên track khóa bị Command Service từ chối, project không đổi (rev 27 giữ nguyên).
+- Undo×2 khôi phục đúng bố cục clip rev 22; chuỗi Undo đến "Nothing to undo" rồi Redo×3 khôi phục lock → CrossDissolve → ripple delete (11→10 clip). Lịch sử chỉ tính từ lúc mở lại project nên không lùi về 10 clip gốc.
+- Save/reopen: bố cục 11 clip và trạng thái khóa giữ nguyên (rev 27).
+- **Chưa làm:** export và so khớp vị trí/source range sau reopen; selection sau Undo của clip đã xóa chỉ quan sát một lần (selected rỗng); không kéo thả pointer; project 60–120 s chưa đạt (80 s timeline gồm 10 clip × 8 s, nhưng đã cắt bớt). **G50 vẫn OPEN.** Evidence: `artifacts/phase50/g50_workflow_20261112/`.

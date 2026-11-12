@@ -2967,6 +2967,10 @@ export function App() {
             onSetTrackVolume={handleSetTrackVolume}
             playbackTrackPeaks={playbackTrackPeaks}
             onToggleTrackLock={handleToggleTrackLock}
+            onLockedTrackEdit={(item) => {
+              const track = project?.tracks.find((candidate) => candidate.items.some((entry) => entry.item_id === item.item_id));
+              setStatusMsg(`Cannot edit "${item.name}": ${track?.name ?? "its track"} is locked. Unlock the track to edit its clips.`);
+            }}
             onReorderTrack={handleReorderTrack}
             onRenameTrack={handleRenameTrack}
             onAddMarker={handleAddMarker}

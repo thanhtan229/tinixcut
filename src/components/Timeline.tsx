@@ -45,6 +45,9 @@ interface TimelineProps {
   onSetTrackVolume?: (trackId: string, volume: number) => void;
   playbackTrackPeaks?: Record<string, number>;
   onToggleTrackLock?: (trackId: string, locked: boolean) => void;
+  // Called when an edit gesture targets a clip on a locked track, so the UI can say why
+  // nothing changed instead of ignoring the input silently.
+  onLockedTrackEdit?: (item: TimelineItem) => void;
   onReorderTrack?: (trackId: string, newIndex: number) => void;
   onRenameTrack?: (trackId: string, name: string) => void;
   onAddMarker?: (label: string, positionFrame: number) => void;
@@ -90,6 +93,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSetTrackVolume,
   playbackTrackPeaks = {},
   onToggleTrackLock,
+  onLockedTrackEdit,
   onReorderTrack,
   onRenameTrack,
   onAddMarker,
@@ -345,7 +349,11 @@ export const Timeline: React.FC<TimelineProps> = ({
     e.stopPropagation();
     if (e.shiftKey) {
       const track = project?.tracks.find((candidate) => candidate.items.some((candidateItem) => candidateItem.item_id === item.item_id));
-      if (!track || track.locked) return;
+      if (!track) return;
+      if (track.locked) {
+        onLockedTrackEdit?.(item);
+        return;
+      }
       const rate = project!.settings.frame_rate;
       const itemStart = rationalTimeToFrames(item.timeline_range.start, rate);
       const itemDuration = rationalTimeToFrames(item.timeline_range.duration, rate);
@@ -401,7 +409,10 @@ export const Timeline: React.FC<TimelineProps> = ({
     if (delta === null) return;
     event.preventDefault();
     event.stopPropagation();
-    if (trackLocked) return;
+    if (trackLocked) {
+      onLockedTrackEdit?.(item);
+      return;
+    }
 
     onSelectItem(item.item_id, false);
     if (event.altKey && item.asset_id && item.kind !== "Text") {
@@ -422,7 +433,11 @@ export const Timeline: React.FC<TimelineProps> = ({
     if (delta === null) return;
     event.preventDefault();
     event.stopPropagation();
-    if (trackLocked || !project) return;
+    if (trackLocked) {
+      onLockedTrackEdit?.(item);
+      return;
+    }
+    if (!project) return;
 
     onSelectItem(item.item_id, false);
     if (event.altKey && item.asset_id && item.kind !== "Text") {
