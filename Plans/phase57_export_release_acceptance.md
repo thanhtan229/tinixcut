@@ -205,3 +205,9 @@ This closes exact-candidate native manual/AI/save-reopen/export and MCP AI/expor
 - After releasing the test lock, the sentinel SHA-256 remained `BD86E40873E5A38F793E94A0105A29D169EEB7E0EAD738348C47C8C4EE61ADF0` (38 bytes); the project SHA-256 remained `183D25761376196F19F5C8F7D7CE1B1B6BDF0BFABF058ECF01F434B77BAD71CC`; no render temporary remained. This qualifies latest-candidate native error presentation and preservation for a promotion/access-denied failure, not literal ENOSPC.
 - Exact machine evidence: `../artifacts/phase57/phase57_latest_candidate_native_export_error_ui_20261105.json`.
 - **G57 remains OPEN only for cross-version upgrade/data preservation** against an authentic older-version installer; none is available locally. Literal ENOSPC remains optional per the Product Owner’s decision.
+
+### G57 rebuilt NSIS candidate on current source — 2026-11-12
+
+- `pnpm tauri build` produced `TinixCut_0.1.0_x64-setup.exe` (59.29 MiB, SHA-256 prefix `2f3eed435f06a78`) from the source including this session's changes (preview proxy, focus fix, waveform cache, animated-scale export fix).
+- Silent install into a temp directory (exit 0): the installed CLI rendered the G52 fixture (animated scale/position, text, rich audio) to 1920×1080 H.264 + AAC, 450 frames; full FFmpeg decode passes and frame 150 is pixel-identical (mean abs diff 0.0) to the dev-build export. The installed GUI launched and stayed responsive; the window was not inspected through UIA. Silent uninstall exited 0 and removed the directory.
+- Not re-run on this candidate: installed native UI workflows (open/edit/save/export), recovery, relink, cancellation. Cross-version upgrade remains **BLOCKED** (no authentic prior installer). **G57 stays OPEN.**
