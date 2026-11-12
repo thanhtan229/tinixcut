@@ -114,3 +114,52 @@ Chosen by the Product Owner on 2026-11-12 before any measurement below. Do not r
 - **Reset:** Brightness 0 → 0.3 through the native slider, then **Reset color**: preview is identical to the baseline (SSIM 1.000), and the post-reset export frame is bit-identical to the original export. Undo/Redo across the edit restored 0.3 / 0 with increasing revisions. The product has no effect *bypass* control.
 - **Save/reopen:** saved through the UI and reopened; keyframes, easing, text and color values are preserved.
 - **Disposition: G52 OPEN.** Geometry, animation, cut, reset, history and persistence pass; full-frame SSIM misses the locked threshold at 3 of 5 points. Per the gate, effects without parity must not be enabled for release — this miss is not specific to an effect, so the next decision is whether preview should resample like export or the release claims should exclude pixel-level parity. Evidence: `artifacts/phase52/disposable/g52_parity_20261112/g52_qualification_20261112.json`.
+
+### G52 parity closure plan — 2026-11-12 (proposed, not implemented)
+
+**Evidence from re-analysing the 2026-11-12 run** (scripts in `tmp/g52diag/`, inputs are the recorded PNGs; no new native run):
+
+- The video region causes 86–96 % of the SSIM deficit. Text-only isolation SSIM is ≥ 0.992 at every point, and the background is ≈ 0.99.
+- The preview capture is 1080×608 device pixels (720×405 CSS at DPR 1.5). `compare_parity.py` downsamples the 1920×1080 export to that size, so the export is resampled twice and the preview once. At scale 1.0 (frames 30 and 210), the preview has 22 % more horizontal gradient energy than the export.
+- One preview frame was already captured at native canvas resolution (`dpr_native_res/preview_f90.png`, 1920×1080). Against the unscaled export, the worst point (frame 90) scores **0.938**, compared with 0.900 at preview size. The other four points have not been captured at native resolution.
+- The export carries no colour tags (`color_space/primaries/transfer/range = unknown`), which matches the 1–2 level mean luma offset.
+- CRF 18 does not change SSIM, so encoder compression is not the cause.
+
+**Decision required before step 1 (Product Owner):** measure at canvas resolution (1920×1080 for this fixture), comparing preview and export without resampling either one. The 0.92 / 1 % thresholds stay unchanged. This corrects the method, it does not relax the threshold. The preview-size number must still be reported next to it. If this is not accepted, steps 2–3 still go ahead, and G52 closes only if preview-size SSIM reaches 0.92.
+
+**Steps**
+
+1. **Measurement tooling** (`scripts/qualification/native/`):
+   - `capture_preview.py`: capture the canvas rect at `scale = canvasWidth / rectCssWidth` through `Page.captureScreenshot` clip. This reuses the `dpr_native_res` path, which becomes the default, and records the scale in `preview_capture.json`.
+   - `compare_parity.py`: compare at canvas resolution, resample only when the sizes differ, add per-region deficit shares (video, text, background), and emit both the canvas-resolution and preview-size SSIM.
+   - Add a synthetic self-check: identical images give 1.0, a shifted layer gives the expected centroid error.
+2. **Export colour tagging** (`src-tauri/src/modules/composition/mod.rs`, export args):
+   - Tag SDR output as BT.709 limited (`-colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv`).
+   - Make the RGB→YUV conversion explicit so the tags are truthful.
+   - Add a unit test on the arg list and an ffprobe assertion in one existing render acceptance test.
+3. **Export resampling quality**, only if A/B shows a gain:
+   - Render the G52 fixture with the `scale` filters on the default flags vs `lanczos+accurate_rnd+full_chroma_int`, using the same filtergraph through the test helper.
+   - Adopt the variant only if native-resolution SSIM improves by ≥ 0.005 at the worst point and export time on the Phase 16/17 benchmarks grows by ≤ 10 %.
+   - Implement as one constant used by all three `scale=` sites (lines ~1420/1703/1813), and update the `scale=768:486` assertion and `phase34_capcut_import.rs`.
+4. **Native re-run (automated, no manual GUI):**
+   - Rebuild, then re-capture all five points (30, 90, 150, 209/210) at canvas resolution, plus the text isolation.
+   - Re-export Balanced and HQ, then recheck Reset color, Undo/Redo and save/reopen on the rebuilt runtime.
+   - Record JSON under `artifacts/phase52/disposable/g52_parity_<date>/`.
+5. **Regression:** lib tests, `phase52`, composition/export unit tests, the render suites `phase14/16/17/18/26/34/35` (Phase 28 with `CARGO_PROFILE_TEST_OPT_LEVEL=3`), `cargo fmt`, frontend suite (no frontend change is expected), and NSIS rebuild plus installed render smoke.
+6. **Disposition and docs:**
+   - **PASS** only if every point is ≥ 0.92 at the agreed resolution and centroids are ≤ 19.2 px.
+   - Otherwise G52 stays OPEN, and v0.1.0 keeps the "no pixel parity claim" scope in `RELEASE_READINESS.md`.
+   - Update this file, `RELEASE_READINESS.md` and `PROJECT_STATUS.md`.
+
+**Out of scope:** changing the preview renderer (it is CSS-transformed `<video>`), an effect bypass control, and 9:16 portrait-canvas export parity (tracked separately above).
+
+### G52 closure attempt result — 2026-11-12 (export scale A/B; G52 stays OPEN)
+
+- The earlier "0.938 at canvas resolution" figure is **not valid evidence**: `dpr_native_res/preview_f90.png` and `upscale_check/preview_f90.png` are pixel-identical, i.e. the 1080 px preview capture upscaled. WebView2 does not render the canvas at a higher density, so there is no real native-resolution preview to compare against. Step 1 of the plan above is withdrawn.
+- A/B of the export `scale` filters (all four sites, including the animated `scale@sc_N` path) with `flags=bicubic` vs `flags=lanczos`, same fixture and preview captures: SSIM 0.9079/0.9001/0.9275/0.9316/0.9118 vs 0.9073/0.8993/0.9271/0.9312/0.9111. Lanczos gives no gain (marginally worse), so the adoption rule (≥ +0.005) is not met. The experimental code was reverted; export is unchanged.
+- BT.709 tagging was not implemented: sources are untagged too, tags do not change pixel values, and no evidence shows they affect SSIM.
+- Conclusion: the residual difference comes from the preview path (browser video scaling/compositing), not from export resampling. It cannot be closed by an export change. **Disposition unchanged: G52 OPEN; v0.1.0 does not claim preview/export pixel parity.** Reopening requires a Product Owner decision to either relax the SSIM threshold or change the preview renderer (out of scope for v0.1.0).
+
+### G52 disposition — approved by Product Owner, 2026-11-12
+
+G52 stays **OPEN for pixel-level preview/export parity** and v0.1.0 ships with that non-claim. The locked SSIM ≥ 0.92 threshold is **not** relaxed. Geometry, animation, cut, Reset, history and persistence are qualified. Reopening for a later release requires changing the preview renderer so its video scaling matches export (new architecture/plan item), then re-measuring against the unchanged threshold.

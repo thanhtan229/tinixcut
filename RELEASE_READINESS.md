@@ -28,7 +28,7 @@
 
 1. **AI edit-planning quality (G55)** is experimental; the feature ships as a reviewable draft with provenance and must not be marketed as quality-assured.
 2. **Upgrade from an earlier installer** is untested; v0.1.0 is the first release, so no upgrade path exists yet. Test it when 0.2.0 is cut.
-3. **Pixel-level preview/export parity** is not claimed (decision 2026-11-12: do not change preview resampling for v0.1.0; revisit if users report visible mismatch).
+3. **Pixel-level preview/export parity** is not claimed (decision 2026-11-12, approved by Product Owner: threshold 0.92 stays locked and unrelaxed; export scale-filter A/B showed no gain, so the residual gap is in the preview path; revisit with a preview-renderer change in a later release).
 4. **Pointer-drag editing** was not qualified; keyboard and command paths are.
 5. Physical calibrated A/V sync, clean-VM install and hardware encoders remain optional per the 2026-11-03 decision.
 
