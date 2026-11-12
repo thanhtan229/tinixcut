@@ -1399,10 +1399,13 @@ impl CompositionPlan {
                             if let Some(auto) = layer_auto {
                                 let init_angle_rad = rotation * std::f32::consts::PI / 180.0;
                                 filter_chain.push_str(&format!(
-                                    ",format=yuva420p,sendcmd=f='{}',scale@sc_{}=eval=frame:w={}:h={},rotate@rot_{}=angle={:.4}:ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=none",
+                                    ",format=yuva420p,sendcmd=f='{}',scale@sc_{}=eval=frame:w={}:h={},rotate@rot_{}=angle={:.4}:ow={}:oh={}:c=none",
                                     auto.escaped_command_file,
                                     layer_idx, render_w, render_h,
-                                    layer_idx, init_angle_rad
+                                    layer_idx, init_angle_rad,
+                                    // Fixed box sized for the clip's largest scaled frame;
+                                    // the schedule positions the overlay against it.
+                                    auto.rotate_box, auto.rotate_box
                                 ));
                                 filter_chain.push_str(&ffmpeg_color_adjustment_filter(
                                     layer.visual_effect,

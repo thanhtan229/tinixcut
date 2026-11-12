@@ -94,3 +94,23 @@
 - The standard workspace TinixCut (PID 12440, Core Healthy) was showing the disposable G51 project. The intended G52 fixture exists and its current SHA-256 is `D14535F3049456AC789D33D69220639862DA96C4FB9AA04F2A18B5609E000F4E`; the referenced Hoi An fixture still hashes to `EF2400D263622DA266D0A378B59BA0290ED7EB6475EDAE46E239D8F110B66A5E`.
 - The native Open dialog was opened through the exact accessible `📂 Open` control. UIA found the File name edit but `.SetFocus()` returned exactly `Target element cannot receive focus`; sending `WM_SETTEXT` did not produce filename readback. The dialog was canceled through its exact native Cancel control; no project was opened, edited, or saved.
 - **G52 remains OPEN.** The corrected export frame and regression test are existing evidence, but a fresh native preview recheck on the updated runtime and remaining easing/cut, bypass/reset and broader-layer parity are still unqualified. No retry was made after the focus/readback failure.
+
+### G52 locked parity tolerance — 2026-11-12 (set before measurement)
+
+Chosen by the Product Owner on 2026-11-12 before any measurement below. Do not relax after seeing results.
+
+- **Preview sample:** CDP screenshot of the preview canvas element in the native app at device pixels, at the target frame after all video layers report `seeked` and text overlays are idle.
+- **Export sample:** the same timeline frame extracted from the exported MP4, scaled (bicubic) to the preview sample's size.
+- **Metric 1:** SSIM on luma over the full canvas ≥ **0.92**.
+- **Metric 2:** for each layer, the centroid of its rendered region differs by ≤ **1 %** of the canvas width (measured on a per-layer isolation render where needed).
+- **Sample points:** at a keyframe, mid-easing, and on both sides of a cut, on a fixture with at least two layers.
+- **Reset:** after changing an effect and invoking its Reset, preview and export must again match the original sample within the same tolerance. The product has no effect *bypass* control; only Reset is qualified.
+
+### G52 native parity run against the locked tolerance — 2026-11-12
+
+- **Fixture** (built through the Command Service, saved rev 35): portrait video layer (Fit, crop top 5 %) with PositionX 40→300 and Scale 1.0→1.5 EaseInOut over frames 30–150, split at frame 210 with the right half slipped to source 0; text layer `G52 Hội An – kiểm tra` with PositionY 55→−200 EaseIn.
+- **Bug found and fixed:** whenever keyframed scale exceeded 1, export ignored PositionX and cropped the layer (frame 90: centre +11 instead of +170; frame 150: −15 instead of +300). The animated branch's `rotate` output (`hypot(iw,ih)`) is evaluated once at the first frame, but overlay positions were computed per frame for the current box. Each animated layer now uses one fixed rotate box sized for its largest scaled frame, shared by the filter graph and the schedule. Regression: `animated_scale_uses_one_rotate_box_for_the_largest_frame`; Rust lib 317/317, `export_automation_poc` 8/8.
+- **Parity after the fix** (keyframe 30, mid-easing 90, end keyframe 150, cut 209/210): layer centroids match within 1.6–3.6 px (limit 19.2 px) — **PASS**. Full-frame luma SSIM is 0.908 / 0.900–0.902 / 0.928 / 0.932 / 0.912 with both Balanced and High quality exports — **FAIL at 3 of 5 points** against 0.92. Frame alignment was verified (frame N is the best match among N±2); the residual difference is edge/texture detail from different resampling paths, not layout.
+- **Reset:** Brightness 0 → 0.3 through the native slider, then **Reset color**: preview is identical to the baseline (SSIM 1.000), and the post-reset export frame is bit-identical to the original export. Undo/Redo across the edit restored 0.3 / 0 with increasing revisions. The product has no effect *bypass* control.
+- **Save/reopen:** saved through the UI and reopened; keyframes, easing, text and color values are preserved.
+- **Disposition: G52 OPEN.** Geometry, animation, cut, reset, history and persistence pass; full-frame SSIM misses the locked threshold at 3 of 5 points. Per the gate, effects without parity must not be enabled for release — this miss is not specific to an effect, so the next decision is whether preview should resample like export or the release claims should exclude pixel-level parity. Evidence: `artifacts/phase52/disposable/g52_parity_20261112/g52_qualification_20261112.json`.

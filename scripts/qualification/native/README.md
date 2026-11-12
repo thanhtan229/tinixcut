@@ -36,6 +36,8 @@ output paths under `artifacts/`.
 | `ui_action.ps1 -Action play\|pause\|step\|select [-ClipName <name>]` | Transport and clip selection. `select` sends Enter only when TinixCut owns the foreground window. |
 | `toggle_proxy.ps1 -Want On\|Off` | Preview proxy checkbox (Media cache dialog must be open). |
 | `proc_tree_mem.ps1` | Private/working-set memory summed over `tinixcut.exe` and descendants. |
+| `set_range.ps1 -Name <slider> -Value <v>` | Set a named slider (e.g. Inspector Brightness) through UIA RangeValue. |
+| `select_option.ps1 -Option <text>` | Choose an option in a `<select>` (e.g. Output → High quality). |
 
 ## Measurements
 
@@ -46,6 +48,8 @@ output paths under `artifacts/`.
 | `ui_response.py <out.json> <clip names,csv> <frames,csv>` | Input event to painted result for Play/Pause/Step/Go/Select (`UI_SAMPLES`, default 20). |
 | `ram_cycles.py <out.json> <frames,csv>` | 30 cycles of seek/play/pause/superseded seek with process-tree memory sampling. Check that every cycle's steps succeeded before accepting a run. |
 | `profile_seek.py <frame> <out.cpuprofile>` | CPU profile of one seek; prints top self/total functions. |
+| `capture_preview.py <dir> <frames...>` | Screenshot exactly the preview canvas at each frame after layers settle; hides HUD text and selection handles, aborts if anything covers the canvas. |
+| `compare_parity.py <dir> <frames,csv> [--isolation <dir>]` | G52 metrics: luma SSIM and per-layer centroid error between `preview_fN.png` and `export_fN.png`. |
 
 Budget definitions and accepted results: `Plans/phase54_preview_performance.md`.
 
@@ -55,3 +59,5 @@ Budget definitions and accepted results: `Plans/phase54_preview_performance.md`.
 - A recovery prompt may appear after opening a fixture; choose **Open saved project** to leave recovery copies untouched.
 - Opening a project whose media was never chosen through a dialog shows "Media access required"; use **Relink…** to the same file.
 - Do not pool runs or count cycles whose UIA steps failed.
+- The recovery prompt that can appear after opening a project is not `role=dialog`; `capture_preview.py` samples points over the canvas to detect it. Dismiss with **Later**.
+- Emulating a higher device-pixel ratio over CDP does not make WebView2 re-render the canvas at that density; captures are only valid at the window's real DPR.

@@ -297,3 +297,13 @@ First add an explicit `embedded_audio_enabled` project field (default true for o
 
 - Computer Use selected the unique workspace TinixCut window (HWND 333272); accessibility reported Core Healthy and the saved `Recovery Session Qualification` project revision 1. Selecting the Open accessibility button returned `coordinate input geometry is unavailable`. A subsequent screenshot showed Paseo content while accessibility still identified TinixCut. No further input was sent; the audio fixture was not opened and no new G50/G51 native qualification was obtained.
 - Native G50 roll/gestures and G51 paired muted/unmuted playback remain OPEN. The saved G48 fixture and recovery copies were not intentionally changed.
+
+### G51 locked export audio tolerance — 2026-11-12 (set before measurement)
+
+Chosen by the Product Owner on 2026-11-12 before any measurement below. Do not relax after seeing results.
+
+- Decoded export audio vs the value expected from the project's gains, fades, automation and speed applied to the source samples.
+- Sample count and channel layout: exact (sample count within one audio frame of the timeline duration).
+- Sample peak: ±**0.5 dB**. Integrated loudness (EBU R128): ±**0.5 LU**.
+- Envelope: RMS in 50 ms windows at fade, crossfade and automation points: ±**1 dB**.
+- Detach/link: no doubled audio (the detached pair must not exceed the single-source level by more than the peak tolerance).

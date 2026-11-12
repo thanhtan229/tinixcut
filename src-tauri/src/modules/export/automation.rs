@@ -116,6 +116,10 @@ pub struct LayerVideoAutomation {
     pub layer_index: usize,
     pub command_file: PathBuf,
     pub escaped_command_file: String,
+    /// Fixed square output of the layer's `rotate` filter, large enough for the
+    /// largest scaled frame in the clip. FFmpeg evaluates rotate's `ow`/`oh` once,
+    /// so a per-frame size would crop scaled-up frames and misplace the overlay.
+    pub rotate_box: u32,
 }
 
 /// Transition branch automation schedule metadata
@@ -285,22 +289,28 @@ impl ExportAutomationSchedule {
 
             let base_w = plan.width as f32;
             let base_h = plan.height as f32;
-            // Emit runtime command for frames n > start_frame using midpoint dispatch
-            for n in (start_frame + 1)..=end_frame {
+
+            // Evaluate every frame first: the rotate box must cover the largest
+            // scaled frame before any overlay position can be computed against it.
+            struct FrameSample {
+                t_mid: f64,
+                render_w: u32,
+                render_h: u32,
+                pos_x: f32,
+                pos_y: f32,
+                angle_rad: f32,
+                opacity: f32,
+            }
+            let mut frames = Vec::new();
+            // Include the start frame: it sets the filter's initial size.
+            for n in start_frame..=end_frame {
                 let t_prev = (n - 1) as f64 / fps;
                 let t_curr = n as f64 / fps;
-                let t_mid = (t_prev + t_curr) / 2.0;
-
                 let timeline_time = RationalTime::from_frames(n, plan.frame_rate);
                 let clip_offset = timeline_time - layer.timeline_range.start;
 
-                let pos_x = layer.evaluate_property(KeyframeProperty::PositionX, clip_offset);
-                let pos_y = layer.evaluate_property(KeyframeProperty::PositionY, clip_offset);
                 let scale_x = layer.evaluate_property(KeyframeProperty::ScaleX, clip_offset);
                 let scale_y = layer.evaluate_property(KeyframeProperty::ScaleY, clip_offset);
-                let rotation = layer.evaluate_property(KeyframeProperty::Rotation, clip_offset);
-                let opacity = layer.effective_opacity_at(clip_offset);
-
                 // Match the same source-aware Fit/Fill geometry used by the
                 // static composition and native preview. Using canvas size
                 // here stretches portrait/landscape sources when any visual
@@ -315,22 +325,36 @@ impl ExportAutomationSchedule {
                 if !render_h.is_multiple_of(2) {
                     render_h += 1;
                 }
+                frames.push(FrameSample {
+                    t_mid: (t_prev + t_curr) / 2.0,
+                    render_w,
+                    render_h,
+                    pos_x: layer.evaluate_property(KeyframeProperty::PositionX, clip_offset),
+                    pos_y: layer.evaluate_property(KeyframeProperty::PositionY, clip_offset),
+                    angle_rad: layer.evaluate_property(KeyframeProperty::Rotation, clip_offset)
+                        * std::f32::consts::PI
+                        / 180.0,
+                    opacity: layer.effective_opacity_at(clip_offset),
+                });
+            }
 
-                // The animated FFmpeg branch uses rotate's fixed diagonal
-                // output box so runtime angle changes do not renegotiate the
-                // overlay input dimensions. Place that padded box around the
-                // intended layer center; positioning by the unrotated source
-                // size shifts even a zero-degree animated layer.
-                let rotated_box = (render_w as f32).hypot(render_h as f32).ceil();
-                let mut overlay_w = rotated_box as u32;
-                let mut overlay_h = overlay_w;
-                if !overlay_w.is_multiple_of(2) {
-                    overlay_w += 1;
-                    overlay_h += 1;
-                }
-                let top_left_x = ((base_w - overlay_w as f32) / 2.0 + pos_x).round() as i32;
-                let top_left_y = ((base_h - overlay_h as f32) / 2.0 + pos_y).round() as i32;
-                let angle_rad = rotation * std::f32::consts::PI / 180.0;
+            // The animated FFmpeg branch rotates into a fixed square box so runtime
+            // angle/scale changes never renegotiate the overlay input size. Place
+            // that box around the intended layer center.
+            let mut rotate_box = frames
+                .iter()
+                .map(|f| (f.render_w as f32).hypot(f.render_h as f32).ceil() as u32)
+                .max()
+                .unwrap_or(2)
+                .max(2);
+            if !rotate_box.is_multiple_of(2) {
+                rotate_box += 1;
+            }
+
+            // Emit runtime commands for frames n > start_frame using midpoint dispatch.
+            for f in frames.iter().skip(1) {
+                let top_left_x = ((base_w - rotate_box as f32) / 2.0 + f.pos_x).round() as i32;
+                let top_left_y = ((base_h - rotate_box as f32) / 2.0 + f.pos_y).round() as i32;
 
                 cmd_content.push_str(&format!(
                     "{:.6} scale@sc_{} w {};\n\
@@ -339,22 +363,22 @@ impl ExportAutomationSchedule {
                      {:.6} colorchannelmixer@ccm_{} aa {:.3};\n\
                      {:.6} overlay@ov_{} x {};\n\
                      {:.6} overlay@ov_{} y {};\n",
-                    t_mid,
+                    f.t_mid,
                     idx,
-                    render_w,
-                    t_mid,
+                    f.render_w,
+                    f.t_mid,
                     idx,
-                    render_h,
-                    t_mid,
+                    f.render_h,
+                    f.t_mid,
                     idx,
-                    angle_rad,
-                    t_mid,
+                    f.angle_rad,
+                    f.t_mid,
                     idx,
-                    opacity,
-                    t_mid,
+                    f.opacity,
+                    f.t_mid,
                     idx,
                     top_left_x,
-                    t_mid,
+                    f.t_mid,
                     idx,
                     top_left_y,
                 ));
@@ -371,6 +395,7 @@ impl ExportAutomationSchedule {
                 layer_index: idx,
                 command_file: cmd_file,
                 escaped_command_file: escaped,
+                rotate_box,
             });
         }
 
@@ -662,6 +687,97 @@ mod tests {
         assert!(commands.contains("scale@sc_0 h 1080;"), "{commands}");
         assert!(commands.contains("overlay@ov_0 x 372;"), "{commands}");
         assert!(commands.contains("overlay@ov_0 y -88;"), "{commands}");
+
+        drop(schedule);
+        let _ = std::fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn animated_scale_uses_one_rotate_box_for_the_largest_frame() {
+        // G52 (2026-11-12): scale 1.0 -> 1.5 with PositionX 0 -> 300 exported the layer
+        // cropped and near the center, because rotate's output size is fixed at the
+        // first frame while overlay positions assumed a per-frame box.
+        let rate = FrameRate::FPS_30;
+        let mut project = Project::new("Animated scale rotate box regression".to_string());
+        project.assets.push(Asset {
+            asset_id: "asset_portrait".to_string(),
+            name: "portrait.mp4".to_string(),
+            path: "portrait.mp4".to_string(),
+            media_kind: MediaKind::Video,
+            duration: Some(RationalTime::from_frames(61, rate)),
+            file_size: 0,
+            dimensions: Some(AssetDimensions {
+                width: 1080,
+                height: 1920,
+            }),
+        });
+        let range = TimeRange::new(
+            RationalTime::from_frames(0, rate),
+            RationalTime::from_frames(61, rate),
+        );
+        let mut item = TimelineItem::new(
+            Some("asset_portrait".to_string()),
+            "Portrait clip".to_string(),
+            ItemKind::Video,
+            range,
+            range,
+        )
+        .expect("valid portrait item");
+        for (property, start, end) in [
+            (KeyframeProperty::ScaleX, 1.0, 1.5),
+            (KeyframeProperty::ScaleY, 1.0, 1.5),
+            (KeyframeProperty::PositionX, 0.0, 300.0),
+        ] {
+            item.keyframes.push(Keyframe::new(
+                property,
+                RationalTime::from_frames(0, rate),
+                start,
+            ));
+            item.keyframes.push(Keyframe::new(
+                property,
+                RationalTime::from_frames(60, rate),
+                end,
+            ));
+        }
+        let mut track = Track::new("Video".to_string(), TrackKind::Video);
+        track.items.push(item);
+        project.tracks.push(track);
+
+        let plan = CompositionPlan::from_project(&project).expect("valid composition plan");
+        let layer = &plan.visual_layers[0];
+        let even = |v: f32| {
+            let r = v.round().max(2.0) as u32;
+            r + r % 2
+        };
+        let (w, h) = layer.rendered_size(1920.0, 1080.0, 1.5, 1.5);
+        let mut expected_box = (even(w) as f32).hypot(even(h) as f32).ceil() as u32;
+        expected_box += expected_box % 2;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("tinixcut_g52_rotate_box_{}", uuid::Uuid::new_v4()));
+        let schedule = ExportAutomationSchedule::build(&plan, &temp_dir, 48_000, None)
+            .expect("automation schedule should build");
+        let auto = &schedule.video_layers[0];
+        assert_eq!(auto.rotate_box, expected_box, "box must fit the 1.5x frame");
+
+        let commands = std::fs::read_to_string(&auto.command_file).expect("command file");
+        let last_x = (1920 - expected_box as i32) / 2 + 300;
+        let last_y = (1080 - expected_box as i32) / 2;
+        assert!(
+            commands.contains(&format!("overlay@ov_0 x {last_x};")),
+            "{commands}"
+        );
+        assert!(
+            commands.contains(&format!("overlay@ov_0 y {last_y};")),
+            "{commands}"
+        );
+        // Every frame is positioned against the same box: at scale 1.0 (frame 1) the
+        // x offset is still relative to the large box, not the small frame.
+        let first_x = ((1920.0 - expected_box as f32) / 2.0 + 5.0).round() as i32;
+        assert!(
+            commands.contains(&format!("overlay@ov_0 x {first_x};")),
+            "{commands}"
+        );
 
         drop(schedule);
         let _ = std::fs::remove_dir(temp_dir);
