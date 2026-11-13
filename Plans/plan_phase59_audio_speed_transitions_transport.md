@@ -206,3 +206,21 @@ Dev build driven through the CDP harness, project `p59 mix` (fixtures from `src-
 **Defect found and fixed**: the status line said `Set Speed ([object Object])` for custom speeds; it now uses `formatClipSpeed`.
 
 **Not verified (still open)**: the Keys dialog contents and remapping, ruler mark rendering, the Alt+I/Alt+O clear keys, `trans.tcproj` WipeLeft preview rendering in WebView2, ducked preview audio, and Delete In-Out execution. The G52 parity claim is unchanged.
+
+## 10. Native UI check, continued — 2026-11-13
+
+Same harness and fixtures (`p59 mix`, `p59 trans`).
+
+**Observed working**
+
+- Keys dialog lists all 19 actions with their chords. Remapping Set In from `I` to `U` and saving: `I` no longer sets a mark, `U` then `O` sets the range (Loop becomes enabled).
+- Ruler shows the range band and In/Out point markers (In 65 and Out 122: band 171 px, markers at the expected frames); `Alt+O` clears the Out mark and removes the band.
+- Delete In-Out (frames 65 to 122) is one transaction (rev 0 to 1) over the three tracks: Red 180 to 65+58, Music 240 to 65+118, Voice (60..150) to 5+28 frames. The numbers match the expected ripple.
+- WipeLeft preview on `p59 trans` (transition centred on the cut, frames 75 to 105): blue share of the canvas row at frames 80, 90, 100 is 0.167, 0.499, 0.832 against 5/30, 15/30, 25/30 expected; 0 at frame 60 and 0.998 at frame 110. Measured on screenshots of the WebView2 canvas (`artifacts/phase59/native/wipe/`).
+
+**Harness and product notes**
+
+- A stale `mix.tcproj.recovery` (revision 6, left by the first session) made every later edit show "Recovery save failed: Project revision conflict" and blocked opening another project until it was deleted. The conflict check is intended protection, but the editor gives no way out of this state besides deleting the file. Not changed here.
+- Keyboard shortcuts are ignored while the "Unsaved projects recovered" dialog is open (by design).
+
+**Still not verified**: ducked preview audio while playing, `Alt+I`, reversed-clip behaviour in the preview, Redo of a Delete In-Out after reload, export parity of the WebView2 transition (only formula plus separate FFmpeg measurements).
