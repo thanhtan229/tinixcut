@@ -1472,6 +1472,7 @@ fn project_export_preflight(
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
     loudness: Option<modules::media::loudness::LoudnessTarget>,
+    range: Option<modules::export::ExportRange>,
 ) -> Result<ExportPreflightReport, String> {
     let snapshot = {
         let engine = state.0.lock().map_err(|error| error.to_string())?;
@@ -1499,6 +1500,9 @@ fn project_export_preflight(
     if let Some(target) = loudness {
         profile.loudness = Some(target);
     }
+    if let Some(selection) = range {
+        profile.range = Some(selection);
+    }
     ExportEngine::preflight(&snapshot, &target, &profile).map_err(|error| error.to_string())
 }
 
@@ -1510,6 +1514,7 @@ fn project_export(
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
     loudness: Option<modules::media::loudness::LoudnessTarget>,
+    range: Option<modules::export::ExportRange>,
 ) -> Result<ExportReport, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
     let snapshot = engine.service.project();
@@ -1535,6 +1540,9 @@ fn project_export(
     if let Some(target) = loudness {
         prof.loudness = Some(target);
     }
+    if let Some(selection) = range {
+        prof.range = Some(selection);
+    }
     prof.validate_for_project(&snapshot.settings)
         .map_err(|error| error.to_string())?;
     ExportEngine::render_snapshot(snapshot, &target, &prof, None).map_err(|e| e.to_string())
@@ -1548,6 +1556,7 @@ fn project_export_start(
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
     loudness: Option<modules::media::loudness::LoudnessTarget>,
+    range: Option<modules::export::ExportRange>,
 ) -> Result<ExportStartReceipt, String> {
     let snapshot = {
         let engine = state.0.lock().map_err(|error| error.to_string())?;
@@ -1574,6 +1583,9 @@ fn project_export_start(
     // The loudness target is an output setting chosen next to the preset.
     if let Some(target) = loudness {
         profile.loudness = Some(target);
+    }
+    if let Some(selection) = range {
+        profile.range = Some(selection);
     }
     profile
         .validate_for_project(&snapshot.settings)

@@ -16,6 +16,9 @@ interface TimelineProps {
   primarySelectedItemId?: string | null;
   selectedTransitionId?: string | null;
   playheadFrame: number;
+  /** Transient In/Out marks in project frames (not persisted). */
+  markIn?: number | null;
+  markOut?: number | null;
   snapEnabled?: boolean;
   onToggleSnapping?: () => void;
   onSelectItem: (itemId: string | null, isCtrl?: boolean) => void;
@@ -70,6 +73,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   primarySelectedItemId,
   selectedTransitionId,
   playheadFrame,
+  markIn = null,
+  markOut = null,
   snapEnabled = true,
   onToggleSnapping,
   onSelectItem,
@@ -858,6 +863,41 @@ export const Timeline: React.FC<TimelineProps> = ({
               </g>
             ))}
           </svg>
+          {markIn != null && markOut != null && markOut > markIn && (
+            <div
+              aria-label={`In/Out range, frames ${markIn} to ${markOut}`}
+              style={{
+                position: "absolute",
+                zIndex: 22,
+                top: 0,
+                height: "100%",
+                left: `${HEADER_WIDTH + markIn * zoom}px`,
+                width: `${(markOut - markIn) * zoom}px`,
+                background: "rgba(59, 130, 246, 0.28)",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+          {([["In", markIn], ["Out", markOut]] as const).map(([label, mark]) =>
+            mark == null ? null : (
+              <div
+                key={`mark-${label}`}
+                aria-label={`${label} point at frame ${mark}`}
+                title={`${label} point — frame ${mark}`}
+                style={{
+                  position: "absolute",
+                  zIndex: 27,
+                  top: 0,
+                  height: "100%",
+                  left: `${HEADER_WIDTH + mark * zoom - (label === "Out" ? 6 : 0)}px`,
+                  width: "6px",
+                  borderLeft: label === "In" ? "2px solid #60a5fa" : undefined,
+                  borderRight: label === "Out" ? "2px solid #60a5fa" : undefined,
+                  pointerEvents: "none",
+                }}
+              />
+            )
+          )}
           {(project?.markers ?? []).map((marker: ProjectMarker) => {
             const frame = rationalTimeToFrames(marker.position, project!.settings.frame_rate);
             return (

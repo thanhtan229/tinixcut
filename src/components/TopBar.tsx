@@ -35,6 +35,14 @@ interface TopBarProps {
   onExportPresetChange: (preset: ExportPreset) => void;
   loudnessPreset: string;
   onLoudnessPresetChange: (value: string) => void;
+  hasInOutRange: boolean;
+  exportInOutOnly: boolean;
+  onExportInOutOnlyChange: (value: boolean) => void;
+  loopInOut: boolean;
+  onLoopInOutChange: (value: boolean) => void;
+  onRippleDeleteInOut: () => void;
+  onOpenShortcuts: () => void;
+  shuttleLabel: string;
 }
 
 const canvasPresets = [
@@ -76,6 +84,14 @@ export const TopBar: React.FC<TopBarProps> = ({
   onExportPresetChange,
   loudnessPreset,
   onLoudnessPresetChange,
+  hasInOutRange,
+  exportInOutOnly,
+  onExportInOutOnlyChange,
+  loopInOut,
+  onLoopInOutChange,
+  onRippleDeleteInOut,
+  onOpenShortcuts,
+  shuttleLabel,
 }) => {
   const currentCanvasValue = project ? `${project.settings.width}x${project.settings.height}` : "";
   const usesKnownPreset = canvasPresets.some((preset) => preset.value === currentCanvasValue);
@@ -226,6 +242,38 @@ export const TopBar: React.FC<TopBarProps> = ({
             ))}
           </select>
         </label>
+        <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11 }} title="Export only the range between the In and Out points (set with I and O)">
+          <input
+            type="checkbox"
+            aria-label="Export In-Out range only"
+            checked={exportInOutOnly}
+            disabled={!project}
+            onChange={(event) => onExportInOutOnlyChange(event.currentTarget.checked)}
+          />
+          In–Out
+        </label>
+        <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11 }} title="Loop playback between the In and Out points">
+          <input
+            type="checkbox"
+            aria-label="Loop In-Out playback"
+            checked={loopInOut}
+            disabled={!hasInOutRange}
+            onChange={(event) => onLoopInOutChange(event.currentTarget.checked)}
+          />
+          Loop
+        </label>
+        <button
+          className="btn-action"
+          onClick={onRippleDeleteInOut}
+          disabled={!project || !hasInOutRange}
+          title="Remove the In–Out range from every unlocked track and close the gap"
+        >
+          Delete In–Out
+        </button>
+        <button className="btn-action" onClick={onOpenShortcuts} title="View and change keyboard shortcuts">
+          Keys
+        </button>
+        {shuttleLabel && <span aria-label="Shuttle speed" style={{ fontSize: 11 }}>{shuttleLabel}</span>}
         <button
           className="btn-action"
           onClick={onExportProject}

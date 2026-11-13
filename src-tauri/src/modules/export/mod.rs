@@ -113,6 +113,22 @@ pub struct ExportProfile {
     /// Optional integrated-loudness target; `None` leaves the mix exactly as rendered.
     #[serde(default)]
     pub loudness: Option<LoudnessTarget>,
+    /// Optional timeline range to export (an In/Out selection); `None` exports everything.
+    #[serde(default)]
+    pub range: Option<ExportRange>,
+}
+
+/// Half-open frame range `[start_frame, end_frame)` at the project frame rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRange {
+    pub start_frame: i64,
+    pub end_frame: i64,
+}
+
+impl ExportRange {
+    pub fn frames(&self) -> i64 {
+        self.end_frame - self.start_frame
+    }
 }
 
 impl Default for ExportProfile {
@@ -128,6 +144,7 @@ impl Default for ExportProfile {
             audio_bitrate: "192k".to_string(),
             audio_sample_rate: 48000,
             loudness: None,
+            range: None,
         }
     }
 }
@@ -171,6 +188,13 @@ impl ExportProfile {
         }
         if let Some(target) = &self.loudness {
             target.validate().map_err(ExportError::UnsupportedProfile)?;
+        }
+        if let Some(range) = &self.range {
+            if range.start_frame < 0 || range.end_frame <= range.start_frame {
+                return Err(ExportError::UnsupportedProfile(
+                    "Export range must satisfy 0 <= start < end".to_string(),
+                ));
+            }
         }
         if self.crf > 51 {
             return Err(ExportError::UnsupportedProfile(
@@ -271,6 +295,14 @@ fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Export Engine coordinating snapshot freeze, FFmpeg execution, and atomic promotion
 pub struct ExportEngine;
+
+/// Length of the exported output: the selected range, or the whole timeline.
+fn export_span_seconds(plan: &CompositionPlan, profile: &ExportProfile) -> f64 {
+    match &profile.range {
+        Some(range) => range.frames() as f64 / plan.frame_rate.as_f64(),
+        None => plan.duration.to_seconds(),
+    }
+}
 
 /// Applies the profile's loudness target to the rendered temporary file. Returns `None` when no
 /// target was requested. A measurement or encode failure is an export error, never a silent skip.
@@ -565,6 +597,15 @@ impl ExportEngine {
         // Compile normalized CompositionPlan from the frozen project snapshot
         let mut plan = CompositionPlan::from_project(snapshot)
             .map_err(|e| ExportError::Composition(e.to_string()))?;
+        if let Some(range) = &profile.range {
+            let total = plan.duration.rescaled_to(plan.frame_rate).value;
+            if range.end_frame > total {
+                return Err(ExportError::UnsupportedProfile(format!(
+                    "Export range ends at frame {} but the timeline has {} frames",
+                    range.end_frame, total
+                )));
+            }
+        }
         on_progress(0.12);
 
         // Video items are also represented as audio layers so clips with embedded
@@ -842,6 +883,17 @@ impl ExportEngine {
             let output_argument = args
                 .pop()
                 .expect("FFmpeg export arguments always end with an output path");
+            if let Some(range) = &profile.range {
+                // Output-side seek/limit: frames before the range are rendered but not
+                // encoded, so picture and audio stay in sync and the result is frame exact.
+                let rate = plan.frame_rate.as_f64();
+                args.extend([
+                    "-ss".to_string(),
+                    format!("{:.6}", range.start_frame as f64 / rate),
+                    "-t".to_string(),
+                    format!("{:.6}", range.frames() as f64 / rate),
+                ]);
+            }
             args.extend([
                 "-nostats".to_string(),
                 "-stats_period".to_string(),
@@ -905,7 +957,7 @@ impl ExportEngine {
             let mut stderr_str = String::new();
 
             loop {
-                let duration = plan.duration.to_seconds().max(0.001);
+                let duration = export_span_seconds(&plan, profile).max(0.001);
                 for out_time in progress_rx.try_iter() {
                     let encoder_fraction = (out_time / duration).clamp(0.0, 1.0);
                     let candidate_fraction =
@@ -1005,7 +1057,7 @@ impl ExportEngine {
 
                 let render_time_ms = start_time.elapsed().as_millis();
                 let file_size_bytes = metadata.len();
-                let duration_secs = plan.duration.to_seconds();
+                let duration_secs = export_span_seconds(&plan, profile);
 
                 schedule.guard.cleanup();
                 on_progress(1.0);

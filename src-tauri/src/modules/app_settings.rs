@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +7,9 @@ use std::path::{Path, PathBuf};
 pub const APP_SETTINGS_SCHEMA_VERSION: u32 = 1;
 const MAX_RECENT_PROJECTS: usize = 20;
 const MAX_SETTING_STRING_LENGTH: usize = 4096;
+const MAX_SHORTCUT_ACTIONS: usize = 64;
+const MAX_CHORDS_PER_ACTION: usize = 4;
+const MAX_CHORD_LENGTH: usize = 32;
 
 /// Whether the preview switches decodable video to seek-optimized proxies.
 /// `Off` keeps proxies as a codec-compatibility fallback only, so enabling the
@@ -30,6 +34,10 @@ pub struct AppSettings {
     /// Added within schema v1; files written before it load as `Off`.
     #[serde(default)]
     pub preview_proxy_mode: PreviewProxyMode,
+    /// Keyboard shortcut overrides: action id -> chords. Actions not listed keep the built-in
+    /// chords; conflicts are rejected by the editor before they are saved.
+    #[serde(default)]
+    pub shortcut_overrides: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AppSettings {
@@ -42,6 +50,7 @@ impl Default for AppSettings {
             recent_projects: Vec::new(),
             legacy_browser_settings_migrated: false,
             preview_proxy_mode: PreviewProxyMode::Off,
+            shortcut_overrides: BTreeMap::new(),
         }
     }
 }
@@ -74,6 +83,29 @@ impl AppSettings {
             return Err(format!(
                 "Recent projects must contain at most {MAX_RECENT_PROJECTS} valid paths"
             ));
+        }
+        if self.shortcut_overrides.len() > MAX_SHORTCUT_ACTIONS {
+            return Err("Too many shortcut overrides".to_string());
+        }
+        for (action, chords) in &self.shortcut_overrides {
+            if action.is_empty()
+                || action.len() > MAX_CHORD_LENGTH
+                || !action
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                return Err(format!("Invalid shortcut action id '{action}'"));
+            }
+            if chords.is_empty()
+                || chords.len() > MAX_CHORDS_PER_ACTION
+                || chords
+                    .iter()
+                    .any(|chord| chord.is_empty() || chord.len() > MAX_CHORD_LENGTH)
+            {
+                return Err(format!(
+                    "Shortcut '{action}' needs 1 to {MAX_CHORDS_PER_ACTION} chords of at most {MAX_CHORD_LENGTH} characters"
+                ));
+            }
         }
         Ok(())
     }
@@ -212,6 +244,33 @@ mod tests {
         assert!(error.contains("the file was preserved"));
         assert_eq!(fs::read(&path).unwrap(), b"{broken");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shortcut_overrides_default_to_empty_and_are_validated() {
+        let legacy: AppSettings = serde_json::from_str(
+            r#"{"schemaVersion":1,"whisperCliPath":null,"whisperModelPath":null,"transcriptionLanguage":"auto","recentProjects":[],"legacyBrowserSettingsMigrated":false}"#,
+        )
+        .unwrap();
+        assert!(legacy.shortcut_overrides.is_empty());
+        let mut settings = AppSettings::default();
+        settings
+            .shortcut_overrides
+            .insert("play_pause".into(), vec!["Space".into()]);
+        assert!(settings.validate().is_ok());
+        settings
+            .shortcut_overrides
+            .insert("bad action".into(), vec!["X".into()]);
+        assert!(settings.validate().is_err());
+        settings.shortcut_overrides.remove("bad action");
+        settings
+            .shortcut_overrides
+            .insert("zoom_in".into(), Vec::new());
+        assert!(settings.validate().is_err());
+        settings
+            .shortcut_overrides
+            .insert("zoom_in".into(), vec!["".into()]);
+        assert!(settings.validate().is_err());
     }
 
     #[test]

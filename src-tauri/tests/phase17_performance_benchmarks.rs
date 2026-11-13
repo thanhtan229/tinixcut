@@ -1199,6 +1199,7 @@ fn test_p17_fixture_a_cpu_libx264_export_qualification() {
         audio_bitrate: "192k".to_string(),
         audio_sample_rate: 48000,
         loudness: None,
+        range: None,
     };
 
     let out_720 = dir.join("bench_export_720p.mp4");
@@ -1275,6 +1276,7 @@ fn test_p17_fixture_a_cpu_libx264_export_qualification() {
         audio_bitrate: "192k".to_string(),
         audio_sample_rate: 48000,
         loudness: None,
+        range: None,
     };
 
     let out_1080 = dir.join("bench_export_1080p.mp4");

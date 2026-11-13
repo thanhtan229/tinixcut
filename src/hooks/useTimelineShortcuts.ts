@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Project, TimelineItem } from "../types/project";
+import { DEFAULT_SHORTCUTS, resolveShortcut, type ShortcutMap } from "./shortcutMap";
 
 export interface TimelineShortcutsCallbacks {
   enabled?: boolean;
@@ -19,6 +20,13 @@ export interface TimelineShortcutsCallbacks {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onToggleSnapping: () => void;
+  /** Effective shortcut map (built-in chords plus the user's overrides). */
+  shortcuts?: ShortcutMap;
+  onShuttle?: (key: "J" | "K" | "L") => void;
+  onMarkIn?: () => void;
+  onMarkOut?: () => void;
+  onClearIn?: () => void;
+  onClearOut?: () => void;
 }
 
 export function shouldSuppressTimelineShortcutsForTarget(
@@ -100,10 +108,9 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (callbacksRef.current.enabled === false) return;
 
-      const isCtrl = e.ctrlKey || e.metaKey;
-      const isShift = e.shiftKey;
-      const isAlt = e.altKey;
-      const isClipboardShortcut = isCtrl && !isShift && !isAlt && ["c", "C", "v", "V"].includes(e.key);
+      const action = resolveShortcut(e, callbacksRef.current.shortcuts ?? DEFAULT_SHORTCUTS);
+      if (action === null) return;
+      const isClipboardShortcut = action === "copy" || action === "paste";
       const dialogIsOpen = typeof document !== "undefined" &&
         Boolean(document.querySelector(".dialog-backdrop, [role='dialog']"));
 
@@ -120,28 +127,28 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       const cb = callbacksRef.current;
 
       // Ctrl/Cmd+C and Ctrl/Cmd+V -> same-project clip clipboard
-      if (isCtrl && !isShift && !isAlt && (e.key === "c" || e.key === "C")) {
+      if (action === "copy") {
         if (cb.selectedItemIds.size > 0) {
           e.preventDefault();
           cb.onCopySelected();
         }
         return;
       }
-      if (isCtrl && !isShift && !isAlt && (e.key === "v" || e.key === "V")) {
+      if (action === "paste") {
         e.preventDefault();
         cb.onPasteSelected();
         return;
       }
 
       // Space -> Play / Pause
-      if (e.code === "Space" && !isCtrl && !isShift && !isAlt) {
+      if (action === "play_pause") {
         e.preventDefault();
         cb.onPlayPauseToggle();
         return;
       }
 
       // Ctrl+K -> Split at Playhead
-      if (isCtrl && !isShift && !isAlt && (e.key === "k" || e.key === "K")) {
+      if (action === "split") {
         e.preventDefault();
         const clipToSplit = findClipForSplitAtPlayhead(
           cb.project,
@@ -155,7 +162,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // Ctrl+D -> Duplicate Primary
-      if (isCtrl && !isShift && !isAlt && (e.key === "d" || e.key === "D")) {
+      if (action === "duplicate") {
         e.preventDefault();
         if (cb.primarySelectedItemId) {
           cb.onDuplicatePrimary(cb.primarySelectedItemId);
@@ -164,7 +171,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // Shift+Delete -> Ripple Delete Primary
-      if (isShift && !isCtrl && !isAlt && (e.key === "Delete" || e.code === "Delete")) {
+      if (action === "ripple_delete") {
         e.preventDefault();
         if (cb.primarySelectedItemId) {
           cb.onRippleDeletePrimary(cb.primarySelectedItemId);
@@ -173,7 +180,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // Delete / Backspace -> Delete Selected Items
-      if (!isShift && !isCtrl && !isAlt && (e.key === "Delete" || e.key === "Backspace")) {
+      if (action === "delete") {
         e.preventDefault();
         if (cb.selectedItemIds.size > 0) {
           cb.onDeleteSelected(Array.from(cb.selectedItemIds));
@@ -182,7 +189,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // [ -> Normal Trim Head to Playhead (non-ripple)
-      if (!isCtrl && !isShift && !isAlt && e.key === "[") {
+      if (action === "trim_head") {
         e.preventDefault();
         if (cb.primarySelectedItemId && cb.project) {
           for (const track of cb.project.tracks) {
@@ -206,7 +213,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // ] -> Normal Trim Tail to Playhead (non-ripple)
-      if (!isCtrl && !isShift && !isAlt && e.key === "]") {
+      if (action === "trim_tail") {
         e.preventDefault();
         if (cb.primarySelectedItemId && cb.project) {
           for (const track of cb.project.tracks) {
@@ -228,23 +235,38 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       }
 
       // = / + -> Timeline Zoom In
-      if (!isCtrl && !isAlt && (e.key === "=" || e.key === "+")) {
+      if (action === "zoom_in") {
         e.preventDefault();
         cb.onZoomIn();
         return;
       }
 
       // - -> Timeline Zoom Out
-      if (!isCtrl && !isAlt && (e.key === "-" || e.key === "_")) {
+      if (action === "zoom_out") {
         e.preventDefault();
         cb.onZoomOut();
         return;
       }
 
       // S -> Toggle Snapping (ephemeral)
-      if (!isCtrl && !isShift && !isAlt && (e.key === "s" || e.key === "S")) {
+      if (action === "toggle_snapping") {
         e.preventDefault();
         cb.onToggleSnapping();
+        return;
+      }
+
+      // J / K / L shuttle and I / O marks (see shuttle.ts and inOutRange.ts)
+      if (action === "shuttle_reverse" || action === "shuttle_pause" || action === "shuttle_forward") {
+        e.preventDefault();
+        cb.onShuttle?.(action === "shuttle_reverse" ? "J" : action === "shuttle_pause" ? "K" : "L");
+        return;
+      }
+      if (action === "mark_in" || action === "mark_out" || action === "clear_in" || action === "clear_out") {
+        e.preventDefault();
+        if (action === "mark_in") cb.onMarkIn?.();
+        else if (action === "mark_out") cb.onMarkOut?.();
+        else if (action === "clear_in") cb.onClearIn?.();
+        else cb.onClearOut?.();
         return;
       }
     };

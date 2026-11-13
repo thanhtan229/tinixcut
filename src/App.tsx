@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
@@ -61,6 +61,23 @@ import {
 } from "./utils/timelineSelection";
 import { useTimelineShortcuts } from "./hooks/useTimelineShortcuts";
 import { cutTransitionLabel } from "./components/transitionGeometry";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import {
+  effectiveShortcuts,
+  overridesFromMap,
+  type ShortcutMap,
+} from "./hooks/shortcutMap";
+import {
+  nextShuttle,
+  SHUTTLE_IDLE,
+  SHUTTLE_TICK_MS,
+  shuttleFramesPerTick,
+  stepPlayhead,
+  usesRealPlayback,
+  describeShuttle,
+  type ShuttleState,
+} from "./hooks/shuttle";
+import { exportRangeFor, planRippleDeleteRange, selectedSpan, setMark, type InOutMarks } from "./hooks/inOutRange";
 import "./App.css";
 
 function timelineFramesToSourceFrames(
@@ -139,6 +156,13 @@ export function App() {
   const [playheadFrame, setPlayheadFrame] = useState<number>(0);
   const timelineClipboardRef = useRef<TimelineClipboard | null>(null);
   const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
+  const [shortcutOverrides, setShortcutOverrides] = useState<Record<string, string[]>>({});
+  const shortcutMap = useMemo(() => effectiveShortcuts(shortcutOverrides), [shortcutOverrides]);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [marks, setMarks] = useState<InOutMarks>({ markIn: null, markOut: null });
+  const [loopInOut, setLoopInOut] = useState(false);
+  const [exportInOutOnly, setExportInOutOnly] = useState(false);
+  const [shuttle, setShuttle] = useState<ShuttleState>(SHUTTLE_IDLE);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackTrackPeaks, setPlaybackTrackPeaks] = useState<Record<string, number>>({});
   const [zoom, setZoom] = useState<number>(3);
@@ -186,7 +210,87 @@ export function App() {
   const gapClosePlan = getTimelineGapClosePlan(project, selection.primarySelectedItemId);
   const requestPlaybackToggle = () => {
     if (!isPlaying) audioUnlockRef.current();
+    setShuttle(SHUTTLE_IDLE);
     setIsPlaying((playing) => !playing);
+  };
+
+  const timelineFrames = useMemo(
+    () =>
+      project
+        ? Math.max(
+            0,
+            ...project.tracks.flatMap((track) =>
+              track.items.map((item) => item.timeline_range.start.value + item.timeline_range.duration.value)
+            )
+          )
+        : 0,
+    [project]
+  );
+  const playheadRef = useRef(playheadFrame);
+  playheadRef.current = playheadFrame;
+
+  const handleShuttleKey = (key: "J" | "K" | "L") => {
+    const next = nextShuttle(shuttle, key);
+    setShuttle(next);
+    if (usesRealPlayback(next)) {
+      if (!isPlaying) {
+        audioUnlockRef.current();
+        setIsPlaying(true);
+      }
+    } else if (isPlaying) {
+      setIsPlaying(false);
+    }
+  };
+
+  // Reverse and fast-forward above 1x step the playhead on a timer (audio is muted because
+  // normal playback is stopped); 1x forward uses the regular playback path.
+  useEffect(() => {
+    if (shuttleFramesPerTick(shuttle) === 0) return undefined;
+    const timer = window.setInterval(() => {
+      const result = stepPlayhead(playheadRef.current, shuttle, timelineFrames);
+      setPlayheadFrame(result.playhead);
+      if (result.stopped) setShuttle(SHUTTLE_IDLE);
+    }, SHUTTLE_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [shuttle, timelineFrames]);
+
+  // Loop playback between the In and Out marks.
+  useEffect(() => {
+    if (!loopInOut || !isPlaying) return;
+    const span = selectedSpan(marks);
+    if (span && playheadFrame >= span.end) setPlayheadFrame(span.start);
+  }, [loopInOut, isPlaying, marks, playheadFrame]);
+
+  const handleRippleDeleteRange = () => {
+    const span = selectedSpan(marks);
+    if (!project || !span) {
+      setStatusMsg("Set an In and an Out point first (I and O).");
+      return;
+    }
+    const plan = planRippleDeleteRange(
+      project,
+      span,
+      () => `itm_range_${crypto.randomUUID().replace(/-/g, "")}`
+    );
+    if (plan.operations.length === 0) {
+      setStatusMsg("Nothing to delete between the In and Out points.");
+      return;
+    }
+    const skipped = plan.skippedLockedTracks.length
+      ? ` (${plan.skippedLockedTracks.length} locked track(s) skipped)`
+      : "";
+    executeCommandEnvelope(
+      plan.operations,
+      `Ripple delete In–Out: ${plan.affectedClips} clip(s)${skipped}`
+    );
+    setMarks({ markIn: null, markOut: null });
+    setPlayheadFrame(span.start);
+  };
+
+  const persistShortcuts = async (map: ShortcutMap) => {
+    const current = await editorApi.getAppSettings();
+    const saved = await editorApi.saveAppSettings({ ...current, shortcutOverrides: overridesFromMap(map) });
+    setShortcutOverrides(saved.shortcutOverrides ?? {});
   };
 
   const hydrateProjectSession = async () => {
@@ -242,7 +346,10 @@ export function App() {
     hydrateProjectSession();
 
     editorApi.getAppSettings().then((settings) => {
-      if (!cancelled) setPreviewProxyMode(settings.previewProxyMode);
+      if (!cancelled) {
+        setPreviewProxyMode(settings.previewProxyMode);
+        setShortcutOverrides(settings.shortcutOverrides ?? {});
+      }
     }).catch((error) => {
       if (!cancelled) setStatusMsg(`Could not read app settings; preview proxies stay off: ${error}`);
     });
@@ -738,14 +845,19 @@ export function App() {
       }
       setStatusMsg("Checking media, project settings, output path and available disk space...");
       const loudnessTarget = LOUDNESS_PRESET_OPTIONS.find((option) => option.value === loudnessPreset)?.target ?? null;
-      const preflight = await editorApi.preflightExport(chosen, exportPreset, loudnessTarget);
+      const exportRange = exportInOutOnly ? exportRangeFor(marks, timelineFrames) : null;
+      if (exportInOutOnly && !exportRange) {
+        setStatusMsg("Export In–Out is on, but the In and Out points do not select a range. Set them with I and O.");
+        return;
+      }
+      const preflight = await editorApi.preflightExport(chosen, exportPreset, loudnessTarget, exportRange);
       const preset = EXPORT_PRESET_OPTIONS.find((option) => option.value === exportPreset);
       const diskSpace = `${(preflight.availableDiskBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
       const replacement = preflight.outputExists ? " Existing output will be replaced only after a successful render." : "";
       setStatusMsg(
         `Preflight passed: ${preflight.sourceCount} source(s), ${preflight.width}×${preflight.height}, ${preflight.durationSecs.toFixed(1)}s; ${diskSpace} currently free.${replacement} Rendering ${preset?.label ?? "Balanced"} snapshot...`
       );
-      const receipt = await editorApi.startProjectExport(chosen, exportPreset, loudnessTarget);
+      const receipt = await editorApi.startProjectExport(chosen, exportPreset, loudnessTarget, exportRange);
       setActiveExport({ jobId: receipt.jobId, outputPath: receipt.outputPath, progress: 0, cancelling: false });
       setStatusMsg("Export started. Progress and cancellation are available in the toolbar.");
     } catch (err) {
@@ -2788,6 +2900,12 @@ export function App() {
     onZoomIn: () => setZoom((z) => Math.min(10, z + 0.5)),
     onZoomOut: () => setZoom((z) => Math.max(1, z - 0.5)),
     onToggleSnapping: () => setSnapEnabled((s) => !s),
+    shortcuts: shortcutMap,
+    onShuttle: handleShuttleKey,
+    onMarkIn: () => setMarks((current) => setMark(current, "in", playheadFrame)),
+    onMarkOut: () => setMarks((current) => setMark(current, "out", playheadFrame)),
+    onClearIn: () => setMarks((current) => ({ ...current, markIn: null })),
+    onClearOut: () => setMarks((current) => ({ ...current, markOut: null })),
   });
 
   if (!isInitialized) {
@@ -2875,6 +2993,14 @@ export function App() {
         onExportPresetChange={setExportPreset}
         loudnessPreset={loudnessPreset}
         onLoudnessPresetChange={setLoudnessPreset}
+        hasInOutRange={selectedSpan(marks) !== null}
+        exportInOutOnly={exportInOutOnly}
+        onExportInOutOnlyChange={setExportInOutOnly}
+        loopInOut={loopInOut}
+        onLoopInOutChange={setLoopInOut}
+        onRippleDeleteInOut={handleRippleDeleteRange}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        shuttleLabel={describeShuttle(shuttle)}
         onImportCaptions={handleImportCaptions}
         onExportCaptions={handleExportCaptions}
         onOpenCaptionEditor={() => setIsCaptionEditorOpen(true)}
@@ -3009,6 +3135,8 @@ export function App() {
             primarySelectedItemId={selection.primarySelectedItemId}
             selectedTransitionId={selectedTransitionId}
             playheadFrame={playheadFrame}
+            markIn={marks.markIn}
+            markOut={marks.markOut}
             snapEnabled={snapEnabled}
             onToggleSnapping={() => setSnapEnabled((s) => !s)}
             onSelectItem={handleSelectItem}
@@ -3247,6 +3375,13 @@ export function App() {
         }}
         onBuildTranscriptCut={handleBuildTranscriptCut}
         frameRate={project?.settings.frame_rate ?? { numerator: 30, denominator: 1 }}
+      />
+
+      <ShortcutsDialog
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
+        shortcuts={shortcutMap}
+        onSave={persistShortcuts}
       />
 
       <MediaCacheDialog

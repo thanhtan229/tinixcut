@@ -96,6 +96,8 @@ export interface AppSettings {
   recentProjects: string[];
   legacyBrowserSettingsMigrated: boolean;
   previewProxyMode: "off" | "auto";
+  /** Keyboard shortcut overrides: action id -> chords. */
+  shortcutOverrides: Record<string, string[]>;
 }
 
 export interface AutoCaptionReport {
@@ -565,8 +567,13 @@ export const editorApi = {
     return invoke("project_export", { outputPath, preset });
   },
 
-  async startProjectExport(outputPath: string, preset?: ExportPreset, loudness?: LoudnessTarget | null): Promise<ProjectExportStartReceipt> {
-    return invoke("project_export_start", { outputPath, preset, loudness: loudness ?? undefined });
+  async startProjectExport(
+    outputPath: string,
+    preset?: ExportPreset,
+    loudness?: LoudnessTarget | null,
+    range?: { start_frame: number; end_frame: number } | null
+  ): Promise<ProjectExportStartReceipt> {
+    return invoke("project_export_start", { outputPath, preset, loudness: loudness ?? undefined, range: range ?? undefined });
   },
 
   async getProjectExportStatus(jobId: string): Promise<ProjectExportJobStatus> {
@@ -577,7 +584,12 @@ export const editorApi = {
     return invoke("project_export_cancel", { jobId });
   },
 
-  async preflightExport(outputPath: string, preset?: ExportPreset, loudness?: LoudnessTarget | null): Promise<{
+  async preflightExport(
+    outputPath: string,
+    preset?: ExportPreset,
+    loudness?: LoudnessTarget | null,
+    range?: { start_frame: number; end_frame: number } | null
+  ): Promise<{
     projectId: string;
     projectRevision: number;
     outputPath: string;
@@ -591,7 +603,7 @@ export const editorApi = {
     frameRateDenominator: number;
     warnings: string[];
   }> {
-    return invoke("project_export_preflight", { outputPath, preset, loudness: loudness ?? undefined });
+    return invoke("project_export_preflight", { outputPath, preset, loudness: loudness ?? undefined, range: range ?? undefined });
   },
 
   async importMedia(filePath: string): Promise<unknown> {
