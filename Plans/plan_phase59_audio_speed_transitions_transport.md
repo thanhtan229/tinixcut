@@ -1,6 +1,6 @@
 # Phase 59 — Loudness, ducking, flexible speed, xfade transitions, transport keys
 
-**Status:** IMPLEMENTED 2026-11-13 (59A–59E) with the deviations in section 8. Native UI qualification of the new controls was not run.
+**Status:** IMPLEMENTED 2026-11-13 (59A–59E) with the deviations in section 8. Native UI qualification is partial (section 9).
 **Basis:** second review of the reference repositories (Clypra, blyacut, OpenCut-AI, Mono Cut), recorded in the session of 2026-11-13. Only gaps confirmed in the TinixCut source are included.
 
 ## 1. Objective
@@ -190,3 +190,19 @@ Commits: `2ea9237` (59A), `05ed9df` (59B), `400e8e9` (59C), `f217408` (59D), `e9
 - The new Inspector controls (ducking, custom speed, reverse, transition picker, loudness and In-Out toolbar items, Keys dialog), the CSS rendering of geometric transitions in WebView2, J/K/L stepping and the ruler marks were type-checked and unit-tested but **not exercised in the running app**.
 - Ducking preview audio itself (volume automation applied to playing audio) was not listened to or measured natively; only the shared gain function is tested.
 - Preview/export pixel parity of the geometric transitions was not measured natively.
+
+## 9. Native UI check — 2026-11-13 (partial)
+
+Dev build driven through the CDP harness, project `p59 mix` (fixtures from `src-tauri/tests/phase59_native_fixtures.rs`, 1920x1080 @ 30 fps).
+
+**Observed working**
+
+- Inspector shows SPEED (named select, custom field, Set), REVERSE and DUCKING sections; toolbar shows the loudness selector, In-Out and Loop checkboxes, Delete In-Out and Keys.
+- Ducking checkbox on the Music clip commits "Update ducking" (rev 3 to 4) and reveals depth/attack/release/threshold fields.
+- Reverse on the Red clip commits (rev 4 to 5).
+- Custom speed 3/2 on a clip that uses its whole source is refused with "Speed change would read beyond the available media source range" (correct); 2/3 commits and the selector shows Custom.
+- Key `L` starts shuttle (label "1x") and moves the playhead (199 f reached); `K` stops; `I`/`O` set marks and enable Loop and Delete In-Out.
+
+**Defect found and fixed**: the status line said `Set Speed ([object Object])` for custom speeds; it now uses `formatClipSpeed`.
+
+**Not verified (still open)**: the Keys dialog contents and remapping, ruler mark rendering, the Alt+I/Alt+O clear keys, `trans.tcproj` WipeLeft preview rendering in WebView2, ducked preview audio, and Delete In-Out execution. The G52 parity claim is unchanged.

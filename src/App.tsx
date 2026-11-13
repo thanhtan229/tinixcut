@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
-import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, clipSpeedRatio, CutTransitionKind, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
+import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, clipSpeedRatio, formatClipSpeed, CutTransitionKind, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -2421,7 +2421,7 @@ export function App() {
           },
         },
       ],
-      `Set Speed (${speed})`
+      `Set Speed (${formatClipSpeed(speed)})`
     );
   };
 

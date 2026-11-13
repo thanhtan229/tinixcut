@@ -23,7 +23,7 @@
 - Preview vs export agree on layer **geometry, timing and animation**; they are **not** guaranteed pixel-identical (different resampling).
 - Playback performance qualified on the two published workloads (10 min/100 clip, 30 min/300 clip, Windows 11 reference host). 4K-via-proxy, dropped-frame and GPU figures are not published.
 - Audio export fidelity qualified; live level meter is indicative only.
-- Post-v0.1.0 additions (Phase 58, `Plans/plan_phase58_reference_driven_improvements.md`): per-clip 3D LUT (`.cube`) and chroma key verified against FFmpeg in export; read-only video scopes, YouTube chapter list, audio-based alignment proposals, and MCP safety annotations. Their preview paths (WebGL effect layer, scopes panel) are **not natively qualified** and export is authoritative.
+- Post-v0.1.0 additions (Phase 58, `Plans/plan_phase58_reference_driven_improvements.md`): per-clip 3D LUT (`.cube`) and chroma key verified against FFmpeg in export; read-only video scopes, YouTube chapter list, audio-based alignment proposals, and MCP safety annotations. Their preview paths (WebGL effect layer, scopes panel) are only partly natively qualified (see plan section 9) and export is authoritative.
 
 ## 3. Explicit non-claims (deferred, not hidden)
 
@@ -44,4 +44,4 @@ Native runs use `scripts/qualification/native/` (see its README); Rust and front
 
 ## 6. Phase 59 additions (2026-11-13)
 
-Export loudness targets, per-clip ducking, custom speed (1/8x-8x) and reverse, geometric cut transitions, and In/Out range export are verified on real FFmpeg renders (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 8). Their UI paths (Inspector controls, preview of geometric transitions, J/K/L shuttle, ruler marks, shortcut dialog) are **not natively qualified**. Reverse plays forward in the preview and is limited to 15 s of source; freeze frame is not implemented.
+Export loudness targets, per-clip ducking, custom speed (1/8x-8x) and reverse, geometric cut transitions, and In/Out range export are verified on real FFmpeg renders (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 8). Their UI paths (Inspector controls, preview of geometric transitions, J/K/L shuttle, ruler marks, shortcut dialog) are only partly natively qualified (see plan section 9). Reverse plays forward in the preview and is limited to 15 s of source; freeze frame is not implemented.
