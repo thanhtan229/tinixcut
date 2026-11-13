@@ -2,6 +2,7 @@
 //! Architecture Invariant: Missing media does not delete editorial state.
 //! Clips remain in timeline with offline status until relinked.
 
+pub mod align;
 pub mod cache;
 pub mod captions;
 pub mod chapters;

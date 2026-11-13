@@ -276,7 +276,7 @@ async fn test_p15_ac03_modern_protocol_lifecycle() {
         "Must succeed without initialize"
     );
     let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 35);
+    assert_eq!(tools.len(), 36);
 }
 
 #[tokio::test]
@@ -309,7 +309,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         .send_request("tools/list", serde_json::json!({}))
         .await;
     let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 35, "Must expose exactly 35 tools");
+    assert_eq!(tools.len(), 36, "Must expose exactly 36 tools");
 
     let mut tool_names: Vec<String> = tools
         .iter()
@@ -319,6 +319,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
 
     let expected_tools = vec![
         "tinixcut_apply".to_string(),
+        "tinixcut_audio_align".to_string(),
         "tinixcut_capabilities".to_string(),
         "tinixcut_dry_run".to_string(),
         "tinixcut_edit_plan_canvas".to_string(),
@@ -4280,7 +4281,7 @@ fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
         serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
     assert_eq!(val1["id"], 2);
     let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 35);
+    assert_eq!(tools.len(), 36);
 
     // 3. tinixcut_inspect via real subprocess
     let req2 = serde_json::json!({
@@ -5284,6 +5285,7 @@ async fn test_p58a_every_tool_declares_safety_annotations() {
     let tools = res["result"]["tools"].as_array().expect("tools array");
     let read_only: std::collections::BTreeSet<&str> = [
         "project_compare",
+        "audio_align",
         "project_chapters",
         "frame_scopes",
         "lut_probe",

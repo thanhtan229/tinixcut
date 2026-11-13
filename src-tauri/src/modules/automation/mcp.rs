@@ -533,6 +533,18 @@ pub struct MediaProbeArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioAlignArgs {
+    pub project_path: String,
+    pub reference_item_id: String,
+    /// Clips to align to the reference (at least one).
+    pub item_ids: Vec<String>,
+    /// Audio window analysed from each clip's source in-point, 1..=120 s (default 60).
+    #[serde(default)]
+    pub window_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectChaptersArgs {
     pub project_path: String,
 }
@@ -1910,6 +1922,48 @@ impl TinixCutMcpServer {
             )));
         }
         Ok(tool_ok(&project_compare_report(&left, &right)))
+    }
+
+    #[tool(
+        name = "tinixcut_audio_align",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Propose timeline moves that line other clips up with a reference clip by matching their audio (normalized cross-correlation at 8 kHz). Returns proposals with confidence and never changes the project; apply a confident proposal with a clip move through tinixcut_apply. Clips must be at 1x speed",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::align::AlignmentReport>()
+    )]
+    async fn audio_align(
+        &self,
+        Parameters(params): Parameters<AudioAlignArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_path = PathBuf::from(&params.project_path);
+        let project = match load_project(&project_path) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(tool_error(StructuredError::new(
+                    "PROJECT_LOAD_FAILED",
+                    format!("Failed to load project at {:?}: {}", project_path, e),
+                )));
+            }
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            crate::modules::media::align::propose_alignment(
+                &project,
+                &params.reference_item_id,
+                &params.item_ids,
+                params.window_seconds,
+            )
+        })
+        .await;
+        match result {
+            Ok(Ok(report)) => Ok(tool_ok(&report)),
+            Ok(Err(message)) => Ok(tool_error(StructuredError::new(
+                "AUDIO_ALIGN_FAILED",
+                message,
+            ))),
+            Err(error) => Ok(tool_error(StructuredError::new(
+                "AUDIO_ALIGN_FAILED",
+                format!("Alignment task failed: {error}"),
+            ))),
+        }
     }
 
     #[tool(
