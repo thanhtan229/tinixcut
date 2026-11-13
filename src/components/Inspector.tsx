@@ -28,6 +28,7 @@ import {
   ColorAdjustments,
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
+import { ScopesPanel } from "./ScopesPanel";
 import { TemplateInstanceInspector } from "./TemplateInstanceInspector";
 import { shouldResetInspectorDrafts } from "./inspectorDraftSync";
 
@@ -185,6 +186,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onRemoveAudioCrossfade,
 }) => {
   const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
+  const [scopesOpen, setScopesOpen] = useState(false);
   const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
   const [localCrop, setLocalCrop] = useState<Crop>(selectedItem?.crop ?? { top: 0, bottom: 0, left: 0, right: 0 });
   const [applyTemplateToTrack, setApplyTemplateToTrack] = useState(false);
@@ -374,6 +376,21 @@ export const Inspector: React.FC<InspectorProps> = ({
     );
   }
 
+  const scopesSection = (
+    <section style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "12px" }}>
+      <label style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+        <input
+          type="checkbox"
+          aria-label="Show video scopes"
+          checked={scopesOpen}
+          onChange={(event) => setScopesOpen(event.currentTarget.checked)}
+        />
+        Show video scopes
+      </label>
+      {scopesOpen && <ScopesPanel frame={playheadFrame} revision={projectRevision} />}
+    </section>
+  );
+
   if (!selectedItem) {
     return (
       <aside className="right-panel">
@@ -383,6 +400,7 @@ export const Inspector: React.FC<InspectorProps> = ({
           <p style={{ fontSize: "11px", color: "var(--text-muted)" }}>
             Select a clip or transition on the timeline to inspect and edit properties.
           </p>
+          <div style={{ textAlign: "left" }}>{scopesSection}</div>
         </div>
       </aside>
     );
@@ -1961,7 +1979,7 @@ export const Inspector: React.FC<InspectorProps> = ({
           </section>
         )}
 
-
+        {scopesSection}
       </div>
     </aside>
   );

@@ -276,7 +276,7 @@ async fn test_p15_ac03_modern_protocol_lifecycle() {
         "Must succeed without initialize"
     );
     let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 33);
+    assert_eq!(tools.len(), 34);
 }
 
 #[tokio::test]
@@ -309,7 +309,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         .send_request("tools/list", serde_json::json!({}))
         .await;
     let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 33, "Must expose exactly 33 tools");
+    assert_eq!(tools.len(), 34, "Must expose exactly 34 tools");
 
     let mut tool_names: Vec<String> = tools
         .iter()
@@ -334,6 +334,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         "tinixcut_export_preflight".to_string(),
         "tinixcut_export_start".to_string(),
         "tinixcut_export_status".to_string(),
+        "tinixcut_frame_scopes".to_string(),
         "tinixcut_inspect".to_string(),
         "tinixcut_lut_probe".to_string(),
         "tinixcut_media_probe".to_string(),
@@ -4278,7 +4279,7 @@ fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
         serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
     assert_eq!(val1["id"], 2);
     let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 33);
+    assert_eq!(tools.len(), 34);
 
     // 3. tinixcut_inspect via real subprocess
     let req2 = serde_json::json!({
@@ -5282,6 +5283,7 @@ async fn test_p58a_every_tool_declares_safety_annotations() {
     let tools = res["result"]["tools"].as_array().expect("tools array");
     let read_only: std::collections::BTreeSet<&str> = [
         "project_compare",
+        "frame_scopes",
         "lut_probe",
         "media_probe",
         "edit_plan_validate",
@@ -5460,6 +5462,61 @@ LUT_3D_SIZE 2
         missing["result"]["structuredContent"]["code"],
         "LUT_PROBE_FAILED"
     );
+    assert_eq!(
+        load_project(&project_path).unwrap().revision,
+        project.revision
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_p58d_frame_scopes_reports_export_frame_statistics_read_only() {
+    let dir = test_dir("p58d_scopes");
+    let (project_path, project, _media) =
+        create_sample_project_with_media(&dir, "scopes_project", 2);
+    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let empty = client
+        .call_tool(
+            "tinixcut_frame_scopes",
+            serde_json::json!({ "projectPath": project_path.to_str().unwrap(), "frame": 0 }),
+        )
+        .await;
+    assert_eq!(empty["result"]["isError"], false, "{empty}");
+    let report = &empty["result"]["structuredContent"];
+    assert_eq!(report["excludesTextOverlays"], true);
+    // The sample clip is solid green (0,128,0): channel means and luma follow from that.
+    let means = report["channelMeans"].as_array().unwrap();
+    assert!(
+        means[0].as_f64().unwrap() < 4.0 && means[2].as_f64().unwrap() < 4.0,
+        "{report}"
+    );
+    assert!((means[1].as_f64().unwrap() - 126.0).abs() < 8.0, "{report}");
+    assert!(
+        (report["lumaMean"].as_f64().unwrap() - 90.0).abs() < 8.0,
+        "{report}"
+    );
+    assert_eq!(
+        report["lumaMin"], report["lumaMax"],
+        "a solid frame has one luma level"
+    );
+    assert_eq!(report["blackClipShare"], 0.0);
+    assert_eq!(
+        report["lumaHistogram16"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .sum::<u64>(),
+        report["width"].as_u64().unwrap() * report["height"].as_u64().unwrap()
+    );
+
+    let missing = client
+        .call_tool(
+            "tinixcut_frame_scopes",
+            serde_json::json!({ "projectPath": dir.join("nope.tcproj").to_str().unwrap(), "frame": 0 }),
+        )
+        .await;
+    assert_eq!(missing["result"]["isError"], true);
     assert_eq!(
         load_project(&project_path).unwrap().revision,
         project.revision

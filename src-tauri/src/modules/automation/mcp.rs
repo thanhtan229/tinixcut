@@ -533,6 +533,36 @@ pub struct MediaProbeArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct FrameScopesArgs {
+    pub project_path: String,
+    /// Timeline frame to analyse.
+    pub frame: i64,
+}
+
+/// Compact scope statistics of the exported frame; the full scope images are for the editor UI.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameScopesReport {
+    pub frame: i64,
+    pub width: u32,
+    pub height: u32,
+    pub luma_min: u8,
+    pub luma_max: u8,
+    pub luma_mean: f32,
+    /// Share of pixels at luma 0..=4, 0..=1.
+    pub black_clip_share: f32,
+    /// Share of pixels at luma 251..=255, 0..=1.
+    pub white_clip_share: f32,
+    /// 16-bin luma histogram, pixel counts.
+    pub luma_histogram_16: Vec<u32>,
+    /// Mean of the red, green and blue channels, 0..=255.
+    pub channel_means: [f32; 3],
+    /// Rich-text overlays are not part of the analysed frame.
+    pub excludes_text_overlays: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LutProbeArgs {
     pub lut_path: String,
 }
@@ -1874,6 +1904,87 @@ impl TinixCutMcpServer {
             )));
         }
         Ok(tool_ok(&project_compare_report(&left, &right)))
+    }
+
+    #[tool(
+        name = "tinixcut_frame_scopes",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Analyse one frame of the export composition of a saved project (luma range, clipping, channel balance) without changing the project. Rich-text overlays are excluded",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<FrameScopesReport>()
+    )]
+    async fn frame_scopes(
+        &self,
+        Parameters(params): Parameters<FrameScopesArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_path = PathBuf::from(&params.project_path);
+        let project = match load_project(&project_path) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(tool_error(StructuredError::new(
+                    "PROJECT_LOAD_FAILED",
+                    format!("Failed to load project at {:?}: {}", project_path, e),
+                )));
+            }
+        };
+        let frame = params.frame;
+        let result = tokio::task::spawn_blocking(move || {
+            let plan = crate::modules::composition::CompositionPlan::from_project(&project)
+                .map_err(|e| e.to_string())?;
+            plan.verify_lut_files().map_err(|e| e.to_string())?;
+            let timestamp =
+                crate::modules::domain::time::RationalTime::new(frame, project.settings.frame_rate);
+            let rgba =
+                crate::modules::composition::parity::render_export_frame_rgba(&plan, timestamp)?;
+            let scopes =
+                crate::modules::media::scopes::compute_scopes(&rgba, plan.width, plan.height)?;
+            Ok::<_, String>((scopes, rgba))
+        })
+        .await;
+        let (scopes, rgba) = match result {
+            Ok(Ok(value)) => value,
+            Ok(Err(message)) => {
+                return Ok(tool_error(StructuredError::new(
+                    "FRAME_SCOPES_FAILED",
+                    message,
+                )));
+            }
+            Err(error) => {
+                return Ok(tool_error(StructuredError::new(
+                    "FRAME_SCOPES_FAILED",
+                    format!("Scopes task failed: {error}"),
+                )));
+            }
+        };
+        let mut bins = vec![0u32; 16];
+        for (level, count) in scopes.histogram.luma.iter().enumerate() {
+            bins[level / 16] += count;
+        }
+        let pixels = (scopes.width as f32) * (scopes.height as f32);
+        let mean_of = |hist: &[u32]| {
+            hist.iter()
+                .enumerate()
+                .map(|(level, &count)| level as f32 * count as f32)
+                .sum::<f32>()
+                / pixels
+        };
+        drop(rgba);
+        Ok(tool_ok(&FrameScopesReport {
+            frame,
+            width: scopes.width,
+            height: scopes.height,
+            luma_min: scopes.luma_stats.min,
+            luma_max: scopes.luma_stats.max,
+            luma_mean: scopes.luma_stats.mean,
+            black_clip_share: scopes.luma_stats.black_clip_share,
+            white_clip_share: scopes.luma_stats.white_clip_share,
+            luma_histogram_16: bins,
+            channel_means: [
+                mean_of(&scopes.histogram.red),
+                mean_of(&scopes.histogram.green),
+                mean_of(&scopes.histogram.blue),
+            ],
+            excludes_text_overlays: true,
+        }))
     }
 
     #[tool(

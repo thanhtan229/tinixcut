@@ -12,6 +12,21 @@ import {
   PreviewRichTextOverlay,
 } from "../types/preview";
 
+export interface FrameScopes {
+  width: number;
+  height: number;
+  histogram: { red: number[]; green: number[]; blue: number[]; luma: number[] };
+  luma_stats: {
+    min: number;
+    max: number;
+    mean: number;
+    blackClipShare: number;
+    whiteClipShare: number;
+  };
+  waveform: { columns: number; luma: number[]; red: number[]; green: number[]; blue: number[] };
+  vectorscope: { size: number; density: number[] };
+}
+
 export interface LutTable {
   size: number;
   domainMin: [number, number, number];
@@ -314,6 +329,7 @@ export interface CurrentProjectSession {
 export const editorApi = {
   getAppSettings: () => invoke<AppSettings>("app_settings_get"),
   describeLut: (path: string) => invoke<ClipLut>("lut_describe", { path }),
+  frameScopes: (frame: number) => invoke<FrameScopes>("frame_scopes", { frame }),
   readLutTable: (path: string, sha256: string) =>
     invoke<LutTable>("lut_read_table", { path, sha256 }),
   saveAppSettings: (settings: AppSettings) => invoke<AppSettings>("app_settings_save", { settings }),

@@ -2895,6 +2895,28 @@ fn media_duration_from_seconds(seconds: f64) -> Option<RationalTime> {
     ))
 }
 
+/// Scopes of the exported frame at `frame`, computed from the export composition of the live
+/// (possibly unsaved) project. Rich-text overlays are not part of this frame.
+#[tauri::command]
+async fn frame_scopes(
+    state: State<'_, AppState>,
+    frame: i64,
+) -> Result<modules::media::scopes::FrameScopes, String> {
+    let (plan, timestamp) = {
+        let engine = state.0.lock().map_err(|e| e.to_string())?;
+        let project = engine.service.project();
+        let plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
+        (plan, RationalTime::new(frame, project.settings.frame_rate))
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        plan.verify_lut_files().map_err(|e| e.to_string())?;
+        let rgba = modules::composition::parity::render_export_frame_rgba(&plan, timestamp)?;
+        modules::media::scopes::compute_scopes(&rgba, plan.width, plan.height)
+    })
+    .await
+    .map_err(|e| format!("Scopes task failed: {e}"))?
+}
+
 #[tauri::command]
 fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFrameState, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
@@ -3798,6 +3820,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             lut_describe,
             lut_read_table,
+            frame_scopes,
             app_health_check,
             app_settings_get,
             app_settings_save,
