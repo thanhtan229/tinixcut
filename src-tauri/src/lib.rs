@@ -2895,6 +2895,17 @@ fn media_duration_from_seconds(seconds: f64) -> Option<RationalTime> {
     ))
 }
 
+/// YouTube chapter list from the live project's markers, with any rule violations.
+#[tauri::command]
+fn project_chapters(
+    state: State<'_, AppState>,
+) -> Result<modules::media::chapters::ChapterReport, String> {
+    let engine = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(modules::media::chapters::project_chapters(
+        engine.service.project(),
+    ))
+}
+
 /// Scopes of the exported frame at `frame`, computed from the export composition of the live
 /// (possibly unsaved) project. Rich-text overlays are not part of this frame.
 #[tauri::command]
@@ -3821,6 +3832,7 @@ pub fn run() {
             lut_describe,
             lut_read_table,
             frame_scopes,
+            project_chapters,
             app_health_check,
             app_settings_get,
             app_settings_save,

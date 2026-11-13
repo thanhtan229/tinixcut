@@ -42,6 +42,7 @@ fn main() {
             || subcmd == "diff"
             || subcmd == "apply"
             || subcmd == "render"
+            || subcmd == "chapters"
             || subcmd == "session"
             || subcmd == "--stdio"
             || subcmd == "template"

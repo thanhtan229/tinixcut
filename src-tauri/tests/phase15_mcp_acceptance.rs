@@ -276,7 +276,7 @@ async fn test_p15_ac03_modern_protocol_lifecycle() {
         "Must succeed without initialize"
     );
     let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 34);
+    assert_eq!(tools.len(), 35);
 }
 
 #[tokio::test]
@@ -309,7 +309,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         .send_request("tools/list", serde_json::json!({}))
         .await;
     let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 34, "Must expose exactly 34 tools");
+    assert_eq!(tools.len(), 35, "Must expose exactly 35 tools");
 
     let mut tool_names: Vec<String> = tools
         .iter()
@@ -341,6 +341,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         "tinixcut_media_scene_candidates".to_string(),
         "tinixcut_media_transcript".to_string(),
         "tinixcut_media_visual_scenes".to_string(),
+        "tinixcut_project_chapters".to_string(),
         "tinixcut_project_compare".to_string(),
         "tinixcut_project_create".to_string(),
         "tinixcut_project_variant".to_string(),
@@ -4279,7 +4280,7 @@ fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
         serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
     assert_eq!(val1["id"], 2);
     let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 34);
+    assert_eq!(tools.len(), 35);
 
     // 3. tinixcut_inspect via real subprocess
     let req2 = serde_json::json!({
@@ -5283,6 +5284,7 @@ async fn test_p58a_every_tool_declares_safety_annotations() {
     let tools = res["result"]["tools"].as_array().expect("tools array");
     let read_only: std::collections::BTreeSet<&str> = [
         "project_compare",
+        "project_chapters",
         "frame_scopes",
         "lut_probe",
         "media_probe",
@@ -5521,5 +5523,54 @@ async fn test_p58d_frame_scopes_reports_export_frame_statistics_read_only() {
         load_project(&project_path).unwrap().revision,
         project.revision
     );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_p58e_project_chapters_lists_markers_and_reports_violations_without_changing_them() {
+    let dir = test_dir("p58e_chapters");
+    let (project_path, mut project) = create_sample_project(&dir, "chapters_project");
+    let rate = project.settings.frame_rate;
+    for (index, (label, seconds)) in [("Intro", 0i64), ("Middle", 30), ("Close", 36)]
+        .iter()
+        .enumerate()
+    {
+        project
+            .markers
+            .push(tinixcut_lib::modules::domain::ProjectMarker {
+                marker_id: format!("mrk_{index}"),
+                label: (*label).into(),
+                position: RationalTime::new(seconds * 30, rate),
+            });
+    }
+    project.revision += 1;
+    save_project_atomic(&project, &project_path).unwrap();
+
+    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let result = client
+        .call_tool(
+            "tinixcut_project_chapters",
+            serde_json::json!({ "projectPath": project_path.to_str().unwrap() }),
+        )
+        .await;
+    assert_eq!(result["result"]["isError"], false, "{result}");
+    let report = &result["result"]["structuredContent"];
+    assert_eq!(report["text"], "00:00 Intro\n00:30 Middle\n00:36 Close");
+    let violations = report["violations"].as_array().unwrap();
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("lasts 6 s")),
+        "{report}"
+    );
+    assert_eq!(report["chapters"].as_array().unwrap().len(), 3);
+    assert_eq!(load_project(&project_path).unwrap().markers.len(), 3);
+
+    let cli = tinixcut_lib::modules::automation::AutomationAdapter::handle_cli(&[
+        "chapters".to_string(),
+        project_path.to_string_lossy().to_string(),
+    ])
+    .unwrap();
+    assert!(cli.contains("00:30 Middle"), "{cli}");
     fs::remove_dir_all(dir).unwrap();
 }

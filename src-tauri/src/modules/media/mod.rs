@@ -4,6 +4,7 @@
 
 pub mod cache;
 pub mod captions;
+pub mod chapters;
 pub mod collect;
 pub mod ffmpeg;
 pub mod lut;

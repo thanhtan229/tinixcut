@@ -29,6 +29,7 @@ import {
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
 import { ScopesPanel } from "./ScopesPanel";
+import { ChaptersSection } from "./ChaptersSection";
 import { TemplateInstanceInspector } from "./TemplateInstanceInspector";
 import { shouldResetInspectorDrafts } from "./inspectorDraftSync";
 
@@ -388,6 +389,7 @@ export const Inspector: React.FC<InspectorProps> = ({
         Show video scopes
       </label>
       {scopesOpen && <ScopesPanel frame={playheadFrame} revision={projectRevision} />}
+      <ChaptersSection />
     </section>
   );
 

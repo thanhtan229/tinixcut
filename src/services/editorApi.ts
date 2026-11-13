@@ -12,6 +12,14 @@ import {
   PreviewRichTextOverlay,
 } from "../types/preview";
 
+export interface ChapterReport {
+  chapters: Array<{ markerId: string; title: string; startSeconds: number; timestamp: string }>;
+  /** One "timestamp title" line per chapter. */
+  text: string;
+  violations: string[];
+  durationSeconds: number;
+}
+
 export interface FrameScopes {
   width: number;
   height: number;
@@ -329,6 +337,7 @@ export interface CurrentProjectSession {
 export const editorApi = {
   getAppSettings: () => invoke<AppSettings>("app_settings_get"),
   describeLut: (path: string) => invoke<ClipLut>("lut_describe", { path }),
+  projectChapters: () => invoke<ChapterReport>("project_chapters"),
   frameScopes: (frame: number) => invoke<FrameScopes>("frame_scopes", { frame }),
   readLutTable: (path: string, sha256: string) =>
     invoke<LutTable>("lut_read_table", { path, sha256 }),

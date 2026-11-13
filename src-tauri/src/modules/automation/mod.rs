@@ -1189,7 +1189,8 @@ impl AutomationAdapter {
     pub fn handle_cli(args: &[String]) -> Result<String, AutomationError> {
         if args.is_empty() {
             return Err(AutomationError::Cli(
-                "Usage: tinixcut [inspect|diff|apply|render|session] <args...>".to_string(),
+                "Usage: tinixcut [inspect|diff|apply|render|chapters|session] <args...>"
+                    .to_string(),
             ));
         }
 
@@ -1408,6 +1409,19 @@ impl AutomationAdapter {
                     other => Err(AutomationError::Cli(format!("Unknown template command '{}'", other))),
                 }
             }
+            "chapters" => {
+                if args.len() < 2 {
+                    return Err(AutomationError::Cli(
+                        "Usage: tinixcut chapters <project_path>".to_string(),
+                    ));
+                }
+                let project = load_project(Path::new(&args[1]))
+                    .map_err(|e| AutomationError::Cli(format!("Cannot load project: {e}")))?;
+                serde_json::to_string_pretty(&crate::modules::media::chapters::project_chapters(
+                    &project,
+                ))
+                .map_err(|e| AutomationError::Serialization(e.to_string()))
+            }
             "render" => {
                 if args.len() < 3 {
                     return Err(AutomationError::Cli(
@@ -1426,7 +1440,7 @@ impl AutomationAdapter {
                 Ok("Session ended".to_string())
             }
             "help" | "--help" | "-h" => Ok(
-                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render|session] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  session, --stdio                           Start long-lived machine-readable JSONL stdio session\n  help, --help                               Show this help message".to_string()
+                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render|chapters|session] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  chapters <project_path>                    List YouTube chapters from project markers\n  session, --stdio                           Start long-lived machine-readable JSONL stdio session\n  help, --help                               Show this help message".to_string()
             ),
             other => Err(AutomationError::Cli(format!("Unknown command '{}'", other))),
         }

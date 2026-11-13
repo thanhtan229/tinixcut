@@ -533,6 +533,12 @@ pub struct MediaProbeArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectChaptersArgs {
+    pub project_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameScopesArgs {
     pub project_path: String,
     /// Timeline frame to analyse.
@@ -1904,6 +1910,31 @@ impl TinixCutMcpServer {
             )));
         }
         Ok(tool_ok(&project_compare_report(&left, &right)))
+    }
+
+    #[tool(
+        name = "tinixcut_project_chapters",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "List YouTube-style chapters from the project's markers and report any rule violations (first chapter at 00:00, at least 3 chapters, each at least 10 seconds). Never changes the project or moves markers",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::chapters::ChapterReport>()
+    )]
+    async fn project_chapters(
+        &self,
+        Parameters(params): Parameters<ProjectChaptersArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_path = PathBuf::from(&params.project_path);
+        let project = match load_project(&project_path) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(tool_error(StructuredError::new(
+                    "PROJECT_LOAD_FAILED",
+                    format!("Failed to load project at {:?}: {}", project_path, e),
+                )));
+            }
+        };
+        Ok(tool_ok(&crate::modules::media::chapters::project_chapters(
+            &project,
+        )))
     }
 
     #[tool(
