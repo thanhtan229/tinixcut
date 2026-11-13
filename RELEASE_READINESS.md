@@ -23,6 +23,7 @@
 - Preview vs export agree on layer **geometry, timing and animation**; they are **not** guaranteed pixel-identical (different resampling).
 - Playback performance qualified on the two published workloads (10 min/100 clip, 30 min/300 clip, Windows 11 reference host). 4K-via-proxy, dropped-frame and GPU figures are not published.
 - Audio export fidelity qualified; live level meter is indicative only.
+- Post-v0.1.0 additions (Phase 58, `Plans/plan_phase58_reference_driven_improvements.md`): per-clip 3D LUT (`.cube`) and chroma key verified against FFmpeg in export; read-only video scopes, YouTube chapter list, audio-based alignment proposals, and MCP safety annotations. Their preview paths (WebGL effect layer, scopes panel) are **not natively qualified** and export is authoritative.
 
 ## 3. Explicit non-claims (deferred, not hidden)
 
@@ -30,7 +31,8 @@
 2. **Upgrade from an earlier installer** is untested; v0.1.0 is the first release, so no upgrade path exists yet. Test it when 0.2.0 is cut.
 3. **Pixel-level preview/export parity** is not claimed (decision 2026-11-12, approved by Product Owner: threshold 0.92 stays locked and unrelaxed; export scale-filter A/B showed no gain, so the residual gap is in the preview path; revisit with a preview-renderer change in a later release).
 4. **Pointer-drag editing** was not qualified; keyboard and command paths are.
-5. Physical calibrated A/V sync, clean-VM install and hardware encoders remain optional per the 2026-11-03 decision.
+5. **Phase 58 preview parity** for LUT/chroma clips (WebGL layer vs export frame, MAE <= 4.0) has not been measured in the running app.
+6. Physical calibrated A/V sync, clean-VM install and hardware encoders remain optional per the 2026-11-03 decision.
 
 ## 4. Automated test status (2026-11-12)
 
