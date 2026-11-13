@@ -14,6 +14,7 @@ import { getPlaybackMeterElement, hasAudioCaptureTrack, peakDbfs, peakMeterPerce
 import { formatPreviewPlaybackFailure } from "./previewPlaybackErrors";
 import { currentVideoPreviewFailure, hasPendingCompatiblePreview, previewMediaFailurePresentation, VideoPreviewFailure } from "./previewMediaFailure";
 import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorAdjustments";
+import { LutVideoLayer, useLutTable } from "./LutVideoLayer";
 import { PreviewProxyMode, PreviewProxySource, policyProxyAssetIds, proxyAssetIdsToPoll, resolvePreviewVideoPath } from "./previewProxyPolicy";
 import {
   canvasCropFromPointerDelta,
@@ -142,6 +143,18 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
   onMediaError,
 }: PreviewVideoLayerProps) {
   const elementRef = useRef<HTMLVideoElement | null>(null);
+  const [videoNode, setVideoNode] = useState<HTMLVideoElement | null>(null);
+  const lutState = useLutTable(layer.color_lut);
+  const [lutFailure, setLutFailure] = useState<string | null>(null);
+  useEffect(() => setLutFailure(null), [layer.color_lut?.path, layer.color_lut?.sha256, Boolean(layer.chroma_key)]);
+  // The WebGL layer owns the whole color pipeline for this clip, so the SVG filter is dropped
+  // to keep the export order (color matrix, then LUT) instead of stacking the matrix twice.
+  const hasLut = Boolean(layer.color_lut);
+  const hasKey = Boolean(layer.chroma_key);
+  const lutReady = !hasLut || lutState?.status === "ready";
+  const lutProcessing = (hasLut || hasKey) && lutReady && lutFailure === null;
+  const lutProblem =
+    lutFailure ?? (lutState?.status === "error" ? lutState.message : null);
   const hasDecodedFrameRef = useRef(false);
   const frameCallbackRef = useRef<number | null>(null);
   const frameCallbackTimeoutRef = useRef<number | null>(null);
@@ -302,6 +315,7 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
       cancelVideoSeekWatchdog(previousElement);
     }
     elementRef.current = element;
+    setVideoNode(element);
     videoRefs.current[layer.item_id] = element;
   }, [cancelVideoSeekWatchdog, layer.item_id, videoRefs]);
 
@@ -319,9 +333,45 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
         zIndex: layer.z_index,
         pointerEvents: "none",
         mixBlendMode,
-        filter: `url(#${colorFilterId(layer.item_id)})`,
+        filter: lutProcessing ? undefined : `url(#${colorFilterId(layer.item_id)})`,
       }}
     >
+      {lutProblem && (
+        <div
+          role="status"
+          style={{
+            position: "absolute",
+            left: 4,
+            top: 4,
+            zIndex: 2,
+            padding: "2px 6px",
+            fontSize: 10,
+            borderRadius: 3,
+            background: "rgba(120, 30, 30, 0.85)",
+            color: "#fff",
+            pointerEvents: "none",
+          }}
+        >
+          Effect preview unavailable: {lutProblem}. The video shown is not processed; export still applies the LUT / chroma key.
+        </div>
+      )}
+      {lutProcessing && (
+        <LutVideoLayer
+          video={videoNode}
+          table={lutState?.status === "ready" ? lutState.table : null}
+          chroma={layer.chroma_key ?? null}
+          matrix={visualColorMatrix(layer.visual_effect, layer.color_adjustments)}
+          onFailure={setLutFailure}
+          style={{
+            position: "absolute",
+            width: `${100 / visibleWidth}%`,
+            height: `${100 / visibleHeight}%`,
+            left: `${(-layer.crop.left / visibleWidth) * 100}%`,
+            top: `${(-layer.crop.top / visibleHeight) * 100}%`,
+            pointerEvents: "none",
+          }}
+        />
+      )}
       <video
         ref={setVideoElementRef}
         crossOrigin="anonymous"
@@ -357,6 +407,8 @@ const PreviewVideoLayer = React.memo(function PreviewVideoLayer({
           top: `${(-layer.crop.top / visibleHeight) * 100}%`,
           objectFit: "fill",
           pointerEvents: "none",
+          // Kept decoding underneath the LUT canvas; hidden only while the canvas draws.
+          visibility: lutProcessing ? "hidden" : undefined,
         }}
       />
     </div>

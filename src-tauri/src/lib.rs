@@ -453,6 +453,46 @@ fn app_health_check() -> HealthStatus {
     get_health_status()
 }
 
+/// Validates and hashes a `.cube` file, returning the reference a clip stores.
+#[tauri::command]
+fn lut_describe(path: String) -> Result<modules::domain::ClipLut, String> {
+    modules::domain::ClipLut::from_file(std::path::Path::new(&path)).map_err(|e| e.to_string())
+}
+
+/// 3D LUT table for the preview shader. `data_base64` is little-endian f32 RGB triples,
+/// red-fastest. The pinned content hash must still match, otherwise the call fails.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LutTable {
+    size: u32,
+    domain_min: [f32; 3],
+    domain_max: [f32; 3],
+    data_base64: String,
+}
+
+#[tauri::command]
+fn lut_read_table(path: String, sha256: String) -> Result<LutTable, String> {
+    use base64::Engine;
+    let path = std::path::Path::new(&path);
+    let actual = modules::media::lut::lut_file_sha256(path).map_err(|e| e.to_string())?;
+    if !actual.eq_ignore_ascii_case(&sha256) {
+        return Err("LUT file changed since it was added (content hash differs)".to_string());
+    }
+    let lut = modules::media::lut::Lut3D::from_file(path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(lut.samples.len() * 12);
+    for sample in &lut.samples {
+        for value in sample {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Ok(LutTable {
+        size: lut.size,
+        domain_min: lut.domain_min,
+        domain_max: lut.domain_max,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
 #[tauri::command]
 fn app_settings_get(app: AppHandle) -> Result<AppSettings, String> {
     let config_dir = app
@@ -3756,6 +3796,8 @@ pub fn run() {
         .manage(state)
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            lut_describe,
+            lut_read_table,
             app_health_check,
             app_settings_get,
             app_settings_save,

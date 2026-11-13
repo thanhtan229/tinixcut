@@ -18,7 +18,7 @@ use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 17;
+pub const CURRENT_SCHEMA_VERSION: u32 = 18;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -579,6 +579,104 @@ impl ColorAdjustments {
     }
 }
 
+/// Reference to a user-supplied 3D LUT (`.cube`) applied to one clip. The file stays outside
+/// the project: `path` locates it and `sha256` pins its content, so a missing or changed file
+/// is reported explicitly instead of being substituted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipLut {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+}
+
+impl ClipLut {
+    pub const MAX_NAME_LEN: usize = 128;
+    pub const MAX_PATH_LEN: usize = 1024;
+
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.name.trim().is_empty() || self.name.chars().count() > Self::MAX_NAME_LEN {
+            return Err(DomainError::Validation(
+                "LUT name must be 1-128 characters".into(),
+            ));
+        }
+        if self.path.trim().is_empty() || self.path.chars().count() > Self::MAX_PATH_LEN {
+            return Err(DomainError::Validation(
+                "LUT path must be 1-1024 characters".into(),
+            ));
+        }
+        if self.sha256.len() != 64 || !self.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(DomainError::Validation(
+                "LUT sha256 must be 64 hexadecimal characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Which key color a despill pass removes from the edges of a keyed subject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DespillScreen {
+    Green,
+    Blue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Despill {
+    pub screen: DespillScreen,
+    /// FFmpeg `despill` mix, 0..=1 (0.5 is neutral).
+    pub mix: f32,
+}
+
+/// Per-clip chroma key, mirroring FFmpeg `colorkey` (+ optional `despill`) so preview and
+/// export evaluate the same formulas. Evaluated before the color matrix and the 3D LUT.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChromaKey {
+    /// "#rrggbb".
+    pub key_color: String,
+    /// Distance below which a pixel is fully transparent, 0.00001..=1.
+    pub similarity: f32,
+    /// Soft edge width above `similarity`, 0..=1 (0 = hard edge).
+    pub blend: f32,
+    pub despill: Option<Despill>,
+}
+
+impl ChromaKey {
+    pub fn rgb(&self) -> Option<[u8; 3]> {
+        let hex = self.key_color.strip_prefix('#')?;
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+        Some([channel(0)?, channel(2)?, channel(4)?])
+    }
+
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.rgb().is_none() {
+            return Err(DomainError::Validation(
+                "Chroma key color must be '#rrggbb'".into(),
+            ));
+        }
+        if !self.similarity.is_finite() || !(0.00001..=1.0).contains(&self.similarity) {
+            return Err(DomainError::Validation(
+                "Chroma key similarity must be within 0.00001..=1".into(),
+            ));
+        }
+        if !self.blend.is_finite() || !(0.0..=1.0).contains(&self.blend) {
+            return Err(DomainError::Validation(
+                "Chroma key blend must be within 0..=1".into(),
+            ));
+        }
+        if let Some(despill) = &self.despill {
+            if !despill.mix.is_finite() || !(0.0..=1.0).contains(&despill.mix) {
+                return Err(DomainError::Validation(
+                    "Despill mix must be within 0..=1".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Fixed clip speeds supported by the first non-destructive speed-control
 /// release. The source duration is always derived from timeline duration.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -790,6 +888,10 @@ pub struct TimelineItem {
     #[serde(default)]
     pub color_adjustments: ColorAdjustments,
     #[serde(default)]
+    pub color_lut: Option<ClipLut>,
+    #[serde(default)]
+    pub chroma_key: Option<ChromaKey>,
+    #[serde(default)]
     pub speed: ClipSpeed,
     #[serde(default = "default_true")]
     pub embedded_audio_enabled: bool,
@@ -835,6 +937,8 @@ impl TimelineItem {
             placement_mode: PlacementMode::Fit,
             visual_effect: VisualEffectPreset::None,
             color_adjustments: ColorAdjustments::default(),
+            color_lut: None,
+            chroma_key: None,
             speed: ClipSpeed::Normal,
             embedded_audio_enabled: true,
             linked_item_id: None,
@@ -857,6 +961,12 @@ impl TimelineItem {
 
     pub fn validate(&self) -> Result<(), DomainError> {
         self.color_adjustments.validate()?;
+        if let Some(lut) = &self.color_lut {
+            lut.validate()?;
+        }
+        if let Some(key) = &self.chroma_key {
+            key.validate()?;
+        }
         if !is_valid_id(&self.item_id) {
             return Err(DomainError::InvalidId(self.item_id.clone()));
         }

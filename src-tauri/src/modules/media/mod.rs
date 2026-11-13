@@ -6,6 +6,7 @@ pub mod cache;
 pub mod captions;
 pub mod collect;
 pub mod ffmpeg;
+pub mod lut;
 pub mod qualification;
 pub mod resolver;
 pub mod scene;

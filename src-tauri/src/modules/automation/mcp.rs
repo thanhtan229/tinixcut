@@ -533,6 +533,30 @@ pub struct MediaProbeArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct LutProbeArgs {
+    pub lut_path: String,
+}
+
+/// Validated description of a `.cube` file. `clip_lut` is the exact value to place in a
+/// `ClipColorLutSet` operation's `color_lut` payload field.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LutProbeReport {
+    pub clip_lut: LutReference,
+    pub lut_size: u32,
+    pub domain_min: [f32; 3],
+    pub domain_max: [f32; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LutReference {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaSceneCandidatesArgs {
     pub media_path: String,
     #[serde(default)]
@@ -1850,6 +1874,47 @@ impl TinixCutMcpServer {
             )));
         }
         Ok(tool_ok(&project_compare_report(&left, &right)))
+    }
+
+    #[tool(
+        name = "tinixcut_lut_probe",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Validate a .cube 3D LUT file and return the clipLut reference (name, path, sha256) to use in a ClipColorLutSet operation, plus its size and domain. Never changes a project",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<LutProbeReport>()
+    )]
+    async fn lut_probe(
+        &self,
+        Parameters(params): Parameters<LutProbeArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let path = PathBuf::from(&params.lut_path);
+        let clip_lut = match crate::modules::domain::ClipLut::from_file(&path) {
+            Ok(lut) => lut,
+            Err(error) => {
+                return Ok(tool_error(StructuredError::new(
+                    "LUT_PROBE_FAILED",
+                    format!("Cannot use LUT at {:?}: {}", path, error),
+                )));
+            }
+        };
+        let table = match crate::modules::media::lut::Lut3D::from_file(&path) {
+            Ok(table) => table,
+            Err(error) => {
+                return Ok(tool_error(StructuredError::new(
+                    "LUT_PROBE_FAILED",
+                    format!("Cannot use LUT at {:?}: {}", path, error),
+                )));
+            }
+        };
+        Ok(tool_ok(&LutProbeReport {
+            clip_lut: LutReference {
+                name: clip_lut.name,
+                path: clip_lut.path,
+                sha256: clip_lut.sha256,
+            },
+            lut_size: table.size,
+            domain_min: table.domain_min,
+            domain_max: table.domain_max,
+        }))
     }
 
     #[tool(

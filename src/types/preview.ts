@@ -5,6 +5,8 @@ import {
   TextTemplateReference,
   VisualEffectPreset,
   ColorAdjustments,
+  ClipLut,
+  ChromaKey,
   TextRichStyle,
   TextAnimation,
 } from "./project";
@@ -27,6 +29,8 @@ export interface PreviewSampledLayer {
   opacity: number;
   visual_effect: VisualEffectPreset;
   color_adjustments?: ColorAdjustments;
+  color_lut?: ClipLut | null;
+  chroma_key?: ChromaKey | null;
   text?: string | null;
   font_family?: string | null;
   font_size?: number | null;

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
-import { Project } from "../types/project";
+import { ClipLut, Project } from "../types/project";
 import { CommandEnvelope, CommandReceipt, DiffReport, OperationEnvelope } from "../types/command";
 import { ExportPreset } from "../types/export";
 import { TemplateDefinition, TemplatePackManifest } from "../types/template";
@@ -11,6 +11,14 @@ import {
   PreviewVideoSourceStatus,
   PreviewRichTextOverlay,
 } from "../types/preview";
+
+export interface LutTable {
+  size: number;
+  domainMin: [number, number, number];
+  domainMax: [number, number, number];
+  /** Little-endian f32 RGB triples, red-fastest, base64 encoded. */
+  dataBase64: string;
+}
 
 export interface CaptionsImportReport {
   format: string;
@@ -305,6 +313,9 @@ export interface CurrentProjectSession {
 
 export const editorApi = {
   getAppSettings: () => invoke<AppSettings>("app_settings_get"),
+  describeLut: (path: string) => invoke<ClipLut>("lut_describe", { path }),
+  readLutTable: (path: string, sha256: string) =>
+    invoke<LutTable>("lut_read_table", { path, sha256 }),
   saveAppSettings: (settings: AppSettings) => invoke<AppSettings>("app_settings_save", { settings }),
   addRecentProject: (projectPath: string) =>
     invoke<AppSettings>("app_settings_add_recent_project", { projectPath }),

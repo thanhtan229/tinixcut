@@ -379,6 +379,17 @@ pub enum CommandOperation {
         item_id: String,
         color_adjustments: crate::modules::domain::ColorAdjustments,
     },
+    /// Sets or clears (`None`) the clip's chroma key (FFmpeg colorkey + optional despill).
+    ClipChromaKeySet {
+        item_id: String,
+        chroma_key: Option<crate::modules::domain::ChromaKey>,
+    },
+    /// Sets or clears (`None`) the clip's 3D LUT reference. Pure data: the file is validated
+    /// and hashed by the entry point (`ClipLut::from_file`), never by command replay.
+    ClipColorLutSet {
+        item_id: String,
+        color_lut: Option<crate::modules::domain::ClipLut>,
+    },
     ClipSpeedSet {
         item_id: String,
         speed: ClipSpeed,
@@ -5202,6 +5213,67 @@ impl CommandService {
                     });
                 }
                 item.color_adjustments = *color_adjustments;
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipChromaKeySet {
+                item_id,
+                chroma_key,
+            } => {
+                if let Some(key) = chroma_key {
+                    key.validate()
+                        .map_err(|error| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        })?;
+                }
+                let item = project
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|track| track.items.iter_mut())
+                    .find(|item| item.item_id == *item_id)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Image) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "A chroma key is supported only on video and image clips".into(),
+                    });
+                }
+                item.chroma_key = chroma_key.clone();
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipColorLutSet { item_id, color_lut } => {
+                if let Some(lut) = color_lut {
+                    lut.validate()
+                        .map_err(|error| CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        })?;
+                }
+                let item = project
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|track| track.items.iter_mut())
+                    .find(|item| item.item_id == *item_id)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Image) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "A LUT is supported only on video and image clips".into(),
+                    });
+                }
+                item.color_lut = color_lut.clone();
                 Ok(Some(DiffChange::ClipModified {
                     item_id: item_id.clone(),
                 }))
@@ -11271,6 +11343,242 @@ mod tests {
         assert!(
             rejected.is_err(),
             "non-finite color controls must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_phase58_clip_lut_set_clear_undo_and_validation() {
+        use crate::modules::domain::ClipLut;
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let prior = project.clone();
+        let mut service = CommandService::new(project);
+        let lut = ClipLut {
+            name: "Warm".into(),
+            path: "C:/luts/warm.cube".into(),
+            sha256: "ab".repeat(32),
+        };
+        let envelope =
+            |base: u64, tx: &str, color_lut: Option<ClipLut>, item: &str| CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: base,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(tx.into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_{tx}"),
+                    operation: CommandOperation::ClipColorLutSet {
+                        item_id: item.into(),
+                        color_lut,
+                    },
+                }],
+            };
+
+        service
+            .execute(envelope(0, "tx_lut_set", Some(lut.clone()), &item_id))
+            .expect("valid LUT reference applies");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .color_lut,
+            Some(lut.clone())
+        );
+
+        let mut active = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(10);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Set LUT".into(),
+            transaction_id: Some("tx_lut_set".into()),
+            prior_snapshot: prior,
+            resulting_snapshot: active.clone(),
+        });
+        history.undo(&mut active).expect("undo LUT");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().color_lut,
+            None
+        );
+        history.redo(&mut active).expect("redo LUT");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().color_lut,
+            Some(lut.clone())
+        );
+
+        let revision = service.project().revision;
+        let cleared = service
+            .execute(envelope(revision, "tx_lut_clear", None, &item_id))
+            .expect("clearing a LUT applies");
+        assert_eq!(cleared.new_revision, revision + 1);
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .color_lut,
+            None
+        );
+
+        let revision = service.project().revision;
+        let bad_hash = ClipLut {
+            sha256: "xyz".into(),
+            ..lut.clone()
+        };
+        assert!(
+            service
+                .execute(envelope(
+                    revision,
+                    "tx_lut_bad_hash",
+                    Some(bad_hash),
+                    &item_id
+                ))
+                .is_err(),
+            "a malformed content hash must be rejected"
+        );
+        assert!(
+            service
+                .execute(envelope(
+                    revision,
+                    "tx_lut_missing_item",
+                    Some(lut),
+                    "itm_missing"
+                ))
+                .is_err(),
+            "an unknown clip must be rejected"
+        );
+        assert_eq!(
+            service.project().revision,
+            revision,
+            "rejected edits do not advance the revision"
+        );
+    }
+
+    #[test]
+    fn test_phase58_chroma_key_set_clear_undo_and_validation() {
+        use crate::modules::domain::{ChromaKey, Despill, DespillScreen};
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let prior = project.clone();
+        let mut service = CommandService::new(project);
+        let key = ChromaKey {
+            key_color: "#00ff00".into(),
+            similarity: 0.3,
+            blend: 0.1,
+            despill: Some(Despill {
+                screen: DespillScreen::Green,
+                mix: 0.5,
+            }),
+        };
+        let envelope =
+            |base: u64, tx: &str, chroma_key: Option<ChromaKey>, item: &str| CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: base,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(tx.into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_{tx}"),
+                    operation: CommandOperation::ClipChromaKeySet {
+                        item_id: item.into(),
+                        chroma_key,
+                    },
+                }],
+            };
+
+        service
+            .execute(envelope(0, "tx_key_set", Some(key.clone()), &item_id))
+            .expect("valid chroma key applies");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .chroma_key,
+            Some(key.clone())
+        );
+
+        let mut active = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(10);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Set chroma key".into(),
+            transaction_id: Some("tx_key_set".into()),
+            prior_snapshot: prior,
+            resulting_snapshot: active.clone(),
+        });
+        history.undo(&mut active).expect("undo chroma key");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().chroma_key,
+            None
+        );
+        history.redo(&mut active).expect("redo chroma key");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().chroma_key,
+            Some(key.clone())
+        );
+
+        let revision = service.project().revision;
+        service
+            .execute(envelope(revision, "tx_key_clear", None, &item_id))
+            .expect("clearing applies");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .chroma_key,
+            None
+        );
+
+        let revision = service.project().revision;
+        let invalid = [
+            ChromaKey {
+                key_color: "green".into(),
+                ..key.clone()
+            },
+            ChromaKey {
+                similarity: 0.0,
+                ..key.clone()
+            },
+            ChromaKey {
+                similarity: f32::NAN,
+                ..key.clone()
+            },
+            ChromaKey {
+                blend: 1.5,
+                ..key.clone()
+            },
+            ChromaKey {
+                despill: Some(Despill {
+                    screen: DespillScreen::Blue,
+                    mix: -0.1,
+                }),
+                ..key.clone()
+            },
+        ];
+        for (index, bad) in invalid.into_iter().enumerate() {
+            let tx = format!("tx_key_bad_{index}");
+            assert!(
+                service
+                    .execute(envelope(revision, &tx, Some(bad), &item_id))
+                    .is_err(),
+                "invalid chroma key #{index} must be rejected"
+            );
+        }
+        assert!(
+            service
+                .execute(envelope(
+                    revision,
+                    "tx_key_missing",
+                    Some(key),
+                    "itm_missing"
+                ))
+                .is_err(),
+            "an unknown clip must be rejected"
+        );
+        assert_eq!(
+            service.project().revision,
+            revision,
+            "rejected edits do not advance the revision"
         );
     }
 

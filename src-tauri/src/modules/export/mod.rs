@@ -292,6 +292,8 @@ impl ExportEngine {
 
         let plan = CompositionPlan::from_project(snapshot)
             .map_err(|error| ExportError::Composition(error.to_string()))?;
+        plan.verify_lut_files()
+            .map_err(|error| ExportError::Composition(error.to_string()))?;
         let mut sources = HashMap::<PathBuf, String>::new();
         for layer in &plan.visual_layers {
             if layer.asset_id.is_some() && layer.asset_path.is_none() {
@@ -698,6 +700,9 @@ impl ExportEngine {
                 }
             }
         }
+
+        plan.verify_lut_files()
+            .map_err(|error| ExportError::Composition(error.to_string()))?;
 
         let candidates = Self::get_encoder_candidates(&profile.video_codec);
         let mut attempted_encoders: Vec<String> = Vec::new();

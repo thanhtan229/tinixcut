@@ -423,6 +423,9 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
     if version <= 16 && CURRENT_SCHEMA_VERSION >= 17 {
         val = migrate_v16_to_v17(val)?;
     }
+    if version <= 17 && CURRENT_SCHEMA_VERSION >= 18 {
+        val = migrate_v17_to_v18(val)?;
+    }
 
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
 }
@@ -912,6 +915,53 @@ pub fn migrate_v16_to_v17(
         }
     }
     obj.insert("schema_version".to_string(), serde_json::json!(17));
+    Ok(val)
+}
+
+/// Migrates Schema v17 projects to Schema v18: adds the per-clip `color_lut` reference and
+/// `chroma_key` settings (absent means none) and promotes `schema_version` to 18.
+pub fn migrate_v17_to_v18(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            let items = track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v17 to v18 migration".to_string(),
+                    )
+                })?
+                .entry("items")
+                .or_insert_with(|| serde_json::json!([]));
+            for item in items.as_array_mut().ok_or_else(|| {
+                PersistenceError::MigrationFailed(
+                    "Track items must be an array during v17 to v18 migration".to_string(),
+                )
+            })? {
+                item.as_object_mut()
+                    .ok_or_else(|| {
+                        PersistenceError::MigrationFailed(
+                            "Timeline item must be an object during v17 to v18 migration"
+                                .to_string(),
+                        )
+                    })?
+                    .entry("color_lut")
+                    .or_insert(serde_json::Value::Null);
+                item.as_object_mut()
+                    .expect("timeline item object checked above")
+                    .entry("chroma_key")
+                    .or_insert(serde_json::Value::Null);
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(18));
     Ok(val)
 }
 
@@ -1930,20 +1980,45 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_17_rejected() {
-        // Schema 17 is CURRENT_SCHEMA_VERSION; future schema version 18 must be rejected.
-        let raw_json = r#"{"schema_version": 18, "name": "Future Project"}"#;
+    fn test_future_schema_rejected() {
+        // Schema 18 is CURRENT_SCHEMA_VERSION; future schema version 19 must be rejected.
+        let raw_json = r#"{"schema_version": 19, "name": "Future Project"}"#;
         let err = run_migrations_if_needed(raw_json).unwrap_err();
         match err {
             PersistenceError::UnsupportedSchemaVersion {
                 found,
                 max_supported,
             } => {
-                assert_eq!(found, 18);
+                assert_eq!(found, 19);
                 assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
             }
             other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_schema_17_migrates_to_18_with_empty_lut_and_preserves_items() {
+        let raw = r#"{"schema_version": 17, "tracks": [{"items": [{"item_id": "itm_a", "color_adjustments": {"brightness":0.1,"contrast":1.0,"saturation":1.0,"temperature":0.0}}]}]}"#;
+        let migrated: serde_json::Value =
+            serde_json::from_str(&run_migrations_if_needed(raw).unwrap()).unwrap();
+        assert_eq!(migrated["schema_version"], 18);
+        let item = &migrated["tracks"][0]["items"][0];
+        assert!(item["color_lut"].is_null());
+        assert!(item.as_object().unwrap().contains_key("color_lut"));
+        assert!(item["chroma_key"].is_null());
+        assert_eq!(item["color_adjustments"]["brightness"], 0.1);
+    }
+
+    #[test]
+    fn test_clip_lut_round_trips_through_serialization() {
+        let lut = crate::modules::domain::ClipLut {
+            name: "Warm".into(),
+            path: "C:/luts/warm.cube".into(),
+            sha256: "0f".repeat(32),
+        };
+        let json = serde_json::to_string(&lut).unwrap();
+        let back: crate::modules::domain::ClipLut = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, lut);
     }
 
     #[test]

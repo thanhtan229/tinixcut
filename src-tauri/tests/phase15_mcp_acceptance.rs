@@ -276,7 +276,7 @@ async fn test_p15_ac03_modern_protocol_lifecycle() {
         "Must succeed without initialize"
     );
     let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 33);
 }
 
 #[tokio::test]
@@ -309,7 +309,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         .send_request("tools/list", serde_json::json!({}))
         .await;
     let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 32, "Must expose exactly 32 tools");
+    assert_eq!(tools.len(), 33, "Must expose exactly 33 tools");
 
     let mut tool_names: Vec<String> = tools
         .iter()
@@ -335,6 +335,7 @@ async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
         "tinixcut_export_start".to_string(),
         "tinixcut_export_status".to_string(),
         "tinixcut_inspect".to_string(),
+        "tinixcut_lut_probe".to_string(),
         "tinixcut_media_probe".to_string(),
         "tinixcut_media_scene_candidates".to_string(),
         "tinixcut_media_transcript".to_string(),
@@ -4277,7 +4278,7 @@ fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
         serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
     assert_eq!(val1["id"], 2);
     let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 33);
 
     // 3. tinixcut_inspect via real subprocess
     let req2 = serde_json::json!({
@@ -5281,6 +5282,7 @@ async fn test_p58a_every_tool_declares_safety_annotations() {
     let tools = res["result"]["tools"].as_array().expect("tools array");
     let read_only: std::collections::BTreeSet<&str> = [
         "project_compare",
+        "lut_probe",
         "media_probe",
         "edit_plan_validate",
         "edit_plan_draft",
@@ -5408,6 +5410,59 @@ async fn test_p58a_destructive_apply_requires_prior_identical_dry_run_when_gate_
     assert_eq!(
         load_project(&project_path).unwrap().revision,
         project.revision + 2
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_p58b_lut_probe_returns_a_clip_reference_that_applies() {
+    let dir = test_dir("p58b_probe");
+    let (project_path, project) = create_sample_project(&dir, "lut_probe_project");
+    let mut cube = String::from(
+        "TITLE \"Probe\"
+LUT_3D_SIZE 2
+",
+    );
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                cube.push_str(&format!(
+                    "{r} {g} {b}
+"
+                ));
+            }
+        }
+    }
+    let lut_path = dir.join("probe.cube");
+    fs::write(&lut_path, cube).unwrap();
+    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+
+    let probe = client
+        .call_tool(
+            "tinixcut_lut_probe",
+            serde_json::json!({ "lutPath": lut_path.to_str().unwrap() }),
+        )
+        .await;
+    assert_eq!(probe["result"]["isError"], false, "{probe}");
+    let report = &probe["result"]["structuredContent"];
+    assert_eq!(report["lutSize"], 2);
+    assert_eq!(report["clipLut"]["name"], "Probe");
+    assert_eq!(report["clipLut"]["sha256"].as_str().unwrap().len(), 64);
+
+    let missing = client
+        .call_tool(
+            "tinixcut_lut_probe",
+            serde_json::json!({ "lutPath": dir.join("nope.cube").to_str().unwrap() }),
+        )
+        .await;
+    assert_eq!(missing["result"]["isError"], true);
+    assert_eq!(
+        missing["result"]["structuredContent"]["code"],
+        "LUT_PROBE_FAILED"
+    );
+    assert_eq!(
+        load_project(&project_path).unwrap().revision,
+        project.revision
     );
     fs::remove_dir_all(dir).unwrap();
 }

@@ -24,6 +24,7 @@ import {
   TimelineItem,
   TransitionKind,
   VisualEffectPreset,
+  ChromaKey,
   ColorAdjustments,
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
@@ -108,6 +109,9 @@ interface InspectorProps {
   ) => void;
   onUpdateVisualEffect?: (visualEffect: VisualEffectPreset) => void;
   onUpdateColorAdjustments?: (adjustments: ColorAdjustments) => void;
+  onUpdateChromaKey?: (chromaKey: ChromaKey | null) => void;
+  onChooseLut?: () => void;
+  onClearLut?: () => void;
   onUpdateSpeed?: (speed: ClipSpeed) => void;
   onAddKeyframe?: (property: KeyframeProperty, offsetFrame: number, value: number) => void;
   onRemoveKeyframe?: (property: KeyframeProperty, offsetFrame: number) => void;
@@ -166,6 +170,9 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateTransition,
   onUpdateVisualEffect,
   onUpdateColorAdjustments,
+  onUpdateChromaKey,
+  onChooseLut,
+  onClearLut,
   onUpdateSpeed,
   onAddKeyframe,
   onRemoveKeyframe,
@@ -1596,6 +1603,108 @@ export const Inspector: React.FC<InspectorProps> = ({
               onClick={() => onUpdateColorAdjustments({ brightness: 0, contrast: 1, saturation: 1, temperature: 0 })}
               style={{ alignSelf: "flex-end", fontSize: "11px" }}
             >Reset color</button>
+          </section>
+        )}
+
+        {onUpdateChromaKey && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (() => {
+          const key = selectedItem.chroma_key ?? null;
+          const defaults: ChromaKey = { key_color: "#00ff00", similarity: 0.3, blend: 0.1, despill: null };
+          const update = (patch: Partial<ChromaKey>) => onUpdateChromaKey({ ...(key ?? defaults), ...patch });
+          return (
+            <section style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>CHROMA KEY</div>
+              <label style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                <input
+                  type="checkbox"
+                  aria-label="Enable chroma key"
+                  checked={key !== null}
+                  onChange={(event) => onUpdateChromaKey(event.currentTarget.checked ? defaults : null)}
+                />
+                Key out a color
+              </label>
+              {key && (
+                <>
+                  <label style={{ display: "grid", gridTemplateColumns: "82px 1fr", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                    <span>Key color</span>
+                    <input
+                      aria-label="Key color"
+                      type="color"
+                      value={key.key_color}
+                      onChange={(event) => update({ key_color: event.currentTarget.value })}
+                    />
+                  </label>
+                  {([
+                    ["similarity", "Similarity", 0.001, 1, 0.001],
+                    ["blend", "Edge blend", 0, 1, 0.001],
+                  ] as const).map(([field, label, min, max, step]) => (
+                    <label key={field} style={{ display: "grid", gridTemplateColumns: "82px 1fr 38px", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                      <span>{label}</span>
+                      <input
+                        aria-label={label}
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={key[field]}
+                        onChange={(event) => update({ [field]: Number(event.currentTarget.value) })}
+                      />
+                      <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{key[field].toFixed(2)}</span>
+                    </label>
+                  ))}
+                  <label style={{ display: "grid", gridTemplateColumns: "82px 1fr", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                    <span>Despill</span>
+                    <select
+                      aria-label="Despill"
+                      value={key.despill?.screen ?? "Off"}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
+                        update({ despill: value === "Off" ? null : { screen: value as "Green" | "Blue", mix: key.despill?.mix ?? 0.5 } });
+                      }}
+                    >
+                      <option value="Off">Off</option>
+                      <option value="Green">Green screen</option>
+                      <option value="Blue">Blue screen</option>
+                    </select>
+                  </label>
+                  {key.despill && (
+                    <label style={{ display: "grid", gridTemplateColumns: "82px 1fr 38px", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                      <span>Despill mix</span>
+                      <input
+                        aria-label="Despill mix"
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={key.despill.mix}
+                        onChange={(event) => update({ despill: { screen: key.despill!.screen, mix: Number(event.currentTarget.value) } })}
+                      />
+                      <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{key.despill.mix.toFixed(2)}</span>
+                    </label>
+                  )}
+                </>
+              )}
+            </section>
+          );
+        })()}
+
+        {onChooseLut && (selectedItem.kind === "Video" || selectedItem.kind === "Image") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>
+              3D LUT
+            </div>
+            <div style={{ fontSize: "11px" }} aria-label="Current LUT">
+              {selectedItem.color_lut ? selectedItem.color_lut.name : "None"}
+            </div>
+            <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
+              <button type="button" onClick={onChooseLut} style={{ fontSize: "11px" }}>
+                {selectedItem.color_lut ? "Replace LUT…" : "Choose LUT…"}
+              </button>
+              {selectedItem.color_lut && onClearLut && (
+                <button type="button" onClick={onClearLut} style={{ fontSize: "11px" }}>
+                  Clear LUT
+                </button>
+              )}
+            </div>
           </section>
         )}
 

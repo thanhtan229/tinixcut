@@ -4,9 +4,9 @@
 
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{
-    AssetDimensions, ClipSpeed, ColorAdjustments, Crop, ItemKind, PlacementMode, Project,
-    TextAnimation, TextRichStyle, TextStyle, TextTemplateReference, TrackKind, Transform,
-    VisualEffectPreset,
+    AssetDimensions, ChromaKey, ClipLut, ClipSpeed, ColorAdjustments, Crop, DespillScreen,
+    ItemKind, PlacementMode, Project, TextAnimation, TextRichStyle, TextStyle,
+    TextTemplateReference, TrackKind, Transform, VisualEffectPreset,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -29,6 +29,9 @@ pub enum CompositionError {
 
     #[error("Render graph compilation error: {0}")]
     GraphCompilationError(String),
+
+    #[error("LUT for clip '{item_id}' is unavailable: {reason}")]
+    LutUnavailable { item_id: String, reason: String },
 }
 
 pub use crate::modules::domain::{
@@ -93,6 +96,8 @@ pub struct CompositionVisualLayer {
     pub placement_mode: PlacementMode,
     pub visual_effect: VisualEffectPreset,
     pub color_adjustments: ColorAdjustments,
+    pub color_lut: Option<ClipLut>,
+    pub chroma_key: Option<ChromaKey>,
     pub opacity: f32,
     pub text_content: Option<String>,
     pub font_family: Option<String>,
@@ -521,6 +526,47 @@ pub fn visual_color_matrix(
     matrix
 }
 
+/// FFmpeg filter fragment for a clip's chroma key, applied right after cropping and before any
+/// scale/rotate so the keyed alpha is resampled with the picture and rotation padding stays
+/// transparent. `colorkey` replaces alpha from the RGB distance to the key color; `despill`
+/// then removes spill from the keyed channel only (expand 0, other channel scales 0).
+fn ffmpeg_chroma_key_filter(key: Option<&ChromaKey>) -> String {
+    let Some(key) = key else {
+        return String::new();
+    };
+    let Some([r, g, b]) = key.rgb() else {
+        return String::new();
+    };
+    let mut filter = format!(
+        ",format=rgba,colorkey=color=0x{r:02x}{g:02x}{b:02x}:similarity={:.5}:blend={:.5}",
+        key.similarity, key.blend
+    );
+    if let Some(despill) = &key.despill {
+        let (screen, scales) = match despill.screen {
+            DespillScreen::Green => ("green", "red=0:green=-1:blue=0"),
+            DespillScreen::Blue => ("blue", "red=0:green=0:blue=-1"),
+        };
+        filter.push_str(&format!(
+            ",despill=type={screen}:mix={:.5}:expand=0:{scales}",
+            despill.mix
+        ));
+    }
+    filter
+}
+
+/// FFmpeg filter fragment for a clip's 3D LUT. Applied after the color matrix so that the
+/// order is color matrix -> LUT everywhere. Trilinear interpolation matches the preview
+/// shader (`TEXTURE_3D` + linear filtering), so the two paths sample the same function.
+fn ffmpeg_lut_filter(lut: Option<&ClipLut>) -> String {
+    match lut {
+        Some(lut) => format!(
+            ",format=rgba,lut3d=file='{}':interp=trilinear",
+            crate::modules::export::automation::escape_ffmpeg_filter_path(Path::new(&lut.path))
+        ),
+        None => String::new(),
+    }
+}
+
 fn ffmpeg_color_adjustment_filter(
     effect: VisualEffectPreset,
     adjustments: ColorAdjustments,
@@ -575,6 +621,39 @@ pub struct CompositionPlan {
 }
 
 impl CompositionPlan {
+    /// Confirms every referenced LUT still exists with the content the project pinned. A
+    /// missing or changed LUT fails explicitly; it is never skipped or substituted.
+    pub fn verify_lut_files(&self) -> Result<(), CompositionError> {
+        for layer in &self.visual_layers {
+            let Some(lut) = &layer.color_lut else {
+                continue;
+            };
+            let unavailable = |reason: String| CompositionError::LutUnavailable {
+                item_id: layer.item_id.clone(),
+                reason,
+            };
+            if lut.path.contains('\'') {
+                return Err(unavailable(
+                    "the LUT path contains an apostrophe, which cannot be passed to FFmpeg safely"
+                        .into(),
+                ));
+            }
+            let path = Path::new(&lut.path);
+            if !path.is_file() {
+                return Err(unavailable(format!("file '{}' is missing", lut.path)));
+            }
+            let actual = crate::modules::media::lut::lut_file_sha256(path)
+                .map_err(|error| unavailable(error.to_string()))?;
+            if !actual.eq_ignore_ascii_case(&lut.sha256) {
+                return Err(unavailable(format!(
+                    "file '{}' changed since it was added (content hash differs)",
+                    lut.path
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn audio_render_window(
         &self,
         audio: &CompositionAudioLayer,
@@ -712,6 +791,8 @@ impl CompositionPlan {
                             placement_mode: item.placement_mode,
                             visual_effect: item.visual_effect,
                             color_adjustments: item.color_adjustments,
+                            color_lut: item.color_lut.clone(),
+                            chroma_key: item.chroma_key.clone(),
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: None,
@@ -769,6 +850,8 @@ impl CompositionPlan {
                             placement_mode: item.placement_mode,
                             visual_effect: VisualEffectPreset::None,
                             color_adjustments: ColorAdjustments::default(),
+                            color_lut: None,
+                            chroma_key: None,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: Some(
@@ -961,6 +1044,8 @@ fn sample_visual_layer_at(
         crop: layer.crop.clone(),
         visual_effect: layer.visual_effect,
         color_adjustments: layer.color_adjustments,
+        color_lut: layer.color_lut.clone(),
+        chroma_key: layer.chroma_key.clone(),
         opacity,
         text: layer.text_content.clone(),
         font_family: layer.font_family.clone(),
@@ -1387,6 +1472,8 @@ impl CompositionPlan {
                                     layer.crop.left, layer.crop.right, layer.crop.top, layer.crop.bottom, layer.crop.left, layer.crop.top
                                 ));
                             }
+                            filter_chain
+                                .push_str(&ffmpeg_chroma_key_filter(layer.chroma_key.as_ref()));
                             let layer_idx = self
                                 .visual_layers
                                 .iter()
@@ -1411,6 +1498,7 @@ impl CompositionPlan {
                                     layer.visual_effect,
                                     layer.color_adjustments,
                                 ));
+                                filter_chain.push_str(&ffmpeg_lut_filter(layer.color_lut.as_ref()));
                                 filter_chain.push_str(&format!(
                                     ",colorchannelmixer@ccm_{}=aa={:.3}[{}];",
                                     layer_idx, opacity, layer_tag
@@ -1431,6 +1519,7 @@ impl CompositionPlan {
                                     layer.visual_effect,
                                     layer.color_adjustments,
                                 ));
+                                filter_chain.push_str(&ffmpeg_lut_filter(layer.color_lut.as_ref()));
 
                                 // Transition filters (FadeIn, FadeOut, CrossDissolve, FadeBlack)
                                 if let Some(ref trans) = layer.transition {
@@ -1700,6 +1789,8 @@ impl CompositionPlan {
                         ));
                     }
                     left_clip_filter
+                        .push_str(&ffmpeg_chroma_key_filter(left_layer.chroma_key.as_ref()));
+                    left_clip_filter
                         .push_str(&format!(",scale={}:{}", left_render_w, left_render_h));
                     if left_rotation.abs() > 0.01 {
                         left_clip_filter.push_str(&format!(
@@ -1711,6 +1802,7 @@ impl CompositionPlan {
                         left_layer.visual_effect,
                         left_layer.color_adjustments,
                     ));
+                    left_clip_filter.push_str(&ffmpeg_lut_filter(left_layer.color_lut.as_ref()));
                     left_clip_filter.push_str(&format!(
                         ",format=yuva420p,colorchannelmixer=aa={:.3}[{}];",
                         left_opacity, left_clip_tag
@@ -1810,6 +1902,8 @@ impl CompositionPlan {
                         ));
                     }
                     right_clip_filter
+                        .push_str(&ffmpeg_chroma_key_filter(right_layer.chroma_key.as_ref()));
+                    right_clip_filter
                         .push_str(&format!(",scale={}:{}", right_render_w, right_render_h));
                     if right_rotation.abs() > 0.01 {
                         right_clip_filter.push_str(&format!(
@@ -1821,6 +1915,7 @@ impl CompositionPlan {
                         right_layer.visual_effect,
                         right_layer.color_adjustments,
                     ));
+                    right_clip_filter.push_str(&ffmpeg_lut_filter(right_layer.color_lut.as_ref()));
                     right_clip_filter.push_str(&format!(
                         ",format=yuva420p,colorchannelmixer=aa={:.3}[{}];",
                         right_opacity, right_clip_tag
@@ -2261,6 +2356,10 @@ pub struct PreviewSampledLayer {
     pub visual_effect: VisualEffectPreset,
     #[serde(default)]
     pub color_adjustments: ColorAdjustments,
+    #[serde(default)]
+    pub color_lut: Option<ClipLut>,
+    #[serde(default)]
+    pub chroma_key: Option<ChromaKey>,
     pub opacity: f32,
     pub text: Option<String>,
     pub font_family: Option<String>,

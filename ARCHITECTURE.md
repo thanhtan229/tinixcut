@@ -977,6 +977,16 @@ Regardless of implementation:
 - rapid seek does not accumulate obsolete decode work
 - backend failure does not corrupt project state
 
+### 15.3.1 Per-clip effect layer (Phase 58)
+
+Clips with a 3D LUT (and, later, a chroma key) are drawn by a transient WebGL2 layer instead of the SVG color filter:
+
+- The `<video>` element keeps decoding, seeking and playing underneath; only what is *shown* changes. The SVG filter is dropped for that clip so the color matrix is not applied twice.
+- The layer's pipeline order is **chroma key -> color matrix -> 3D LUT**, identical to export (`colorkey,despill` -> `geq` matrix -> `lut3d=interp=trilinear`, `ARCHITECTURE.md` §17).
+- WebGL state, textures and contexts are transient and never persisted. The project stores only `ClipLut { name, path, sha256 }`.
+- A missing or changed LUT file, a lost context, or an unavailable WebGL2 are reported explicitly in the preview and fail export preflight; the unprocessed frame is never presented as if it were graded.
+- Clips without these effects keep the existing SVG path, so existing parity evidence is unchanged.
+
 ### 15.4 Preview acceptance gate
 
 POC 1 must decide the initial backend using measurable workload tests before deep playback implementation.
@@ -1101,7 +1111,9 @@ Both the preview backend (WebView2) and the export backend (FFmpeg) strictly con
    - **Position**: Overlay placed such that the layer's center is at $(\frac{W}{2} + \text{pos\_x}, \frac{H}{2} + \text{pos\_y})$. In FFmpeg, this is evaluated as `overlay=x='(W-w)/2+pos_x':y='(H-h)/2+pos_y'`.
    - **Opacity**: Alpha multiplier applied via CSS opacity in preview and `colorchannelmixer=aa=opacity` in export.
 
-3. **Timeline Boundary Semantics**:
+3. **Per-clip color pipeline (Phase 58)**: `colorkey/despill` (when enabled) -> color matrix (`ClipColorAdjustments` + preset, `geq`) -> 3D LUT (`lut3d`, trilinear). Preview and export evaluate the same ordered steps; the 3D LUT file is referenced by path and pinned by SHA-256.
+
+4. **Timeline Boundary Semantics**:
    - Timeline intervals are strictly half-open $[start, end)$.
    - An item is active at timeline time $t$ if $start \le t < end$.
    - The export filtergraph strictly enforces this half-open interval using `enable='between(t, start, end - 0.0005)'` so that boundary frames do not overlap adjacent clips.

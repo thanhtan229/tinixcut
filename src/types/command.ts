@@ -98,6 +98,20 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipChromaKeySet";
+      payload: {
+        item_id: string;
+        chroma_key: import("./project").ChromaKey | null;
+      };
+    }
+  | {
+      type: "ClipColorLutSet";
+      payload: {
+        item_id: string;
+        color_lut: import("./project").ClipLut | null;
+      };
+    }
+  | {
       type: "ClipSpeedSet";
       payload: {
         item_id: string;

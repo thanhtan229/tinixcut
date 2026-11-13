@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset } from "./types/export";
-import { Asset, AudioCrossfade, ClipSpeed, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
+import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -2224,6 +2224,52 @@ export function App() {
     );
   };
 
+  const handleChooseLut = async () => {
+    if (!selectedItemId) return;
+    try {
+      const selected = await open({
+        title: "Choose a 3D LUT",
+        filters: [{ name: "3D LUT (.cube)", extensions: ["cube"] }],
+        multiple: false,
+      });
+      if (!selected) return;
+      const chosenPath = Array.isArray(selected) ? selected[0] : selected;
+      // Validation and hashing happen in the backend so an invalid LUT never enters a project.
+      const lut = await editorApi.describeLut(chosenPath);
+      executeCommandEnvelope(
+        [{
+          operation_id: `op_color_lut_${Date.now()}`,
+          operation: { type: "ClipColorLutSet", payload: { item_id: selectedItemId, color_lut: lut } },
+        }],
+        `Set LUT (${lut.name})`
+      );
+    } catch (err) {
+      setStatusMsg(`LUT error: ${err}`);
+    }
+  };
+
+  const handleUpdateChromaKey = (chromaKey: ChromaKey | null) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_chroma_key_${Date.now()}`,
+        operation: { type: "ClipChromaKeySet", payload: { item_id: selectedItemId, chroma_key: chromaKey } },
+      }],
+      chromaKey ? "Update chroma key" : "Remove chroma key"
+    );
+  };
+
+  const handleClearLut = () => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_color_lut_clear_${Date.now()}`,
+        operation: { type: "ClipColorLutSet", payload: { item_id: selectedItemId, color_lut: null } },
+      }],
+      "Clear LUT"
+    );
+  };
+
   const handleUpdateSpeed = (speed: ClipSpeed) => {
     if (!selectedItemId) return;
     executeCommandEnvelope(
@@ -3013,6 +3059,9 @@ export function App() {
           onUpdateTransition={handleUpdateTransition}
           onUpdateVisualEffect={handleUpdateVisualEffect}
           onUpdateColorAdjustments={handleUpdateColorAdjustments}
+          onUpdateChromaKey={handleUpdateChromaKey}
+          onChooseLut={handleChooseLut}
+          onClearLut={handleClearLut}
           onUpdateSpeed={handleUpdateSpeed}
           onAddKeyframe={handleAddKeyframe}
           onRemoveKeyframe={handleRemoveKeyframe}

@@ -200,6 +200,23 @@ export interface ColorAdjustments {
   saturation: number;
   temperature: number;
 }
+/** Reference to a user-supplied `.cube` 3D LUT; the file stays outside the project. */
+export interface ClipLut {
+  name: string;
+  path: string;
+  sha256: string;
+}
+export type DespillScreen = "Green" | "Blue";
+/** Per-clip chroma key; mirrors FFmpeg colorkey (+ optional despill). */
+export interface ChromaKey {
+  /** "#rrggbb" */
+  key_color: string;
+  /** 0.00001..=1 — distance below which a pixel becomes fully transparent. */
+  similarity: number;
+  /** 0..=1 — soft edge width above `similarity`; 0 gives a hard edge. */
+  blend: number;
+  despill: { screen: DespillScreen; mix: number } | null;
+}
 export type ClipSpeed = "Half" | "Normal" | "Double";
 
 export interface Transition {
@@ -356,6 +373,8 @@ export interface TimelineItem {
   placement_mode?: PlacementMode;
   visual_effect?: VisualEffectPreset;
   color_adjustments?: ColorAdjustments;
+  color_lut?: ClipLut | null;
+  chroma_key?: ChromaKey | null;
   speed?: ClipSpeed;
   embedded_audio_enabled?: boolean;
   linked_item_id?: string | null;
