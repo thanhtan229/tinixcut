@@ -98,6 +98,13 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipDuckingSet";
+      payload: {
+        item_id: string;
+        ducking: import("./project").Ducking | null;
+      };
+    }
+  | {
       type: "ClipChromaKeySet";
       payload: {
         item_id: string;

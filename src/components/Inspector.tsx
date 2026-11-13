@@ -25,6 +25,7 @@ import {
   TransitionKind,
   VisualEffectPreset,
   ChromaKey,
+  Ducking,
   ColorAdjustments,
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
@@ -112,6 +113,7 @@ interface InspectorProps {
   onUpdateVisualEffect?: (visualEffect: VisualEffectPreset) => void;
   onUpdateColorAdjustments?: (adjustments: ColorAdjustments) => void;
   onUpdateChromaKey?: (chromaKey: ChromaKey | null) => void;
+  onUpdateDucking?: (ducking: Ducking | null) => void;
   onChooseLut?: () => void;
   onClearLut?: () => void;
   onUpdateSpeed?: (speed: ClipSpeed) => void;
@@ -173,6 +175,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateVisualEffect,
   onUpdateColorAdjustments,
   onUpdateChromaKey,
+  onUpdateDucking,
   onChooseLut,
   onClearLut,
   onUpdateSpeed,
@@ -1980,6 +1983,50 @@ export const Inspector: React.FC<InspectorProps> = ({
             </div>
           </section>
         )}
+
+        {onUpdateDucking && (selectedItem.kind === "Video" || selectedItem.kind === "Audio") && (() => {
+          const ducking = selectedItem.ducking ?? null;
+          const defaults: Ducking = { depth_db: 12, attack_ms: 30, release_ms: 400, threshold_db: -40 };
+          const update = (patch: Partial<Ducking>) => onUpdateDucking({ ...(ducking ?? defaults), ...patch });
+          return (
+            <section style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>DUCKING</div>
+              <label style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                <input
+                  type="checkbox"
+                  aria-label="Duck under other audio"
+                  checked={ducking !== null}
+                  onChange={(event) => onUpdateDucking(event.currentTarget.checked ? defaults : null)}
+                />
+                Lower this clip while other audio plays
+              </label>
+              {ducking && (
+                <>
+                  {([
+                    ["depth_db", "Duck depth (dB)", 1, 30, 1],
+                    ["attack_ms", "Attack (ms)", 5, 500, 5],
+                    ["release_ms", "Release (ms)", 20, 2000, 10],
+                    ["threshold_db", "Threshold (dB)", -60, -10, 1],
+                  ] as const).map(([field, label, min, max, step]) => (
+                    <label key={field} style={{ display: "grid", gridTemplateColumns: "100px 1fr 44px", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+                      <span>{label}</span>
+                      <input
+                        aria-label={label}
+                        type="range"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={ducking[field]}
+                        onChange={(event) => update({ [field]: Number(event.currentTarget.value) })}
+                      />
+                      <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{ducking[field]}</span>
+                    </label>
+                  ))}
+                </>
+              )}
+            </section>
+          );
+        })()}
 
         {scopesSection}
       </div>

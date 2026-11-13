@@ -2947,9 +2947,43 @@ async fn frame_scopes(
 fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFrameState, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
     let project = engine.service.project();
-    let plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
+    let mut plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
+    if let Some(curves) = modules::composition::ducking::cached(&plan) {
+        plan.attach_ducking_curves(curves.as_ref().clone());
+    }
     let timestamp = RationalTime::new(frame, project.settings.frame_rate);
     Ok(plan.sample_preview_at(timestamp))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DuckingPrepareReport {
+    clips: usize,
+    /// Deepest reduction reached by any ducked clip, in dB (0 when nothing ducks).
+    deepest_reduction_db: f32,
+}
+
+/// Runs the ducking analysis for the live project so preview volumes include it. The result is
+/// cached for the exact mix; editing the mix invalidates it.
+#[tauri::command]
+async fn ducking_prepare(state: State<'_, AppState>) -> Result<DuckingPrepareReport, String> {
+    let plan = {
+        let engine = state.0.lock().map_err(|e| e.to_string())?;
+        CompositionPlan::from_project(engine.service.project()).map_err(|e| e.to_string())?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let curves = modules::composition::ducking::prepare(&plan, None)?;
+        let deepest = curves
+            .values()
+            .map(|curve| curve.min_gain())
+            .fold(1.0f32, f32::min);
+        Ok::<_, String>(DuckingPrepareReport {
+            clips: curves.len(),
+            deepest_reduction_db: 20.0 * deepest.log10(),
+        })
+    })
+    .await
+    .map_err(|e| format!("Ducking task failed: {e}"))?
 }
 
 /// Renders one canonical rich-text overlay through the shared Phase 30 renderer.
@@ -3847,6 +3881,7 @@ pub fn run() {
             lut_describe,
             lut_read_table,
             frame_scopes,
+            ducking_prepare,
             project_chapters,
             app_health_check,
             app_settings_get,

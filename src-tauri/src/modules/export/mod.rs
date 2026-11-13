@@ -612,6 +612,22 @@ impl ExportEngine {
             .collect();
         remove_silent_video_audio_layers(&mut plan, &silent_video_item_ids);
 
+        // Ducking is data derived from the mix: measure it once here so the envelope written
+        // below and the preview evaluate the same curve.
+        let ducking_curves =
+            crate::modules::composition::ducking::compute_curves(&plan, cancel_flag.as_ref())
+                .map_err(|message| {
+                    if cancel_flag
+                        .as_ref()
+                        .is_some_and(|flag| flag.load(Ordering::SeqCst))
+                    {
+                        ExportError::Cancelled
+                    } else {
+                        ExportError::RenderFailed(format!("Ducking analysis failed: {message}"))
+                    }
+                })?;
+        plan.attach_ducking_curves(ducking_curves);
+
         // 1. Establish temporary output path for safe promotion
         let temp_filename = format!(
             "{}.{}.tc_render.tmp.mp4",

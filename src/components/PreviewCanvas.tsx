@@ -741,11 +741,29 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     void drain();
   }, []);
 
+  // Ducking curves are analysed once per mix; sampled volumes include them only afterwards, so
+  // the preview is re-sampled when the analysis finishes.
+  const [duckingReadyTick, setDuckingReadyTick] = useState(0);
+  const hasDucking = project?.tracks.some((track) => track.items.some((item) => item.ducking)) ?? false;
+  useEffect(() => {
+    if (!hasDucking) return undefined;
+    let cancelled = false;
+    editorApi
+      .prepareDucking()
+      .then(() => {
+        if (!cancelled) setDuckingReadyTick((tick) => tick + 1);
+      })
+      .catch((error) => console.warn("Ducking analysis failed:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDucking, project?.revision]);
+
   // 1. Synchronize Playhead & Sampled Composition via Rust Core (Milestone 3 & 4)
   useEffect(() => {
     requestCounterRef.current += 1;
     drainLatestPreviewSample();
-  }, [playheadFrame, project?.revision, drainLatestPreviewSample]);
+  }, [playheadFrame, project?.revision, duckingReadyTick, drainLatestPreviewSample]);
 
   // Text overlays are derived from canonical state through the shared
   // native renderer. Static items are cached per project revision; animated
@@ -2402,6 +2420,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         >
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
+          {sampledState?.ducking_pending && (
+            <span title="The ducking gain curve is being analysed; ducked clips play at their undropped volume until it is ready.">
+              Ducking pending
+            </span>
+          )}
           <span>Superseded: {supersededRequests}</span>
           {previewProxyMode === "auto" && (
             <span title={Object.values(policyProxyUnavailable).join("\n") || undefined}>

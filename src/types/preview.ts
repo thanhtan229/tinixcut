@@ -71,6 +71,8 @@ export interface PreviewFrameState {
   active_layers: PreviewSampledLayer[];
   active_audio: PreviewSampledAudio[];
   transition_groups?: PreviewTransitionGroup[];
+  /** True while a ducked clip's gain curve is still being analysed. */
+  ducking_pending?: boolean;
 }
 
 export interface PreviewTextOverlayDiagnostics {

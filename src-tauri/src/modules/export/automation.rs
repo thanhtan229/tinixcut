@@ -175,6 +175,7 @@ impl ExportAutomationSchedule {
         let mut audio_channels = Vec::with_capacity(plan.audio_layers.len());
         for audio in &plan.audio_layers {
             let needs_envelope = layer_has_animated_volume(audio)
+                || plan.ducking_curves.contains_key(&audio.item_id)
                 || plan.audio_crossfades.iter().any(|transition| {
                     transition.left_item_id == audio.item_id
                         || transition.right_item_id == audio.item_id
@@ -215,6 +216,7 @@ impl ExportAutomationSchedule {
         let mut total_estimated_audio_bytes: u64 = 0;
         for (idx, audio) in plan.audio_layers.iter().enumerate() {
             let needs_envelope = layer_has_animated_volume(audio)
+                || plan.ducking_curves.contains_key(&audio.item_id)
                 || plan.audio_crossfades.iter().any(|transition| {
                     transition.left_item_id == audio.item_id
                         || transition.right_item_id == audio.item_id
@@ -555,6 +557,7 @@ impl ExportAutomationSchedule {
         let mut audio_layers = Vec::new();
         for (idx, audio) in plan.audio_layers.iter().enumerate() {
             let needs_envelope = layer_has_animated_volume(audio)
+                || plan.ducking_curves.contains_key(&audio.item_id)
                 || plan.audio_crossfades.iter().any(|transition| {
                     transition.left_item_id == audio.item_id
                         || transition.right_item_id == audio.item_id

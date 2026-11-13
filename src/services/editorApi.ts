@@ -634,6 +634,11 @@ export const editorApi = {
     return invoke<void>("visual_scene_analysis_cancel", { jobId });
   },
 
+  /** Runs the ducking analysis for the live project so preview volumes include it. */
+  async prepareDucking(): Promise<{ clips: number; deepestReductionDb: number }> {
+    return invoke("ducking_prepare");
+  },
+
   async samplePreviewAt(frame: number): Promise<PreviewFrameState> {
     return invoke<PreviewFrameState>("preview_sample_at", { frame });
   },

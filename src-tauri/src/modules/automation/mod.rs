@@ -962,6 +962,7 @@ impl AutomationAdapter {
             "ClipColorAdjustmentsSet".to_string(),
             "ClipColorLutSet".to_string(),
             "ClipChromaKeySet".to_string(),
+            "ClipDuckingSet".to_string(),
             "ClipKeyframeAdd".to_string(),
             "ClipKeyframeRemove".to_string(),
             "ClipKeyframeMove".to_string(),

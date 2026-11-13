@@ -426,6 +426,9 @@ pub fn run_migrations_if_needed(raw_json: &str) -> Result<String, PersistenceErr
     if version <= 17 && CURRENT_SCHEMA_VERSION >= 18 {
         val = migrate_v17_to_v18(val)?;
     }
+    if version <= 18 && CURRENT_SCHEMA_VERSION >= 19 {
+        val = migrate_v18_to_v19(val)?;
+    }
 
     serde_json::to_string(&val).map_err(PersistenceError::Serialization)
 }
@@ -962,6 +965,49 @@ pub fn migrate_v17_to_v18(
         }
     }
     obj.insert("schema_version".to_string(), serde_json::json!(18));
+    Ok(val)
+}
+
+/// Migrates Schema v18 projects to Schema v19: adds the per-clip `ducking` setting (absent
+/// means none) and promotes `schema_version` to 19.
+pub fn migrate_v18_to_v19(
+    mut val: serde_json::Value,
+) -> Result<serde_json::Value, PersistenceError> {
+    let obj = val.as_object_mut().ok_or_else(|| {
+        PersistenceError::MigrationFailed("Project JSON root must be an object".to_string())
+    })?;
+    if let Some(tracks) = obj
+        .get_mut("tracks")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for track in tracks {
+            let items = track
+                .as_object_mut()
+                .ok_or_else(|| {
+                    PersistenceError::MigrationFailed(
+                        "Track must be an object during v18 to v19 migration".to_string(),
+                    )
+                })?
+                .entry("items")
+                .or_insert_with(|| serde_json::json!([]));
+            for item in items.as_array_mut().ok_or_else(|| {
+                PersistenceError::MigrationFailed(
+                    "Track items must be an array during v18 to v19 migration".to_string(),
+                )
+            })? {
+                item.as_object_mut()
+                    .ok_or_else(|| {
+                        PersistenceError::MigrationFailed(
+                            "Timeline item must be an object during v18 to v19 migration"
+                                .to_string(),
+                        )
+                    })?
+                    .entry("ducking")
+                    .or_insert(serde_json::Value::Null);
+            }
+        }
+    }
+    obj.insert("schema_version".to_string(), serde_json::json!(19));
     Ok(val)
 }
 
@@ -1981,15 +2027,15 @@ mod tests {
 
     #[test]
     fn test_future_schema_rejected() {
-        // Schema 18 is CURRENT_SCHEMA_VERSION; future schema version 19 must be rejected.
-        let raw_json = r#"{"schema_version": 19, "name": "Future Project"}"#;
+        // Schema 19 is CURRENT_SCHEMA_VERSION; future schema version 20 must be rejected.
+        let raw_json = r#"{"schema_version": 20, "name": "Future Project"}"#;
         let err = run_migrations_if_needed(raw_json).unwrap_err();
         match err {
             PersistenceError::UnsupportedSchemaVersion {
                 found,
                 max_supported,
             } => {
-                assert_eq!(found, 19);
+                assert_eq!(found, 20);
                 assert_eq!(max_supported, CURRENT_SCHEMA_VERSION);
             }
             other => panic!("Expected UnsupportedSchemaVersion, got {:?}", other),
@@ -2001,8 +2047,9 @@ mod tests {
         let raw = r#"{"schema_version": 17, "tracks": [{"items": [{"item_id": "itm_a", "color_adjustments": {"brightness":0.1,"contrast":1.0,"saturation":1.0,"temperature":0.0}}]}]}"#;
         let migrated: serde_json::Value =
             serde_json::from_str(&run_migrations_if_needed(raw).unwrap()).unwrap();
-        assert_eq!(migrated["schema_version"], 18);
+        assert_eq!(migrated["schema_version"], CURRENT_SCHEMA_VERSION);
         let item = &migrated["tracks"][0]["items"][0];
+        assert!(item["ducking"].is_null());
         assert!(item["color_lut"].is_null());
         assert!(item.as_object().unwrap().contains_key("color_lut"));
         assert!(item["chroma_key"].is_null());

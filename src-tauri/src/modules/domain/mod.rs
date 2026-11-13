@@ -18,7 +18,7 @@ use self::time::{FrameRate, RationalTime, TimeRange};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 18;
+pub const CURRENT_SCHEMA_VERSION: u32 = 19;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainError {
@@ -613,6 +613,57 @@ impl ClipLut {
     }
 }
 
+/// Automatic ducking of a clip's audio under other audible clips ("voice"). The clip with this
+/// setting gets quieter by `depth_db` while the rest of the mix is above `threshold_db`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Ducking {
+    /// Gain reduction while ducked, 1..=30 dB.
+    pub depth_db: f32,
+    /// Time to reach full depth, 5..=500 ms.
+    pub attack_ms: u32,
+    /// Time to recover to unity, 20..=2000 ms.
+    pub release_ms: u32,
+    /// Level of the rest of the mix above which ducking starts, -60..=-10 dBFS.
+    pub threshold_db: f32,
+}
+
+impl Default for Ducking {
+    fn default() -> Self {
+        Self {
+            depth_db: 12.0,
+            attack_ms: 30,
+            release_ms: 400,
+            threshold_db: -40.0,
+        }
+    }
+}
+
+impl Ducking {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if !self.depth_db.is_finite() || !(1.0..=30.0).contains(&self.depth_db) {
+            return Err(DomainError::Validation(
+                "Ducking depth must be within 1..=30 dB".into(),
+            ));
+        }
+        if !(5..=500).contains(&self.attack_ms) {
+            return Err(DomainError::Validation(
+                "Ducking attack must be within 5..=500 ms".into(),
+            ));
+        }
+        if !(20..=2000).contains(&self.release_ms) {
+            return Err(DomainError::Validation(
+                "Ducking release must be within 20..=2000 ms".into(),
+            ));
+        }
+        if !self.threshold_db.is_finite() || !(-60.0..=-10.0).contains(&self.threshold_db) {
+            return Err(DomainError::Validation(
+                "Ducking threshold must be within -60..=-10 dBFS".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Which key color a despill pass removes from the edges of a keyed subject.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DespillScreen {
@@ -892,6 +943,8 @@ pub struct TimelineItem {
     #[serde(default)]
     pub chroma_key: Option<ChromaKey>,
     #[serde(default)]
+    pub ducking: Option<Ducking>,
+    #[serde(default)]
     pub speed: ClipSpeed,
     #[serde(default = "default_true")]
     pub embedded_audio_enabled: bool,
@@ -939,6 +992,7 @@ impl TimelineItem {
             color_adjustments: ColorAdjustments::default(),
             color_lut: None,
             chroma_key: None,
+            ducking: None,
             speed: ClipSpeed::Normal,
             embedded_audio_enabled: true,
             linked_item_id: None,
@@ -966,6 +1020,9 @@ impl TimelineItem {
         }
         if let Some(key) = &self.chroma_key {
             key.validate()?;
+        }
+        if let Some(ducking) = &self.ducking {
+            ducking.validate()?;
         }
         if !is_valid_id(&self.item_id) {
             return Err(DomainError::InvalidId(self.item_id.clone()));

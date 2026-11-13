@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
-import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
+import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -2250,6 +2250,17 @@ export function App() {
     }
   };
 
+  const handleUpdateDucking = (ducking: Ducking | null) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_ducking_${Date.now()}`,
+        operation: { type: "ClipDuckingSet", payload: { item_id: selectedItemId, ducking } },
+      }],
+      ducking ? "Update ducking" : "Remove ducking"
+    );
+  };
+
   const handleUpdateChromaKey = (chromaKey: ChromaKey | null) => {
     if (!selectedItemId) return;
     executeCommandEnvelope(
@@ -3064,6 +3075,7 @@ export function App() {
           onUpdateVisualEffect={handleUpdateVisualEffect}
           onUpdateColorAdjustments={handleUpdateColorAdjustments}
           onUpdateChromaKey={handleUpdateChromaKey}
+          onUpdateDucking={handleUpdateDucking}
           onChooseLut={handleChooseLut}
           onClearLut={handleClearLut}
           onUpdateSpeed={handleUpdateSpeed}

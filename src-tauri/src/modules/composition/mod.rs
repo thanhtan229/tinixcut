@@ -4,13 +4,14 @@
 
 use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{
-    AssetDimensions, ChromaKey, ClipLut, ClipSpeed, ColorAdjustments, Crop, DespillScreen,
+    AssetDimensions, ChromaKey, ClipLut, ClipSpeed, ColorAdjustments, Crop, DespillScreen, Ducking,
     ItemKind, PlacementMode, Project, TextAnimation, TextRichStyle, TextStyle,
     TextTemplateReference, TrackKind, Transform, VisualEffectPreset,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +40,7 @@ pub use crate::modules::domain::{
     TransitionKind,
 };
 
+pub mod ducking;
 pub mod parity;
 pub use parity::{
     ParityDiffMetrics, ParityFixtureResult, ParityLayerSnapshot, ParitySemanticSnapshot,
@@ -245,6 +247,9 @@ pub struct CompositionAudioLayer {
     pub fade_in: Option<RationalTime>,
     pub fade_out: Option<RationalTime>,
     pub keyframes: Vec<CompositionKeyframe>,
+    /// When set, this clip is ducked under the rest of the mix (see `ducking`).
+    #[serde(default)]
+    pub ducking: Option<Ducking>,
 }
 
 impl CompositionAudioLayer {
@@ -618,9 +623,27 @@ pub struct CompositionPlan {
     pub sample_rate: u32,
     #[serde(default = "default_composition_channels")]
     pub channels: u16,
+    /// Derived, never persisted: gain curves for clips with ducking. Empty until
+    /// `attach_ducking_curves` is called, in which case ducking has no effect on gains.
+    #[serde(skip)]
+    pub ducking_curves: HashMap<String, Arc<ducking::DuckingCurve>>,
 }
 
 impl CompositionPlan {
+    /// Installs the ducking gain curves so `effective_audio_gain_at` includes them.
+    pub fn attach_ducking_curves(&mut self, curves: HashMap<String, Arc<ducking::DuckingCurve>>) {
+        self.ducking_curves = curves;
+    }
+
+    /// True when some audible clip asks for ducking and no curve has been attached for it yet.
+    pub fn ducking_pending(&self) -> bool {
+        self.audio_layers.iter().any(|layer| {
+            layer.ducking.is_some()
+                && !layer.muted
+                && !self.ducking_curves.contains_key(&layer.item_id)
+        })
+    }
+
     /// Confirms every referenced LUT still exists with the content the project pinned. A
     /// missing or changed LUT fails explicitly; it is never skipped or substituted.
     pub fn verify_lut_files(&self) -> Result<(), CompositionError> {
@@ -708,7 +731,12 @@ impl CompositionPlan {
             };
             audio.volume_at_offset(clamped)
         };
-        base_gain * crossfade_gain
+        let ducking_gain = self
+            .ducking_curves
+            .get(&audio.item_id)
+            .map(|curve| curve.gain_at(time.to_seconds()))
+            .unwrap_or(1.0);
+        base_gain * crossfade_gain * ducking_gain
     }
 
     /// Compiles a Project into a normalized CompositionPlan
@@ -828,6 +856,7 @@ impl CompositionPlan {
                                 fade_in: item.fade_in,
                                 fade_out: item.fade_out,
                                 keyframes: item.keyframes.clone(),
+                                ducking: item.ducking,
                             });
                         }
                     }
@@ -900,6 +929,7 @@ impl CompositionPlan {
                             fade_in: item.fade_in,
                             fade_out: item.fade_out,
                             keyframes: item.keyframes.clone(),
+                            ducking: item.ducking,
                         });
                     }
                 }
@@ -989,6 +1019,7 @@ impl CompositionPlan {
             transitions,
             sample_rate: project.settings.sample_rate,
             channels: project.settings.channels,
+            ducking_curves: HashMap::new(),
         })
     }
 }
@@ -1255,6 +1286,7 @@ impl CompositionPlan {
             active_layers,
             active_audio,
             transition_groups,
+            ducking_pending: self.ducking_pending(),
         }
     }
 
@@ -2335,6 +2367,10 @@ pub struct PreviewFrameState {
     pub active_audio: Vec<PreviewSampledAudio>,
     #[serde(default)]
     pub transition_groups: Vec<PreviewTransitionGroup>,
+    /// True while a ducked clip's gain curve has not been analysed yet; the sampled volume of
+    /// that clip is then its undropped volume and the UI must say so.
+    #[serde(default)]
+    pub ducking_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3934,6 +3970,7 @@ pub mod tests {
             fade_in: None,
             fade_out: None,
             keyframes: Vec::new(),
+            ducking: None,
         };
 
         // 1. Static volume 0.0 without keyframes is not audible

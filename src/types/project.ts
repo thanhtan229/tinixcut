@@ -206,6 +206,13 @@ export interface ClipLut {
   path: string;
   sha256: string;
 }
+/** Automatic ducking of this clip under the rest of the mix. */
+export interface Ducking {
+  depth_db: number;
+  attack_ms: number;
+  release_ms: number;
+  threshold_db: number;
+}
 export type DespillScreen = "Green" | "Blue";
 /** Per-clip chroma key; mirrors FFmpeg colorkey (+ optional despill). */
 export interface ChromaKey {
@@ -375,6 +382,7 @@ export interface TimelineItem {
   color_adjustments?: ColorAdjustments;
   color_lut?: ClipLut | null;
   chroma_key?: ChromaKey | null;
+  ducking?: Ducking | null;
   speed?: ClipSpeed;
   embedded_audio_enabled?: boolean;
   linked_item_id?: string | null;

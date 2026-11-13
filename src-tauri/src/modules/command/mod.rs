@@ -379,6 +379,11 @@ pub enum CommandOperation {
         item_id: String,
         color_adjustments: crate::modules::domain::ColorAdjustments,
     },
+    /// Sets or clears (`None`) automatic ducking of this clip under the rest of the mix.
+    ClipDuckingSet {
+        item_id: String,
+        ducking: Option<crate::modules::domain::Ducking>,
+    },
     /// Sets or clears (`None`) the clip's chroma key (FFmpeg colorkey + optional despill).
     ClipChromaKeySet {
         item_id: String,
@@ -5213,6 +5218,36 @@ impl CommandService {
                     });
                 }
                 item.color_adjustments = *color_adjustments;
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
+            CommandOperation::ClipDuckingSet { item_id, ducking } => {
+                if let Some(setting) = ducking {
+                    setting.validate().map_err(|error| {
+                        CommandError::OperationValidationFailed {
+                            operation_id: op_id.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                }
+                let item = project
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|track| track.items.iter_mut())
+                    .find(|item| item.item_id == *item_id)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Audio) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Ducking is supported only on video and audio clips".into(),
+                    });
+                }
+                item.ducking = *ducking;
                 Ok(Some(DiffChange::ClipModified {
                     item_id: item_id.clone(),
                 }))
@@ -11580,6 +11615,123 @@ mod tests {
             revision,
             "rejected edits do not advance the revision"
         );
+    }
+
+    #[test]
+    fn test_phase59_clip_ducking_set_clear_undo_and_validation() {
+        use crate::modules::domain::Ducking;
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let prior = project.clone();
+        let mut service = CommandService::new(project);
+        let ducking = Ducking {
+            depth_db: 12.0,
+            attack_ms: 30,
+            release_ms: 400,
+            threshold_db: -40.0,
+        };
+        let envelope =
+            |base: u64, tx: &str, setting: Option<Ducking>, item: &str| CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: base,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(tx.into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_{tx}"),
+                    operation: CommandOperation::ClipDuckingSet {
+                        item_id: item.into(),
+                        ducking: setting,
+                    },
+                }],
+            };
+
+        service
+            .execute(envelope(0, "tx_duck_set", Some(ducking), &item_id))
+            .expect("valid ducking applies");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .ducking,
+            Some(ducking)
+        );
+
+        let mut active = service.project().clone();
+        let mut history = crate::modules::history::HistoryManager::new(10);
+        history.record_edit(crate::modules::history::HistoryEntry {
+            description: "Set ducking".into(),
+            transaction_id: Some("tx_duck_set".into()),
+            prior_snapshot: prior,
+            resulting_snapshot: active.clone(),
+        });
+        history.undo(&mut active).expect("undo ducking");
+        assert_eq!(active.tracks[0].find_item(&item_id).unwrap().ducking, None);
+        history.redo(&mut active).expect("redo ducking");
+        assert_eq!(
+            active.tracks[0].find_item(&item_id).unwrap().ducking,
+            Some(ducking)
+        );
+
+        let revision = service.project().revision;
+        service
+            .execute(envelope(revision, "tx_duck_clear", None, &item_id))
+            .expect("clearing applies");
+        assert_eq!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .ducking,
+            None
+        );
+
+        let revision = service.project().revision;
+        let invalid = [
+            Ducking {
+                depth_db: 0.0,
+                ..ducking
+            },
+            Ducking {
+                depth_db: 31.0,
+                ..ducking
+            },
+            Ducking {
+                attack_ms: 1,
+                ..ducking
+            },
+            Ducking {
+                release_ms: 5000,
+                ..ducking
+            },
+            Ducking {
+                threshold_db: -5.0,
+                ..ducking
+            },
+            Ducking {
+                depth_db: f32::NAN,
+                ..ducking
+            },
+        ];
+        for (index, bad) in invalid.into_iter().enumerate() {
+            let tx = format!("tx_duck_bad_{index}");
+            assert!(
+                service
+                    .execute(envelope(revision, &tx, Some(bad), &item_id))
+                    .is_err(),
+                "invalid ducking #{index} must be rejected"
+            );
+        }
+        assert!(service
+            .execute(envelope(
+                revision,
+                "tx_duck_missing",
+                Some(ducking),
+                "itm_missing"
+            ))
+            .is_err());
+        assert_eq!(service.project().revision, revision);
     }
 
     #[test]
