@@ -1471,6 +1471,7 @@ fn project_export_preflight(
     output_path: String,
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
+    loudness: Option<modules::media::loudness::LoudnessTarget>,
 ) -> Result<ExportPreflightReport, String> {
     let snapshot = {
         let engine = state.0.lock().map_err(|error| error.to_string())?;
@@ -1488,12 +1489,16 @@ fn project_export_preflight(
     if profile.is_some() && preset.is_some() {
         return Err("Provide either an export profile or an export preset, not both".to_string());
     }
-    let profile = match (profile, preset) {
+    let mut profile = match (profile, preset) {
         (Some(profile), None) => profile,
         (None, Some(preset)) => preset.profile_for(&snapshot.settings),
         (None, None) => ExportProfile::from_project_settings(&snapshot.settings),
         (Some(_), Some(_)) => unreachable!("validated above"),
     };
+    // The loudness target is an output setting chosen next to the preset.
+    if let Some(target) = loudness {
+        profile.loudness = Some(target);
+    }
     ExportEngine::preflight(&snapshot, &target, &profile).map_err(|error| error.to_string())
 }
 
@@ -1504,6 +1509,7 @@ fn project_export(
     output_path: String,
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
+    loudness: Option<modules::media::loudness::LoudnessTarget>,
 ) -> Result<ExportReport, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
     let snapshot = engine.service.project();
@@ -1519,12 +1525,16 @@ fn project_export(
     if profile.is_some() && preset.is_some() {
         return Err("Provide either an export profile or an export preset, not both".to_string());
     }
-    let prof = match (profile, preset) {
+    let mut prof = match (profile, preset) {
         (Some(profile), None) => profile,
         (None, Some(preset)) => preset.profile_for(&snapshot.settings),
         (None, None) => ExportProfile::from_project_settings(&snapshot.settings),
         (Some(_), Some(_)) => unreachable!("validated above"),
     };
+    // The loudness target is an output setting chosen next to the preset.
+    if let Some(target) = loudness {
+        prof.loudness = Some(target);
+    }
     prof.validate_for_project(&snapshot.settings)
         .map_err(|error| error.to_string())?;
     ExportEngine::render_snapshot(snapshot, &target, &prof, None).map_err(|e| e.to_string())
@@ -1537,6 +1547,7 @@ fn project_export_start(
     output_path: String,
     profile: Option<ExportProfile>,
     preset: Option<ExportPreset>,
+    loudness: Option<modules::media::loudness::LoudnessTarget>,
 ) -> Result<ExportStartReceipt, String> {
     let snapshot = {
         let engine = state.0.lock().map_err(|error| error.to_string())?;
@@ -1554,12 +1565,16 @@ fn project_export_start(
     if profile.is_some() && preset.is_some() {
         return Err("Provide either an export profile or an export preset, not both".to_string());
     }
-    let profile = match (profile, preset) {
+    let mut profile = match (profile, preset) {
         (Some(profile), None) => profile,
         (None, Some(preset)) => preset.profile_for(&snapshot.settings),
         (None, None) => ExportProfile::from_project_settings(&snapshot.settings),
         (Some(_), Some(_)) => unreachable!("validated above"),
     };
+    // The loudness target is an output setting chosen next to the preset.
+    if let Some(target) = loudness {
+        profile.loudness = Some(target);
+    }
     profile
         .validate_for_project(&snapshot.settings)
         .map_err(|error| error.to_string())?;

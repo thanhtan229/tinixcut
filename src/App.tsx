@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
-import { EXPORT_PRESET_OPTIONS, ExportPreset } from "./types/export";
+import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
 import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
@@ -144,6 +144,7 @@ export function App() {
   const [zoom, setZoom] = useState<number>(3);
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
   const [exportPreset, setExportPreset] = useState<ExportPreset>("balanced");
+  const [loudnessPreset, setLoudnessPreset] = useState<string>("off");
   const [activeExport, setActiveExport] = useState<{
     jobId: string;
     outputPath: string;
@@ -736,14 +737,15 @@ export function App() {
         return;
       }
       setStatusMsg("Checking media, project settings, output path and available disk space...");
-      const preflight = await editorApi.preflightExport(chosen, exportPreset);
+      const loudnessTarget = LOUDNESS_PRESET_OPTIONS.find((option) => option.value === loudnessPreset)?.target ?? null;
+      const preflight = await editorApi.preflightExport(chosen, exportPreset, loudnessTarget);
       const preset = EXPORT_PRESET_OPTIONS.find((option) => option.value === exportPreset);
       const diskSpace = `${(preflight.availableDiskBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
       const replacement = preflight.outputExists ? " Existing output will be replaced only after a successful render." : "";
       setStatusMsg(
         `Preflight passed: ${preflight.sourceCount} source(s), ${preflight.width}×${preflight.height}, ${preflight.durationSecs.toFixed(1)}s; ${diskSpace} currently free.${replacement} Rendering ${preset?.label ?? "Balanced"} snapshot...`
       );
-      const receipt = await editorApi.startProjectExport(chosen, exportPreset);
+      const receipt = await editorApi.startProjectExport(chosen, exportPreset, loudnessTarget);
       setActiveExport({ jobId: receipt.jobId, outputPath: receipt.outputPath, progress: 0, cancelling: false });
       setStatusMsg("Export started. Progress and cancellation are available in the toolbar.");
     } catch (err) {
@@ -2849,6 +2851,8 @@ export function App() {
         onCanvasBackgroundChange={handleCanvasBackgroundChange}
         exportPreset={exportPreset}
         onExportPresetChange={setExportPreset}
+        loudnessPreset={loudnessPreset}
+        onLoudnessPresetChange={setLoudnessPreset}
         onImportCaptions={handleImportCaptions}
         onExportCaptions={handleExportCaptions}
         onOpenCaptionEditor={() => setIsCaptionEditorOpen(true)}

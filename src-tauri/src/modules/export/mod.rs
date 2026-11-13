@@ -23,6 +23,7 @@ use crate::modules::composition::{CompositionPlan, TextOverlayInput};
 use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{Project, ProjectSettings};
 use crate::modules::media::ffmpeg::FFmpegService;
+use crate::modules::media::loudness::{self, LoudnessOutcome, LoudnessTarget};
 use crate::modules::media::resolver::MediaBinaryResolver;
 use crate::modules::media::text_overlay;
 use crate::modules::media::text_renderer_poc::RgbaBuffer;
@@ -109,6 +110,9 @@ pub struct ExportProfile {
     pub audio_bitrate: String,
     #[serde(default = "default_export_audio_sample_rate")]
     pub audio_sample_rate: u32,
+    /// Optional integrated-loudness target; `None` leaves the mix exactly as rendered.
+    #[serde(default)]
+    pub loudness: Option<LoudnessTarget>,
 }
 
 impl Default for ExportProfile {
@@ -123,6 +127,7 @@ impl Default for ExportProfile {
             audio_codec: "aac".to_string(),
             audio_bitrate: "192k".to_string(),
             audio_sample_rate: 48000,
+            loudness: None,
         }
     }
 }
@@ -164,6 +169,9 @@ impl ExportProfile {
                 "Export dimensions must be positive integers".to_string(),
             ));
         }
+        if let Some(target) = &self.loudness {
+            target.validate().map_err(ExportError::UnsupportedProfile)?;
+        }
         if self.crf > 51 {
             return Err(ExportError::UnsupportedProfile(
                 "CRF must be between 0 and 51".to_string(),
@@ -203,6 +211,9 @@ pub struct ExportReport {
     pub encoder_used: Option<String>,
     #[serde(default)]
     pub attempted_encoders: Vec<String>,
+    /// Present when the profile asked for a loudness target.
+    #[serde(default)]
+    pub loudness: Option<LoudnessOutcome>,
 }
 
 /// Read-only snapshot of export constraints shown before a render starts.
@@ -260,6 +271,90 @@ fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Export Engine coordinating snapshot freeze, FFmpeg execution, and atomic promotion
 pub struct ExportEngine;
+
+/// Applies the profile's loudness target to the rendered temporary file. Returns `None` when no
+/// target was requested. A measurement or encode failure is an export error, never a silent skip.
+fn apply_loudness(
+    temp_output: &Path,
+    profile: &ExportProfile,
+    cancel_flag: Option<&Arc<AtomicBool>>,
+) -> Result<Option<LoudnessOutcome>, ExportError> {
+    let Some(target) = profile.loudness else {
+        return Ok(None);
+    };
+    let cancelled = || cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst));
+    let fail = |message: String| {
+        let _ = fs::remove_file(temp_output);
+        ExportError::RenderFailed(message)
+    };
+    let mut outcome = LoudnessOutcome {
+        target_lufs: target.integrated_lufs,
+        true_peak_limit_db: target.true_peak_db,
+        input_lufs: None,
+        output_lufs: None,
+        output_true_peak_db: None,
+        normalized: false,
+        note: None,
+    };
+    if cancelled() {
+        let _ = fs::remove_file(temp_output);
+        return Err(ExportError::Cancelled);
+    }
+    let measured = loudness::measure(temp_output).map_err(&fail)?;
+    let Some(measured) = measured else {
+        outcome.note = Some("The export has no audio; no loudness change was made".into());
+        return Ok(Some(outcome));
+    };
+    outcome.input_lufs = Some(measured.integrated_lufs);
+    outcome.output_lufs = Some(measured.integrated_lufs);
+    outcome.output_true_peak_db = Some(measured.true_peak_db);
+    if measured.integrated_lufs < loudness::SILENCE_FLOOR_LUFS {
+        outcome.note = Some("The audio is silent or nearly silent; it was not amplified".into());
+        return Ok(Some(outcome));
+    }
+    let within_tolerance = (measured.integrated_lufs - target.integrated_lufs as f64).abs()
+        <= loudness::SKIP_TOLERANCE_LU
+        && measured.true_peak_db <= target.true_peak_db as f64;
+    if within_tolerance {
+        outcome.note = Some("The mix already meets the target; it was left unchanged".into());
+        return Ok(Some(outcome));
+    }
+    if cancelled() {
+        let _ = fs::remove_file(temp_output);
+        return Err(ExportError::Cancelled);
+    }
+    let normalized = temp_output.with_extension("loudnorm.mp4");
+    let _ = fs::remove_file(&normalized);
+    loudness::normalize(
+        temp_output,
+        &normalized,
+        &target,
+        &measured,
+        &profile.audio_bitrate,
+        profile.audio_sample_rate,
+    )
+    .map_err(|message| {
+        let _ = fs::remove_file(&normalized);
+        fail(message)
+    })?;
+    // Report what the delivered file actually measures, not what loudnorm aimed for.
+    let after = loudness::measure(&normalized).map_err(|message| {
+        let _ = fs::remove_file(&normalized);
+        fail(message)
+    })?;
+    fs::rename(&normalized, temp_output).map_err(|e| {
+        let _ = fs::remove_file(&normalized);
+        fail(format!(
+            "Could not replace the render with the normalized file: {e}"
+        ))
+    })?;
+    outcome.normalized = true;
+    if let Some(after) = after {
+        outcome.output_lufs = Some(after.integrated_lufs);
+        outcome.output_true_peak_db = Some(after.true_peak_db);
+    }
+    Ok(Some(outcome))
+}
 
 impl ExportEngine {
     /// Validate a frozen project snapshot and the selected destination before scheduling a render.
@@ -871,6 +966,16 @@ impl ExportEngine {
                     ));
                 }
 
+                // Optional loudness step: runs on the temporary file, so a failure or a
+                // cancellation leaves the destination untouched.
+                let loudness_outcome =
+                    apply_loudness(&temp_output_path, profile, cancel_flag.as_ref())?;
+                let metadata = fs::metadata(&temp_output_path).map_err(|e| {
+                    ExportError::RenderFailed(format!(
+                        "Rendered file is missing or inaccessible: {e}"
+                    ))
+                })?;
+
                 // Safe output promotion: atomically rename temp file to target output.
                 // Windows can briefly hold a scan lock on a just-created file, so a
                 // bounded retry prevents a spurious failure when re-exporting.
@@ -896,6 +1001,7 @@ impl ExportEngine {
                     render_time_ms,
                     encoder_used: Some(candidate.to_string()),
                     attempted_encoders,
+                    loudness: loudness_outcome,
                 });
             }
 

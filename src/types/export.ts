@@ -23,3 +23,23 @@ export const EXPORT_PRESET_OPTIONS: ExportPresetOption[] = [
     description: "Smaller MP4 with more compression",
   },
 ];
+
+/** Optional integrated-loudness target applied to the exported audio. */
+export interface LoudnessTarget {
+  integrated_lufs: number;
+  true_peak_db: number;
+}
+
+export interface LoudnessPresetOption {
+  value: string;
+  label: string;
+  target: LoudnessTarget | null;
+}
+
+export const LOUDNESS_PRESET_OPTIONS: LoudnessPresetOption[] = [
+  { value: "off", label: "Loudness: off", target: null },
+  { value: "youtube", label: "YouTube / Spotify (-14 LUFS)", target: { integrated_lufs: -14, true_peak_db: -1 } },
+  { value: "apple", label: "Apple Podcasts (-16 LUFS)", target: { integrated_lufs: -16, true_peak_db: -1 } },
+  { value: "ebu", label: "EBU R128 broadcast (-23 LUFS)", target: { integrated_lufs: -23, true_peak_db: -1 } },
+  { value: "atsc", label: "ATSC A/85 broadcast (-24 LUFS)", target: { integrated_lufs: -24, true_peak_db: -2 } },
+];

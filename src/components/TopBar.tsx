@@ -1,5 +1,5 @@
 import React from "react";
-import { EXPORT_PRESET_OPTIONS, ExportPreset } from "../types/export";
+import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "../types/export";
 import { HealthStatus } from "../types/health";
 import { Project } from "../types/project";
 
@@ -33,6 +33,8 @@ interface TopBarProps {
   onCanvasBackgroundChange: (color: string) => void;
   exportPreset: ExportPreset;
   onExportPresetChange: (preset: ExportPreset) => void;
+  loudnessPreset: string;
+  onLoudnessPresetChange: (value: string) => void;
 }
 
 const canvasPresets = [
@@ -72,6 +74,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onCanvasBackgroundChange,
   exportPreset,
   onExportPresetChange,
+  loudnessPreset,
+  onLoudnessPresetChange,
 }) => {
   const currentCanvasValue = project ? `${project.settings.width}x${project.settings.height}` : "";
   const usesKnownPreset = canvasPresets.some((preset) => preset.value === currentCanvasValue);
@@ -204,6 +208,20 @@ export const TopBar: React.FC<TopBarProps> = ({
             {EXPORT_PRESET_OPTIONS.map((preset) => (
               <option key={preset.value} value={preset.value} title={preset.description}>
                 {preset.label}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Export loudness"
+            className="export-preset-select"
+            disabled={!project}
+            value={loudnessPreset}
+            onChange={(event) => onLoudnessPresetChange(event.target.value)}
+            title="Normalize the exported audio to a loudness target. Off leaves the mix unchanged."
+          >
+            {LOUDNESS_PRESET_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>

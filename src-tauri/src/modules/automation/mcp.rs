@@ -268,7 +268,16 @@ impl JsonSchema for ExportProfile {
                 "videoCodec": { "type": "string" },
                 "audioCodec": { "type": "string" },
                 "audioBitrate": { "type": "string" },
-                "audioSampleRate": { "type": "integer" }
+                "audioSampleRate": { "type": "integer" },
+                "loudness": {
+                    "description": "Optional loudness target; the exported audio is normalized to it and the measured result is returned in the export report. Field names are snake_case as serialized.",
+                    "type": ["object", "null"],
+                    "properties": {
+                        "integrated_lufs": { "type": "number", "minimum": -36, "maximum": -5 },
+                        "true_peak_db": { "type": "number", "minimum": -9, "maximum": 0 }
+                    },
+                    "required": ["integrated_lufs", "true_peak_db"]
+                }
             }
         })
     }

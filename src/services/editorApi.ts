@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
 import { ClipLut, Project } from "../types/project";
 import { CommandEnvelope, CommandReceipt, DiffReport, OperationEnvelope } from "../types/command";
-import { ExportPreset } from "../types/export";
+import { ExportPreset, LoudnessTarget } from "../types/export";
 import { TemplateDefinition, TemplatePackManifest } from "../types/template";
 import {
   PreviewFrameState,
@@ -565,8 +565,8 @@ export const editorApi = {
     return invoke("project_export", { outputPath, preset });
   },
 
-  async startProjectExport(outputPath: string, preset?: ExportPreset): Promise<ProjectExportStartReceipt> {
-    return invoke("project_export_start", { outputPath, preset });
+  async startProjectExport(outputPath: string, preset?: ExportPreset, loudness?: LoudnessTarget | null): Promise<ProjectExportStartReceipt> {
+    return invoke("project_export_start", { outputPath, preset, loudness: loudness ?? undefined });
   },
 
   async getProjectExportStatus(jobId: string): Promise<ProjectExportJobStatus> {
@@ -577,7 +577,7 @@ export const editorApi = {
     return invoke("project_export_cancel", { jobId });
   },
 
-  async preflightExport(outputPath: string, preset?: ExportPreset): Promise<{
+  async preflightExport(outputPath: string, preset?: ExportPreset, loudness?: LoudnessTarget | null): Promise<{
     projectId: string;
     projectRevision: number;
     outputPath: string;
@@ -591,7 +591,7 @@ export const editorApi = {
     frameRateDenominator: number;
     warnings: string[];
   }> {
-    return invoke("project_export_preflight", { outputPath, preset });
+    return invoke("project_export_preflight", { outputPath, preset, loudness: loudness ?? undefined });
   },
 
   async importMedia(filePath: string): Promise<unknown> {

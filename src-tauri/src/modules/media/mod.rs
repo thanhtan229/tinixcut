@@ -8,6 +8,7 @@ pub mod captions;
 pub mod chapters;
 pub mod collect;
 pub mod ffmpeg;
+pub mod loudness;
 pub mod lut;
 pub mod qualification;
 pub mod resolver;
