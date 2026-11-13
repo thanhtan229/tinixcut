@@ -5271,3 +5271,143 @@ fn test_p15_ac35_subprocess_shutdown_orphan_and_temp_cleanup() {
     fs::write(&lock_probe, b"probe").expect("Directory must remain writable");
     let _ = fs::remove_file(&lock_probe);
 }
+
+#[tokio::test]
+async fn test_p58a_every_tool_declares_safety_annotations() {
+    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let res = client
+        .send_request("tools/list", serde_json::json!({}))
+        .await;
+    let tools = res["result"]["tools"].as_array().expect("tools array");
+    let read_only: std::collections::BTreeSet<&str> = [
+        "project_compare",
+        "media_probe",
+        "edit_plan_validate",
+        "edit_plan_draft",
+        "edit_plan_scene_draft",
+        "edit_plan_scene_selection_suggest",
+        "edit_plan_reorder",
+        "edit_plan_trim",
+        "edit_plan_volume",
+        "edit_plan_canvas",
+        "edit_plan_text_replace",
+        "media_scene_candidates",
+        "media_visual_scenes",
+        "media_transcript",
+        "inspect",
+        "capabilities",
+        "dry_run",
+        "workflow_manifest_validate",
+        "export_preflight",
+        "export_status",
+        "template_validate",
+    ]
+    .into_iter()
+    .collect();
+    let destructive: std::collections::BTreeSet<&str> =
+        ["apply", "save", "export_start", "template_apply"]
+            .into_iter()
+            .collect();
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        let short = name.trim_start_matches("tinixcut_");
+        let a = &tool["annotations"];
+        assert!(a.is_object(), "{name} has no annotations");
+        assert_eq!(a["openWorldHint"], false, "{name}");
+        assert_eq!(
+            a["readOnlyHint"],
+            read_only.contains(short),
+            "{name} readOnlyHint"
+        );
+        assert_eq!(
+            a["destructiveHint"],
+            destructive.contains(short),
+            "{name} destructiveHint"
+        );
+        if read_only.contains(short) {
+            assert_eq!(
+                a["idempotentHint"], true,
+                "{name} read-only tools are idempotent"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_p58a_destructive_apply_requires_prior_identical_dry_run_when_gate_is_on() {
+    let dir = test_dir("p58a_gate");
+    let (project_path, project) = create_sample_project(&dir, "gate_project");
+    let server = TinixCutMcpServer::new().with_destructive_confirmation(true);
+    let mut client = DuplexMcpClient::new(server).await;
+    let path = project_path.to_str().unwrap();
+
+    let envelope = |base: u64, seq: u64, tx: &str, ops: serde_json::Value| {
+        serde_json::json!({
+            "schemaVersion": CURRENT_SCHEMA_VERSION,
+            "projectId": project.project_id,
+            "baseRevision": base,
+            "clientId": "p58a-test",
+            "clientEpoch": project.client_registry.current_epoch,
+            "sequenceNumber": seq,
+            "dryRun": false,
+            "transactionId": tx,
+            "operations": ops
+        })
+    };
+    let create_ops = serde_json::json!([{ "operationId": "op_create", "operation": {
+        "type": "TrackCreate",
+        "payload": { "track_id": "trk_p58a", "name": "Scratch", "kind": "Video" } } }]);
+    let delete_ops = serde_json::json!([{ "operationId": "op_delete", "operation": {
+        "type": "TrackDelete", "payload": { "track_id": "trk_p58a" } } }]);
+
+    // Non-destructive edits are never gated.
+    let created = client
+        .call_tool("tinixcut_apply", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision, 1, "p58a-create", create_ops) }))
+        .await;
+    assert_eq!(created["result"]["isError"], false, "{created}");
+
+    // Destructive apply without a dry run is refused and changes nothing.
+    let refused = client
+        .call_tool("tinixcut_apply", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-1", delete_ops.clone()) }))
+        .await;
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert_eq!(
+        refused["result"]["structuredContent"]["code"], "DESTRUCTIVE_CONFIRMATION_REQUIRED",
+        "{refused}"
+    );
+    assert_eq!(
+        load_project(&project_path).unwrap().revision,
+        project.revision + 1
+    );
+
+    // A dry run of a different envelope does not unlock it.
+    let other = client
+        .call_tool("tinixcut_dry_run", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-other", serde_json::json!([])) }))
+        .await;
+    assert_eq!(other["result"]["isError"], false, "{other}");
+    let still_refused = client
+        .call_tool("tinixcut_apply", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-2", delete_ops.clone()) }))
+        .await;
+    assert_eq!(still_refused["result"]["isError"], true, "{still_refused}");
+
+    // The identical envelope after its own dry run is accepted, once.
+    let dry = client
+        .call_tool("tinixcut_dry_run", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-3", delete_ops.clone()) }))
+        .await;
+    assert_eq!(dry["result"]["isError"], false, "{dry}");
+    let applied = client
+        .call_tool("tinixcut_apply", serde_json::json!({
+            "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-3", delete_ops) }))
+        .await;
+    assert_eq!(applied["result"]["isError"], false, "{applied}");
+    assert_eq!(
+        load_project(&project_path).unwrap().revision,
+        project.revision + 2
+    );
+    fs::remove_dir_all(dir).unwrap();
+}

@@ -444,6 +444,24 @@ pub enum CommandOperation {
     },
 }
 
+impl CommandOperation {
+    /// True for operations that delete or irreversibly drop project content. Used by
+    /// automation clients that opt in to requiring a prior dry-run before such edits.
+    pub fn is_destructive(&self) -> bool {
+        matches!(
+            self,
+            CommandOperation::TrackDelete { .. }
+                | CommandOperation::ClipDelete { .. }
+                | CommandOperation::ClipRippleDelete { .. }
+                | CommandOperation::ProjectMarkerDelete { .. }
+                | CommandOperation::TemplateLayerRemove { .. }
+                | CommandOperation::CutTransitionRemove { .. }
+                | CommandOperation::AudioCrossfadeRemove { .. }
+                | CommandOperation::ClipKeyframeRemove { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationEnvelope {

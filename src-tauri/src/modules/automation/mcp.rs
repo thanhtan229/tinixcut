@@ -1603,6 +1603,23 @@ pub struct TinixCutMcpServer {
     pub jobs: Arc<Mutex<JobManager>>,
     pub write_gate: Arc<tokio::sync::Mutex<()>>,
     pub worker_capacity: Arc<PreviewWorkerCapacity>,
+    /// When true, `tinixcut_apply` refuses envelopes with destructive operations unless an
+    /// identical envelope was accepted by `tinixcut_dry_run` earlier in this server session.
+    pub require_destructive_confirmation: bool,
+    confirmed_dry_runs: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+/// Environment switch for the opt-in destructive-edit confirmation gate.
+pub const REQUIRE_DESTRUCTIVE_CONFIRMATION_ENV: &str =
+    "TINIXCUT_MCP_REQUIRE_DESTRUCTIVE_CONFIRMATION";
+
+/// Identity of an envelope for dry-run confirmation: project, base revision and operations.
+fn dry_run_confirmation_key(project_path: &str, envelope: &CommandEnvelope) -> String {
+    let operations = serde_json::to_string(&envelope.operations).unwrap_or_default();
+    format!(
+        "{}|{}|{}|{}",
+        project_path, envelope.project_id, envelope.base_revision, operations
+    )
 }
 
 impl Default for TinixCutMcpServer {
@@ -1617,7 +1634,16 @@ impl TinixCutMcpServer {
             jobs: Arc::new(Mutex::new(JobManager::new(4))),
             write_gate: Arc::new(tokio::sync::Mutex::new(())),
             worker_capacity: Arc::new(PreviewWorkerCapacity::new(4)),
+            require_destructive_confirmation: std::env::var(REQUIRE_DESTRUCTIVE_CONFIRMATION_ENV)
+                .is_ok_and(|v| v == "1"),
+            confirmed_dry_runs: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Same server with the destructive-edit confirmation gate switched explicitly (tests).
+    pub fn with_destructive_confirmation(mut self, required: bool) -> Self {
+        self.require_destructive_confirmation = required;
+        self
     }
 
     /// Cancel all active export jobs cleanly upon shutdown.
@@ -1638,6 +1664,7 @@ impl TinixCutMcpServer {
 impl TinixCutMcpServer {
     #[tool(
         name = "tinixcut_project_create",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Create and atomically persist a new empty TinixCut project at projectPath; refuses to overwrite an existing file",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectCreateReceipt>()
     )]
@@ -1679,6 +1706,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_project_variant",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Create a separate project variant from a persisted revision; refuses stale sources, same-path targets, and existing destinations",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectVariantReceipt>()
     )]
@@ -1775,6 +1803,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_project_compare",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Compare two persisted TinixCut revisions without exposing media paths or changing project data",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectCompareReport>()
     )]
@@ -1825,6 +1854,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_media_probe",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Read media metadata through the bundled ffprobe abstraction without changing any project",
         output_schema = rmcp::handler::server::tool::schema_for_type::<MediaProbeReport>()
     )]
@@ -1894,6 +1924,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_validate",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Validate a versioned edit plan against the current project revision and the canonical CommandService dry-run; never writes project state",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanValidation>()
     )]
@@ -1925,6 +1956,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_draft",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create and validate a read-only draft from explicitly selected video assets. Defaults to deterministic offline planning; optionally set plannerProvider=lm-studio-local to send the goal and selected clip names/durations to LM Studio on 127.0.0.1:1234. No media bytes or paths are sent, and the project is not mutated.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2036,6 +2068,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_scene_draft",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a read-only revision-bound edit-plan preview from explicitly ordered scene IDs in a local visual analysis report. Optional allowedAssetIds restricts all selected scenes to those source assets. Optional targetDurationFrames can be advisory or exactDuration; exact trims only selected source tails and returns an error when source capacity cannot satisfy the target. Optional targetCanvas adds a ProjectSettingsSet operation. Supply openingTitle together with titleTemplate to add a built-in styled title overlay; they are validated as a pair. Revalidates current media and fingerprints; applying remains a separate Command Service operation.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2082,6 +2115,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_scene_selection_suggest",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Ask the explicitly selected local LM Studio model for a review-only subset and order of scene IDs from a supplied visual scene report. Optional allowedAssetIds limits which source scenes are sent to the model. Optional transcriptEvidence supplies source-timed local ASR excerpts; TinixCut validates current source fingerprints and includes only excerpts overlapping allowed scenes. Asset IDs, names, paths and fingerprints are never sent to the model. Optional captionIntent and audioIntent guide ranking only; they do not create subtitle or audio edits. Optional suggestOpeningTitle requests a bounded human-review suggestion. Validates the project/report and applies no edits.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::automation::edit_plan::SceneSelectionSuggestion>()
     )]
@@ -2148,6 +2182,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_reorder",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a revision-checked preview plan to reorder every clip on a contiguous transition-free video track; supports caller order or explicit local AI planning",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2241,6 +2276,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_trim",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a revision-bound preview plan to shorten the tail of one video clip; preserves its source in-point and clip speed and never mutates the project",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2288,6 +2324,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_volume",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a revision-bound preview plan to set one audio or video clip's linear volume; never mutates the project",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2335,6 +2372,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_canvas",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a revision-bound preview plan to change canvas dimensions; does not automatically reposition or crop existing timeline items",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2382,6 +2420,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_edit_plan_text_replace",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Create a revision-bound review plan that searches explicitly selected caption items for a literal phrase and replaces it; never mutates the project",
         output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
     )]
@@ -2430,6 +2469,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_media_scene_candidates",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Find bounded scene-boundary candidates in a media file without changing a project; supports request cancellation",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::scene::SceneAnalysisReport>()
     )]
@@ -2516,6 +2556,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_media_visual_scenes",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Describe and rank bounded representative frames from explicitly selected local videos using a local LM Studio vision model. Read-only; media paths are not sent to the model or returned.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::visual_scene::VisualSceneAnalysisReport>()
     )]
@@ -2605,6 +2646,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_media_transcript",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Transcribe an audio or video file with an explicitly supplied local Whisper CLI and model; returns source-time segments without modifying any project and supports cancellation",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::transcription::TranscriptAnalysisReport>()
     )]
@@ -2738,6 +2780,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_inspect",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Inspect an existing TinixCut project file and return timeline metadata, tracks, assets, and revision",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectInspectReport>()
     )]
@@ -2761,6 +2804,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_capabilities",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Return editor capabilities, supported operations, transitions, keyframing, and export formats",
         output_schema = rmcp::handler::server::tool::schema_for_type::<CapabilitiesReport>()
     )]
@@ -2796,6 +2840,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_dry_run",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Perform a transactional dry run of a CommandEnvelope against a project file without modifying disk state",
         output_schema = rmcp::handler::server::tool::schema_for_type::<DiffReport>()
     )]
@@ -2828,13 +2873,22 @@ impl TinixCutMcpServer {
         }
         let service = CommandService::new(project);
         match service.dry_run(&params.envelope) {
-            Ok(diff) => Ok(tool_ok(&diff)),
+            Ok(diff) => {
+                if let Ok(mut confirmed) = self.confirmed_dry_runs.lock() {
+                    confirmed.insert(dry_run_confirmation_key(
+                        &params.project_path,
+                        &params.envelope,
+                    ));
+                }
+                Ok(tool_ok(&diff))
+            }
             Err(err) => Ok(tool_error(map_command_error(err))),
         }
     }
 
     #[tool(
         name = "tinixcut_apply",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         description = "Execute a transactional CommandEnvelope mutation against a project file and atomically persist to disk",
         output_schema = rmcp::handler::server::tool::schema_for_type::<CommandReceipt>()
     )]
@@ -2884,6 +2938,25 @@ impl TinixCutMcpServer {
             )));
         }
 
+        let confirmation_key = dry_run_confirmation_key(&params.project_path, &envelope);
+        if self.require_destructive_confirmation
+            && envelope
+                .operations
+                .iter()
+                .any(|op| op.operation.is_destructive())
+        {
+            let confirmed = self
+                .confirmed_dry_runs
+                .lock()
+                .is_ok_and(|set| set.contains(&confirmation_key));
+            if !confirmed {
+                return Ok(tool_error(StructuredError::new(
+                    "DESTRUCTIVE_CONFIRMATION_REQUIRED",
+                    "This envelope deletes project content. Call tinixcut_dry_run with the identical envelope first, review the diff, then retry tinixcut_apply",
+                )));
+            }
+        }
+
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -2930,11 +3003,16 @@ impl TinixCutMcpServer {
             )));
         }
 
+        if let Ok(mut confirmed) = self.confirmed_dry_runs.lock() {
+            confirmed.remove(&confirmation_key);
+        }
+
         Ok(tool_ok(&receipt))
     }
 
     #[tool(
         name = "tinixcut_save",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         description = "Atomically save or save-as an existing project file from disk to projectPath or targetPath",
         output_schema = rmcp::handler::server::tool::schema_for_type::<SaveReceipt>()
     )]
@@ -2998,6 +3076,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_workflow_manifest_create",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Validate a revision-bound edit plan and persist a non-sensitive workflow manifest containing project revision, plan hash, operation IDs, media fingerprints and artifact paths. Refuses to overwrite an existing manifest; does not apply edits or store brief text, credentials, media bytes or source paths.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<WorkflowManifestCreateReceipt>()
     )]
@@ -3048,6 +3127,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_workflow_manifest_validate",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Read a persisted workflow manifest and validate its planned state, project revision, exact edit plan identity and current media fingerprints before a client retries or resumes. This tool is read-only and never applies edits.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<WorkflowManifestValidateReceipt>()
     )]
@@ -3109,6 +3189,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_workflow_manifest_checkpoint",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Record an immutable applied, saved, or exported checkpoint for a planned workflow. Applied is verified against the durable operation ledger; saved is verified from the current project file; exported is verified with ffprobe and a streaming SHA-256. Retries are idempotent only for identical evidence, and existing checkpoints are never overwritten.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::automation::workflow_manifest::WorkflowCheckpointReceipt>()
     )]
@@ -3171,6 +3252,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_export_preflight",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Read-only export readiness check bound to the saved project snapshot and output path. Validates the project-matching profile, compiles the canonical composition, probes referenced media, and reports existing-output and free-disk information without starting a job or changing the project.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::export::ExportPreflightReport>()
     )]
@@ -3202,6 +3284,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_export_start",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         description = "Start an asynchronous export render job using JobManager and return a jobId",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ExportStartReceipt>()
     )]
@@ -3291,6 +3374,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_export_status",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Query progress and execution status of an active or completed export job",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ExportJobStatusReport>()
     )]
@@ -3328,6 +3412,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_export_cancel",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Cancel an in-progress export render job",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ExportCancelReceipt>()
     )]
@@ -3345,6 +3430,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_template_validate",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         description = "Validate a typed TemplateDraft against domain limits, security rules, and catalog resources",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateValidationReport>()
     )]
@@ -3363,6 +3449,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_template_preview",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Render a preview frame of a TemplateDraft at time t using the shared compositor and return frame receipt",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplatePreviewReceipt>()
     )]
@@ -3673,6 +3760,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_template_apply",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         description = "Apply a validated TemplateDraft to a project text item as an atomic CommandService transaction and persist",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateApplyReceipt>()
     )]
@@ -3758,6 +3846,7 @@ impl TinixCutMcpServer {
 
     #[tool(
         name = "tinixcut_template_save",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         description = "Save a validated TemplateDraft into the template catalog as a reusable TemplateDefinition",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateSaveReceipt>()
     )]
