@@ -1,6 +1,6 @@
 # Phase 59 — Loudness, ducking, flexible speed, xfade transitions, transport keys
 
-**Status:** PLANNED — not implemented. Drafted 2026-11-13.
+**Status:** IMPLEMENTED 2026-11-13 (59A–59E) with the deviations in section 8. Native UI qualification of the new controls was not run.
 **Basis:** second review of the reference repositories (Clypra, blyacut, OpenCut-AI, Mono Cut), recorded in the session of 2026-11-13. Only gaps confirmed in the TinixCut source are included.
 
 ## 1. Objective
@@ -162,3 +162,31 @@ Add the five improvements with the best value-to-risk ratio. Each must:
 59A (1–2 d) → 59B (3 d) → 59C (4–5 d) → 59D (3 d) → 59E (2–3 d).
 
 59A and 59B are export/audio only and measurable without the UI. 59C and 59D share the schema bump. 59E is independent of the others.
+
+## 8. Implementation record — 2026-11-13
+
+Commits: `2ea9237` (59A), `05ed9df` (59B), `400e8e9` (59C), `f217408` (59D), `e970525` (59E). Schema is v19 (ducking + reverse; custom speed is a new `ClipSpeed` variant, geometric transitions are new `TransitionKind` values, both serialize additively).
+
+**Deviations from the plan**
+
+- 59A: the loudness UI is a preset selector next to the Output selector; the MCP `ExportProfile` schema advertises the field in snake_case because that is how it serializes (the schema keys for the older fields are camelCase, a pre-existing mismatch not touched here).
+- 59B: voice = every audible clip without ducking; the curve is evaluated inside `CompositionPlan::effective_audio_gain_at`, so export (envelope file) and preview (`sample_preview_at`) read the same function. Preview shows "Ducking pending" until `ducking_prepare` has run; the analysis is cached for one mix signature (bounded).
+- 59C: **reverse is limited to 15 s of source, not 60 s**, because FFmpeg `reverse` keeps every frame in memory (about 2 GB for 15 s of 1080p). The reversed preview proxy (D5) was **not built**: the preview plays reversed clips forward and the HUD says "Reverse: export only". **Freeze frame was not implemented.** Custom speeds whose source duration is not a whole number of source frames are refused by the existing exactness rule (for example 7/3 of 100 frames).
+- 59D: preview CSS formulas were derived from `vf_xfade.c` and are checked against measurements of real exports; `CutTransitionCreate` accepts every cut kind, while item-level transition commands still refuse them. A domain validation that allowed only two cut kinds was found by the new command test and fixed.
+- 59E: shuttle above 1x and reverse step the playhead every 33 ms with normal playback stopped (so audio is muted); "Export In-Out only" is applied as output-side `-ss/-t` (the earlier part is rendered but not encoded); "Delete In-Out" is one transaction over unlocked tracks.
+
+**Evidence (automated, real renders)**
+
+| Phase | Check | Result |
+|---|---|---|
+| 59A | integrated loudness of a quiet and a loud mix after normalising to -14 LUFS | within 0.5 LU, true peak under the limit; untouched render far from target (negative control) |
+| 59B | music level while a 1 kHz voice plays, 12 dB depth | 12 dB down within 1.5 dB; unchanged before and after within 0.6 dB; 6 and 15 dB settings scale; no voice means no ducking |
+| 59C | 3/2x, 1/3x, 1/8x, reverse, 2x reverse of a time-coded gradient | pixel values give the expected source instant; durations exact |
+| 59D | six linear transitions and circle open on red -> blue | edge within 4 % of the formula, radius within 4 px; the TypeScript preview geometry matches the same measurements |
+| 59E | range export of frames 60..120 of a 6 s clip | exactly 2.0 s, shows source seconds 2..4; invalid ranges rejected |
+
+**Not verified (open)**
+
+- The new Inspector controls (ducking, custom speed, reverse, transition picker, loudness and In-Out toolbar items, Keys dialog), the CSS rendering of geometric transitions in WebView2, J/K/L stepping and the ruler marks were type-checked and unit-tested but **not exercised in the running app**.
+- Ducking preview audio itself (volume automation applied to playing audio) was not listened to or measured natively; only the shared gain function is tested.
+- Preview/export pixel parity of the geometric transitions was not measured natively.

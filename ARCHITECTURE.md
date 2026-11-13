@@ -1113,7 +1113,13 @@ Both the preview backend (WebView2) and the export backend (FFmpeg) strictly con
 
 3. **Per-clip color pipeline (Phase 58)**: `colorkey/despill` (when enabled) -> color matrix (`ClipColorAdjustments` + preset, `geq`) -> 3D LUT (`lut3d`, trilinear). Preview and export evaluate the same ordered steps; the 3D LUT file is referenced by path and pinned by SHA-256.
 
-4. **Timeline Boundary Semantics**:
+4. **Audio gain evaluation (Phase 59)**: a clip's gain is `volume x track volume x fades/keyframes x crossfade x ducking`, always computed by `CompositionPlan::effective_audio_gain_at`. Ducking is a derived curve (voice activity on a 10 ms grid, attack/release in the dB domain) attached to the plan; export writes the product into the per-sample envelope file and preview samples the same function. Loudness normalisation is an optional export post-step on the temporary file (measure, two-pass `loudnorm`, re-measure) and is never part of project data.
+
+5. **Retiming (Phase 59)**: `ClipSpeed` is an exact ratio (named speeds plus reduced `Custom` ratios in 1/8..8); source durations use rational arithmetic. Export uses `setpts`, chained `atempo` stages below 0.5x, and `reverse`/`areverse` (<= 15 s of source). The preview plays reversed clips forward and says so.
+
+6. **Cut transitions (Phase 59)**: `CrossDissolve`, `DipToBlack` and the geometric kinds (`Wipe*`, `Slide*`, `CircleOpen`) are cut transitions mapped to `xfade`; the preview evaluates the same formulas (`transitionGeometry.ts`, checked against measurements of real exports).
+
+7. **Timeline Boundary Semantics**:
    - Timeline intervals are strictly half-open $[start, end)$.
    - An item is active at timeline time $t$ if $start \le t < end$.
    - The export filtergraph strictly enforces this half-open interval using `enable='between(t, start, end - 0.0005)'` so that boundary frames do not overlap adjacent clips.

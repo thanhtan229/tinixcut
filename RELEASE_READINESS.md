@@ -41,3 +41,7 @@ Frontend 184/184, typecheck, production build, `cargo fmt`. Rust: library 317 (t
 ## 5. Reproducing the evidence
 
 Native runs use `scripts/qualification/native/` (see its README); Rust and frontend suites run with `cargo test` and `pnpm test`. Evidence artifacts are under `artifacts/` (untracked by repository convention).
+
+## 6. Phase 59 additions (2026-11-13)
+
+Export loudness targets, per-clip ducking, custom speed (1/8x-8x) and reverse, geometric cut transitions, and In/Out range export are verified on real FFmpeg renders (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 8). Their UI paths (Inspector controls, preview of geometric transitions, J/K/L shuttle, ruler marks, shortcut dialog) are **not natively qualified**. Reverse plays forward in the preview and is limited to 15 s of source; freeze frame is not implemented.
