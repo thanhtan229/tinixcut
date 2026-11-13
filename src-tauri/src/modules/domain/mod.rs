@@ -728,30 +728,95 @@ impl ChromaKey {
     }
 }
 
-/// Fixed clip speeds supported by the first non-destructive speed-control
-/// release. The source duration is always derived from timeline duration.
+/// Longest source range a clip may play in reverse. FFmpeg's `reverse` filter holds every
+/// decoded frame in memory, so the limit keeps a 1080p reverse near 2 GB.
+pub const MAX_REVERSE_SOURCE_SECONDS: f64 = 15.0;
+
+/// Clip speed as an exact ratio. `Half`, `Normal` and `Double` are the original fixed speeds
+/// and keep their serialized form; `Custom` is any other reduced ratio between 1/8x and 8x.
+/// The source duration is always derived from the timeline duration in rational arithmetic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClipSpeed {
     Half,
     #[default]
     Normal,
     Double,
+    /// Reduced `numerator / denominator`, never equal to one of the named speeds.
+    Custom {
+        numerator: u32,
+        denominator: u32,
+    },
 }
 
 impl ClipSpeed {
+    pub const MIN_RATIO: f64 = 0.125;
+    pub const MAX_RATIO: f64 = 8.0;
+
+    /// Builds the canonical speed for `numerator / denominator`: reduced, bounded, and mapped
+    /// to a named variant when it equals one.
+    pub fn from_ratio(numerator: u32, denominator: u32) -> Result<Self, DomainError> {
+        if numerator == 0 || denominator == 0 {
+            return Err(DomainError::Validation(
+                "Speed numerator and denominator must be positive".into(),
+            ));
+        }
+        let divisor = gcd_i128(numerator as i128, denominator as i128) as u32;
+        let (n, d) = (numerator / divisor, denominator / divisor);
+        let value = n as f64 / d as f64;
+        if !(Self::MIN_RATIO..=Self::MAX_RATIO).contains(&value) {
+            return Err(DomainError::Validation(format!(
+                "Speed {n}/{d} is outside 1/8x..8x"
+            )));
+        }
+        Ok(match (n, d) {
+            (1, 2) => Self::Half,
+            (1, 1) => Self::Normal,
+            (2, 1) => Self::Double,
+            _ => Self::Custom {
+                numerator: n,
+                denominator: d,
+            },
+        })
+    }
+
+    /// Rejects non-canonical custom speeds (unreduced, out of range, or equal to a named one).
+    pub fn validate(self) -> Result<(), DomainError> {
+        if let Self::Custom {
+            numerator,
+            denominator,
+        } = self
+        {
+            if Self::from_ratio(numerator, denominator)? != self {
+                return Err(DomainError::Validation(format!(
+                    "Custom speed {numerator}/{denominator} is not canonical; use the reduced ratio or the named speed"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn as_f64(self) -> f64 {
         match self {
             Self::Half => 0.5,
             Self::Normal => 1.0,
             Self::Double => 2.0,
+            Self::Custom {
+                numerator,
+                denominator,
+            } => numerator as f64 / denominator as f64,
         }
     }
 
-    fn ratio(self) -> (i64, i64) {
+    /// Exact `(numerator, denominator)` of the speed.
+    pub fn ratio(self) -> (i64, i64) {
         match self {
             Self::Half => (1, 2),
             Self::Normal => (1, 1),
             Self::Double => (2, 1),
+            Self::Custom {
+                numerator,
+                denominator,
+            } => (numerator as i64, denominator as i64),
         }
     }
 
@@ -944,6 +1009,9 @@ pub struct TimelineItem {
     pub chroma_key: Option<ChromaKey>,
     #[serde(default)]
     pub ducking: Option<Ducking>,
+    /// Plays the clip's source range backwards. Applied at export; the preview plays forward.
+    #[serde(default)]
+    pub reverse: bool,
     #[serde(default)]
     pub speed: ClipSpeed,
     #[serde(default = "default_true")]
@@ -993,6 +1061,7 @@ impl TimelineItem {
             color_lut: None,
             chroma_key: None,
             ducking: None,
+            reverse: false,
             speed: ClipSpeed::Normal,
             embedded_audio_enabled: true,
             linked_item_id: None,
@@ -1024,6 +1093,7 @@ impl TimelineItem {
         if let Some(ducking) = &self.ducking {
             ducking.validate()?;
         }
+        self.speed.validate()?;
         if !is_valid_id(&self.item_id) {
             return Err(DomainError::InvalidId(self.item_id.clone()));
         }
@@ -2018,5 +2088,91 @@ mod tests {
             track.validate(),
             Err(DomainError::ItemNotFound(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod clip_speed_tests {
+    use super::*;
+
+    #[test]
+    fn ratios_are_reduced_bounded_and_canonical() {
+        assert_eq!(ClipSpeed::from_ratio(2, 4).unwrap(), ClipSpeed::Half);
+        assert_eq!(ClipSpeed::from_ratio(5, 5).unwrap(), ClipSpeed::Normal);
+        assert_eq!(ClipSpeed::from_ratio(8, 4).unwrap(), ClipSpeed::Double);
+        assert_eq!(
+            ClipSpeed::from_ratio(6, 4).unwrap(),
+            ClipSpeed::Custom {
+                numerator: 3,
+                denominator: 2
+            }
+        );
+        assert!(ClipSpeed::from_ratio(1, 9).is_err(), "below 1/8x");
+        assert!(ClipSpeed::from_ratio(9, 1).is_err(), "above 8x");
+        assert!(ClipSpeed::from_ratio(0, 3).is_err());
+        assert!(ClipSpeed::from_ratio(3, 0).is_err());
+        assert_eq!(ClipSpeed::from_ratio(1, 8).unwrap().as_f64(), 0.125);
+        assert_eq!(ClipSpeed::from_ratio(8, 1).unwrap().as_f64(), 8.0);
+    }
+
+    #[test]
+    fn non_canonical_custom_speeds_do_not_validate() {
+        assert!(ClipSpeed::Custom {
+            numerator: 6,
+            denominator: 4
+        }
+        .validate()
+        .is_err());
+        assert!(ClipSpeed::Custom {
+            numerator: 2,
+            denominator: 1
+        }
+        .validate()
+        .is_err());
+        assert!(ClipSpeed::Custom {
+            numerator: 1,
+            denominator: 100
+        }
+        .validate()
+        .is_err());
+        assert!(ClipSpeed::Custom {
+            numerator: 3,
+            denominator: 2
+        }
+        .validate()
+        .is_ok());
+        assert!(ClipSpeed::Double.validate().is_ok());
+    }
+
+    #[test]
+    fn custom_speed_serialization_keeps_named_speeds_unchanged() {
+        assert_eq!(serde_json::to_string(&ClipSpeed::Half).unwrap(), "\"Half\"");
+        let custom = ClipSpeed::from_ratio(3, 2).unwrap();
+        let json = serde_json::to_string(&custom).unwrap();
+        assert_eq!(serde_json::from_str::<ClipSpeed>(&json).unwrap(), custom);
+        assert_eq!(
+            serde_json::from_str::<ClipSpeed>("\"Double\"").unwrap(),
+            ClipSpeed::Double
+        );
+    }
+
+    #[test]
+    fn source_duration_uses_exact_rational_arithmetic() {
+        let rate = FrameRate::FPS_30;
+        let speed = ClipSpeed::from_ratio(3, 2).unwrap();
+        assert_eq!(
+            speed
+                .source_duration_for(RationalTime::new(90, rate), rate)
+                .unwrap()
+                .value,
+            135
+        );
+        // 7/3 of 100 frames is not a whole number of source frames, so it is refused.
+        let awkward = ClipSpeed::from_ratio(7, 3).unwrap();
+        assert!(awkward
+            .source_duration_for(RationalTime::new(100, rate), rate)
+            .is_err());
+        let offset = speed.source_offset_for(RationalTime::new(10, rate));
+        assert_eq!(offset.to_seconds(), 0.5);
     }
 }

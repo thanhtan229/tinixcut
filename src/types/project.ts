@@ -56,8 +56,7 @@ export function getDefaultAudioCrossfadeDurationFrames(
   const leftEditorial = rationalTimeToFrames(left.timeline_range.duration, rate);
   const rightEditorial = rationalTimeToFrames(right.timeline_range.duration, rate);
   const sourceFramesForTimelineFrames = (frames: number, speed: ClipSpeed | undefined): number | null => {
-    const [numerator, denominator] =
-      speed === "Half" ? [1, 2] : speed === "Double" ? [2, 1] : [1, 1];
+    const [numerator, denominator] = clipSpeedRatio(speed);
     const sourceFrames = frames * numerator;
     return sourceFrames % denominator === 0 ? sourceFrames / denominator : null;
   };
@@ -224,7 +223,52 @@ export interface ChromaKey {
   blend: number;
   despill: { screen: DespillScreen; mix: number } | null;
 }
-export type ClipSpeed = "Half" | "Normal" | "Double";
+export type ClipSpeed = "Half" | "Normal" | "Double" | { Custom: { numerator: number; denominator: number } };
+
+/** Exact [numerator, denominator] of a clip speed. */
+export function clipSpeedRatio(speed: ClipSpeed | undefined): [number, number] {
+  if (speed === "Half") return [1, 2];
+  if (speed === "Double") return [2, 1];
+  if (speed && typeof speed === "object") return [speed.Custom.numerator, speed.Custom.denominator];
+  return [1, 1];
+}
+
+function gcd(a: number, b: number): number {
+  return b === 0 ? Math.abs(a) : gcd(b, a % b);
+}
+
+/** Canonical speed for a ratio (reduced, named when it equals one), or an error message. */
+export function speedFromRatio(numerator: number, denominator: number): ClipSpeed | string {
+  if (!Number.isInteger(numerator) || !Number.isInteger(denominator) || numerator <= 0 || denominator <= 0) {
+    return "Speed must be a positive ratio";
+  }
+  const divisor = gcd(numerator, denominator);
+  const n = numerator / divisor;
+  const d = denominator / divisor;
+  if (n / d < 0.125 || n / d > 8) return "Speed must be between 1/8x and 8x";
+  if (n === 1 && d === 2) return "Half";
+  if (n === 1 && d === 1) return "Normal";
+  if (n === 2 && d === 1) return "Double";
+  return { Custom: { numerator: n, denominator: d } };
+}
+
+/** Parses "3/2", "0.75" or "1.5x" (up to 3 decimals) into a speed, or an error message. */
+export function parseSpeedInput(text: string): ClipSpeed | string {
+  const clean = text.trim().toLowerCase().replace(/x$/, "").trim();
+  const fraction = /^(\d+)\s*\/\s*(\d+)$/.exec(clean);
+  if (fraction) return speedFromRatio(Number(fraction[1]), Number(fraction[2]));
+  const decimal = /^(\d+)(?:\.(\d{1,3}))?$/.exec(clean);
+  if (decimal) {
+    const places = (decimal[2] ?? "").length;
+    return speedFromRatio(Number(decimal[1] + (decimal[2] ?? "")), 10 ** places);
+  }
+  return "Enter a ratio like 3/2 or a number like 0.75";
+}
+
+export function formatClipSpeed(speed: ClipSpeed | undefined): string {
+  const [n, d] = clipSpeedRatio(speed);
+  return d === 1 ? `${n}×` : `${n}/${d}×`;
+}
 
 export interface Transition {
   kind: TransitionKind;
@@ -381,6 +425,7 @@ export interface TimelineItem {
   visual_effect?: VisualEffectPreset;
   color_adjustments?: ColorAdjustments;
   color_lut?: ClipLut | null;
+  reverse?: boolean;
   chroma_key?: ChromaKey | null;
   ducking?: Ducking | null;
   speed?: ClipSpeed;

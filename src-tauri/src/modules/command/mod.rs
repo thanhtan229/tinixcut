@@ -379,6 +379,11 @@ pub enum CommandOperation {
         item_id: String,
         color_adjustments: crate::modules::domain::ColorAdjustments,
     },
+    /// Plays a video or audio clip's source range backwards (export only; see `TimelineItem`).
+    ClipReverseSet {
+        item_id: String,
+        reverse: bool,
+    },
     /// Sets or clears (`None`) automatic ducking of this clip under the rest of the mix.
     ClipDuckingSet {
         item_id: String,
@@ -2724,10 +2729,9 @@ impl CommandService {
                     }
                 })?;
                 let signed_source_delta = |speed: ClipSpeed| -> Result<RationalTime, CommandError> {
-                    let (speed_num, speed_den) = match speed {
-                        ClipSpeed::Half => (1_u32, 2_u32),
-                        ClipSpeed::Normal => (1, 1),
-                        ClipSpeed::Double => (2, 1),
+                    let (speed_num, speed_den) = {
+                        let (num, den) = speed.ratio();
+                        (num as u32, den as u32)
                     };
                     let rate_num =
                         delta.rate.numerator.checked_mul(speed_den).ok_or_else(|| {
@@ -5223,6 +5227,41 @@ impl CommandService {
                 }))
             }
 
+            CommandOperation::ClipReverseSet { item_id, reverse } => {
+                let item = project
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|track| track.items.iter_mut())
+                    .find(|item| item.item_id == *item_id)
+                    .ok_or_else(|| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!("Item '{}' not found", item_id),
+                    })?;
+                if !matches!(item.kind, ItemKind::Video | ItemKind::Audio) {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: "Reverse is supported only on video and audio clips".into(),
+                    });
+                }
+                if *reverse
+                    && item.source_range.duration.to_seconds()
+                        > crate::modules::domain::MAX_REVERSE_SOURCE_SECONDS
+                {
+                    return Err(CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: format!(
+                            "Reverse needs the whole clip in memory; limit is {} s of source (this clip uses {:.1} s). Split it first",
+                            crate::modules::domain::MAX_REVERSE_SOURCE_SECONDS,
+                            item.source_range.duration.to_seconds()
+                        ),
+                    });
+                }
+                item.reverse = *reverse;
+                Ok(Some(DiffChange::ClipModified {
+                    item_id: item_id.clone(),
+                }))
+            }
+
             CommandOperation::ClipDuckingSet { item_id, ducking } => {
                 if let Some(setting) = ducking {
                     setting.validate().map_err(|error| {
@@ -5315,6 +5354,12 @@ impl CommandService {
             }
 
             CommandOperation::ClipSpeedSet { item_id, speed } => {
+                speed
+                    .validate()
+                    .map_err(|error| CommandError::OperationValidationFailed {
+                        operation_id: op_id.to_string(),
+                        message: error.to_string(),
+                    })?;
                 let (item, asset_duration) = project
                     .tracks
                     .iter()
@@ -11732,6 +11777,116 @@ mod tests {
             ))
             .is_err());
         assert_eq!(service.project().revision, revision);
+    }
+
+    #[test]
+    fn test_phase59_custom_speed_and_reverse_commands() {
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        let run = |service: &mut CommandService, base: u64, tx: &str, op: CommandOperation| {
+            service.execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: base,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(tx.into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_{tx}"),
+                    operation: op,
+                }],
+            })
+        };
+
+        // Non-canonical custom speeds are rejected before touching the project.
+        let revision = service.project().revision;
+        let bad = run(
+            &mut service,
+            revision,
+            "tx_speed_bad",
+            CommandOperation::ClipSpeedSet {
+                item_id: item_id.clone(),
+                speed: ClipSpeed::Custom {
+                    numerator: 6,
+                    denominator: 4,
+                },
+            },
+        );
+        assert!(bad.is_err());
+        assert_eq!(service.project().revision, revision);
+
+        // Reverse set, persisted and cleared; rejected on a clip longer than the limit.
+        run(
+            &mut service,
+            revision,
+            "tx_rev_on",
+            CommandOperation::ClipReverseSet {
+                item_id: item_id.clone(),
+                reverse: true,
+            },
+        )
+        .expect("reverse applies");
+        assert!(
+            service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .reverse
+        );
+        let revision = service.project().revision;
+        run(
+            &mut service,
+            revision,
+            "tx_rev_off",
+            CommandOperation::ClipReverseSet {
+                item_id: item_id.clone(),
+                reverse: false,
+            },
+        )
+        .expect("reverse clears");
+        assert!(
+            !service.project().tracks[0]
+                .find_item(&item_id)
+                .unwrap()
+                .reverse
+        );
+
+        let revision = service.project().revision;
+        let missing = run(
+            &mut service,
+            revision,
+            "tx_rev_missing",
+            CommandOperation::ClipReverseSet {
+                item_id: "itm_missing".into(),
+                reverse: true,
+            },
+        );
+        assert!(missing.is_err());
+
+        // A very long source range is refused with a clear message.
+        let long_range = TimeRange::new(
+            RationalTime::new(0, service.project().settings.frame_rate),
+            RationalTime::new(30 * 40, service.project().settings.frame_rate),
+        );
+        let mut project = service.project().clone();
+        project.tracks[0]
+            .find_item_mut(&item_id)
+            .unwrap()
+            .source_range = long_range;
+        let mut long_service = CommandService::new(project);
+        let revision = long_service.project().revision;
+        let refused = run(
+            &mut long_service,
+            revision,
+            "tx_rev_long",
+            CommandOperation::ClipReverseSet {
+                item_id,
+                reverse: true,
+            },
+        );
+        assert!(refused.is_err());
+        assert!(refused.unwrap_err().to_string().contains("limit"));
     }
 
     #[test]

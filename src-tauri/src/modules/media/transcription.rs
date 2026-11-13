@@ -290,11 +290,7 @@ fn map_segment_to_timeline(
         .value;
     let timeline_start = target.timeline_range.start.rescaled_to(project_rate).value;
     let timeline_end = target.timeline_range.end().rescaled_to(project_rate).value;
-    let (speed_num, speed_den) = match target.speed {
-        crate::modules::domain::ClipSpeed::Half => (1_i64, 2_i64),
-        crate::modules::domain::ClipSpeed::Normal => (1_i64, 1_i64),
-        crate::modules::domain::ClipSpeed::Double => (2_i64, 1_i64),
-    };
+    let (speed_num, speed_den) = target.speed.ratio();
     let segment_start = segment
         .start
         .rescaled_to(millisecond_rate)

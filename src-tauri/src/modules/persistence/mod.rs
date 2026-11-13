@@ -1004,6 +1004,10 @@ pub fn migrate_v18_to_v19(
                     })?
                     .entry("ducking")
                     .or_insert(serde_json::Value::Null);
+                item.as_object_mut()
+                    .expect("timeline item object checked above")
+                    .entry("reverse")
+                    .or_insert(serde_json::Value::Bool(false));
             }
         }
     }
@@ -2050,6 +2054,7 @@ mod tests {
         assert_eq!(migrated["schema_version"], CURRENT_SCHEMA_VERSION);
         let item = &migrated["tracks"][0]["items"][0];
         assert!(item["ducking"].is_null());
+        assert_eq!(item["reverse"], false);
         assert!(item["color_lut"].is_null());
         assert!(item.as_object().unwrap().contains_key("color_lut"));
         assert!(item["chroma_key"].is_null());

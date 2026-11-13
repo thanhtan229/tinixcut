@@ -26,6 +26,8 @@ import {
   VisualEffectPreset,
   ChromaKey,
   Ducking,
+  formatClipSpeed,
+  parseSpeedInput,
   ColorAdjustments,
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
@@ -114,6 +116,7 @@ interface InspectorProps {
   onUpdateColorAdjustments?: (adjustments: ColorAdjustments) => void;
   onUpdateChromaKey?: (chromaKey: ChromaKey | null) => void;
   onUpdateDucking?: (ducking: Ducking | null) => void;
+  onUpdateReverse?: (reverse: boolean) => void;
   onChooseLut?: () => void;
   onClearLut?: () => void;
   onUpdateSpeed?: (speed: ClipSpeed) => void;
@@ -176,6 +179,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateColorAdjustments,
   onUpdateChromaKey,
   onUpdateDucking,
+  onUpdateReverse,
   onChooseLut,
   onClearLut,
   onUpdateSpeed,
@@ -191,6 +195,8 @@ export const Inspector: React.FC<InspectorProps> = ({
 }) => {
   const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
   const [scopesOpen, setScopesOpen] = useState(false);
+  const [customSpeedDraft, setCustomSpeedDraft] = useState("");
+  const [customSpeedError, setCustomSpeedError] = useState<string | null>(null);
   const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
   const [localCrop, setLocalCrop] = useState<Crop>(selectedItem?.crop ?? { top: 0, bottom: 0, left: 0, right: 0 });
   const [applyTemplateToTrack, setApplyTemplateToTrack] = useState(false);
@@ -1738,8 +1744,10 @@ export const Inspector: React.FC<InspectorProps> = ({
             </div>
             <select
               aria-label="Speed"
-              value={selectedItem.speed ?? "Normal"}
-              onChange={(event) => onUpdateSpeed(event.target.value as ClipSpeed)}
+              value={typeof selectedItem.speed === "object" ? "Custom" : (selectedItem.speed ?? "Normal")}
+              onChange={(event) => {
+                if (event.target.value !== "Custom") onUpdateSpeed(event.target.value as ClipSpeed);
+              }}
               style={{
                 width: "100%",
                 padding: "4px",
@@ -1753,7 +1761,53 @@ export const Inspector: React.FC<InspectorProps> = ({
               <option value="Half">0.5×</option>
               <option value="Normal">1×</option>
               <option value="Double">2×</option>
+              {typeof selectedItem.speed === "object" && (
+                <option value="Custom">{formatClipSpeed(selectedItem.speed)} (custom)</option>
+              )}
             </select>
+            <form
+              style={{ display: "flex", gap: "6px", alignItems: "center" }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                const parsed = parseSpeedInput(customSpeedDraft);
+                if (typeof parsed === "string" && !["Half", "Normal", "Double"].includes(parsed)) {
+                  setCustomSpeedError(parsed);
+                  return;
+                }
+                setCustomSpeedError(null);
+                onUpdateSpeed(parsed as ClipSpeed);
+              }}
+            >
+              <input
+                aria-label="Custom speed"
+                placeholder="3/2 or 0.75"
+                value={customSpeedDraft}
+                onChange={(event) => setCustomSpeedDraft(event.currentTarget.value)}
+                style={{ flex: 1, fontSize: "11px", padding: "3px" }}
+              />
+              <button type="submit" style={{ fontSize: "11px" }}>Set</button>
+            </form>
+            {customSpeedError && (
+              <div role="status" style={{ fontSize: "11px", color: "var(--danger, #e66)" }}>{customSpeedError}</div>
+            )}
+          </section>
+        )}
+
+        {onUpdateReverse && (selectedItem.kind === "Video" || selectedItem.kind === "Audio") && (
+          <section style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>REVERSE</div>
+            <label style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px" }}>
+              <input
+                type="checkbox"
+                aria-label="Reverse clip"
+                checked={selectedItem.reverse === true}
+                onChange={(event) => onUpdateReverse(event.currentTarget.checked)}
+              />
+              Play this clip backwards
+            </label>
+            <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+              Applied when exporting (up to 15 s of source); the preview plays it forward.
+            </div>
           </section>
         )}
 

@@ -100,6 +100,8 @@ pub struct CompositionVisualLayer {
     pub color_adjustments: ColorAdjustments,
     pub color_lut: Option<ClipLut>,
     pub chroma_key: Option<ChromaKey>,
+    /// Plays the source range backwards (export only).
+    pub reverse: bool,
     pub opacity: f32,
     pub text_content: Option<String>,
     pub font_family: Option<String>,
@@ -250,6 +252,9 @@ pub struct CompositionAudioLayer {
     /// When set, this clip is ducked under the rest of the mix (see `ducking`).
     #[serde(default)]
     pub ducking: Option<Ducking>,
+    /// Plays the source range backwards (export only).
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 impl CompositionAudioLayer {
@@ -529,6 +534,31 @@ pub fn visual_color_matrix(
         matrix[row][3] = gains[row] * offset;
     }
     matrix
+}
+
+/// `,reverse` for a reversed clip, placed right after `trim` (before the speed change).
+fn reverse_video_filter(reverse: bool) -> &'static str {
+    if reverse {
+        ",reverse"
+    } else {
+        ""
+    }
+}
+
+/// Audio part of a clip's retiming: optional `areverse`, then `atempo` stages. A single
+/// `atempo` only reaches down to 0.5x, so slower speeds are chained (0.5 x 0.5 x ...).
+fn audio_tempo_filters(audio: &CompositionAudioLayer) -> String {
+    let mut filters = String::new();
+    if audio.reverse {
+        filters.push_str(",areverse");
+    }
+    let mut remaining = audio.speed.as_f64();
+    while remaining < 0.5 - 1e-9 {
+        filters.push_str(",atempo=0.500000");
+        remaining /= 0.5;
+    }
+    filters.push_str(&format!(",atempo={:.6}", remaining));
+    filters
 }
 
 /// FFmpeg filter fragment for a clip's chroma key, applied right after cropping and before any
@@ -821,6 +851,7 @@ impl CompositionPlan {
                             color_adjustments: item.color_adjustments,
                             color_lut: item.color_lut.clone(),
                             chroma_key: item.chroma_key.clone(),
+                            reverse: item.reverse,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: None,
@@ -857,6 +888,7 @@ impl CompositionPlan {
                                 fade_out: item.fade_out,
                                 keyframes: item.keyframes.clone(),
                                 ducking: item.ducking,
+                                reverse: item.reverse,
                             });
                         }
                     }
@@ -881,6 +913,7 @@ impl CompositionPlan {
                             color_adjustments: ColorAdjustments::default(),
                             color_lut: None,
                             chroma_key: None,
+                            reverse: false,
                             opacity: item.opacity,
                             text_content: item.text_content.clone(),
                             font_family: Some(
@@ -930,6 +963,7 @@ impl CompositionPlan {
                             fade_out: item.fade_out,
                             keyframes: item.keyframes.clone(),
                             ducking: item.ducking,
+                            reverse: item.reverse,
                         });
                     }
                 }
@@ -1077,6 +1111,7 @@ fn sample_visual_layer_at(
         color_adjustments: layer.color_adjustments,
         color_lut: layer.color_lut.clone(),
         chroma_key: layer.chroma_key.clone(),
+        reverse: layer.reverse,
         opacity,
         text: layer.text_content.clone(),
         font_family: layer.font_family.clone(),
@@ -1475,13 +1510,13 @@ impl CompositionPlan {
 
                                 if ord_start_sec.abs() < 1e-5 {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
-                                        input_idx, ord_src_start, source_duration, layer.speed.as_f64()
+                                        "[{}:v]trim=start={:.6}:duration={:.6}{},setpts=(PTS-STARTPTS)/{:.6}",
+                                        input_idx, ord_src_start, source_duration, reverse_video_filter(layer.reverse), layer.speed.as_f64()
                                     ));
                                 } else {
                                     filter_chain.push_str(&format!(
-                                        "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}+{:.6}/TB",
-                                        input_idx, ord_src_start, source_duration, layer.speed.as_f64(), ord_start_sec
+                                        "[{}:v]trim=start={:.6}:duration={:.6}{},setpts=(PTS-STARTPTS)/{:.6}+{:.6}/TB",
+                                        input_idx, ord_src_start, source_duration, reverse_video_filter(layer.reverse), layer.speed.as_f64(), ord_start_sec
                                     ));
                                 }
                             } else {
@@ -1796,10 +1831,11 @@ impl CompositionPlan {
                             .or_else(|| input_paths.iter().position(|p| p == path))
                             .unwrap_or(0);
                         left_clip_filter.push_str(&format!(
-                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
+                            "[{}:v]trim=start={:.6}:duration={:.6}{},setpts=(PTS-STARTPTS)/{:.6}",
                             input_idx,
                             left_src_start,
                             left_source_duration,
+                            reverse_video_filter(left_layer.reverse),
                             left_layer.speed.as_f64()
                         ));
                     } else {
@@ -1909,10 +1945,11 @@ impl CompositionPlan {
                             .or_else(|| input_paths.iter().position(|p| p == path))
                             .unwrap_or(0);
                         right_clip_filter.push_str(&format!(
-                            "[{}:v]trim=start={:.6}:duration={:.6},setpts=(PTS-STARTPTS)/{:.6}",
+                            "[{}:v]trim=start={:.6}:duration={:.6}{},setpts=(PTS-STARTPTS)/{:.6}",
                             input_idx,
                             right_src_start,
                             right_source_duration,
+                            reverse_video_filter(right_layer.reverse),
                             right_layer.speed.as_f64()
                         ));
                     } else {
@@ -2164,17 +2201,22 @@ impl CompositionPlan {
                 if let Some(env_pos) = audio_auto {
                     let env_input_idx = input_paths.len() + env_pos;
                     filter_complex.push_str(&format!(
-                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS,atempo={:.6}[a_trimmed_{}];",
-                        audio_source, src_start, src_dur, audio.speed.as_f64(), i
+                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS{}[a_trimmed_{}];",
+                        audio_source,
+                        src_start,
+                        src_dur,
+                        audio_tempo_filters(audio),
+                        i
                     ));
                     filter_complex.push_str(&format!(
                         "[a_trimmed_{}][{}:a]amultiply,adelay={}|{}[{}];",
                         i, env_input_idx, timeline_start_ms, timeline_start_ms, tag
                     ));
                 } else {
-                    let mut filter_chain = format!(
-                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS,atempo={:.6},volume={:.3}",
-                        audio_source, src_start, src_dur, audio.speed.as_f64(), audio.volume
+                    let mut filter_chain =
+                        format!(
+                        "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS{},volume={:.3}",
+                        audio_source, src_start, src_dur, audio_tempo_filters(audio), audio.volume
                     );
 
                     if let Some(fade_in) = audio.fade_in {
@@ -2396,6 +2438,9 @@ pub struct PreviewSampledLayer {
     pub color_lut: Option<ClipLut>,
     #[serde(default)]
     pub chroma_key: Option<ChromaKey>,
+    /// The clip is reversed at export; the preview plays it forward.
+    #[serde(default)]
+    pub reverse: bool,
     pub opacity: f32,
     pub text: Option<String>,
     pub font_family: Option<String>,
@@ -3971,6 +4016,7 @@ pub mod tests {
             fade_out: None,
             keyframes: Vec::new(),
             ducking: None,
+            reverse: false,
         };
 
         // 1. Static volume 0.0 without keyframes is not audible

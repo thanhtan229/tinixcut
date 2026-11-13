@@ -2420,6 +2420,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         >
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
+          {(sampledState?.active_layers ?? []).some((layer) => layer.reverse) && (
+            <span title="Reverse is applied when exporting; the preview plays this clip forward.">
+              Reverse: export only
+            </span>
+          )}
           {sampledState?.ducking_pending && (
             <span title="The ducking gain curve is being analysed; ducked clips play at their undropped volume until it is ready.">
               Ducking pending

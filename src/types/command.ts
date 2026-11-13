@@ -98,6 +98,10 @@ export type CommandOperation =
       };
     }
   | {
+      type: "ClipReverseSet";
+      payload: { item_id: string; reverse: boolean };
+    }
+  | {
       type: "ClipDuckingSet";
       payload: {
         item_id: string;

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
-import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
+import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, clipSpeedRatio, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -68,8 +68,7 @@ function timelineFramesToSourceFrames(
   sourceRate: FrameRate,
   speed: ClipSpeed | undefined
 ): number | null {
-  const [speedNumerator, speedDenominator] =
-    speed === "Half" ? [1, 2] : speed === "Double" ? [2, 1] : [1, 1];
+  const [speedNumerator, speedDenominator] = clipSpeedRatio(speed);
   const numerator =
     timelineFrames *
     timelineRate.denominator *
@@ -2250,6 +2249,17 @@ export function App() {
     }
   };
 
+  const handleUpdateReverse = (reverse: boolean) => {
+    if (!selectedItemId) return;
+    executeCommandEnvelope(
+      [{
+        operation_id: `op_reverse_${Date.now()}`,
+        operation: { type: "ClipReverseSet", payload: { item_id: selectedItemId, reverse } },
+      }],
+      reverse ? "Reverse clip" : "Play clip forward"
+    );
+  };
+
   const handleUpdateDucking = (ducking: Ducking | null) => {
     if (!selectedItemId) return;
     executeCommandEnvelope(
@@ -3076,6 +3086,7 @@ export function App() {
           onUpdateColorAdjustments={handleUpdateColorAdjustments}
           onUpdateChromaKey={handleUpdateChromaKey}
           onUpdateDucking={handleUpdateDucking}
+          onUpdateReverse={handleUpdateReverse}
           onChooseLut={handleChooseLut}
           onClearLut={handleClearLut}
           onUpdateSpeed={handleUpdateSpeed}
