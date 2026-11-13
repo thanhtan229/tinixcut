@@ -169,6 +169,35 @@ Commits: `27e2c17` (58A), `fb39eda` (58B+58C), `bfbf302` (58D), `6d9bd6a` (58E),
 
 **Not verified (open)**
 
-- The WebGL layer's pixels were not compared with an export frame in the running app (no native run; vitest cannot create a WebGL2 context). The shader math is reviewed against the formulas and unit-tested through the TypeScript reference, but real preview-vs-export parity (MAE <= 4.0) for LUT/chroma clips, WebGL2 availability inside WebView2, and the `texImage2D(video)` CORS behaviour on the asset protocol remain to be qualified with `scripts/qualification/native/`. Until then the preview badge states when the effect cannot be drawn, and export is authoritative.
+- (Superseded by section 9: native comparison was run on 2026-11-13.)
 - Scopes panel and Inspector controls were type-checked and unit-tested for their pure parts only; they were not exercised in the native UI.
 - G54 UI-response budget was not re-measured with a LUT clip.
+
+## 9. Native qualification — 2026-11-13
+
+Run with the dev build (`pnpm tauri dev --config scripts/qualification/native/cdp-config-override.json`), 1920x1080 fixtures from `tests/phase58_native_fixtures.rs` (`artifacts/phase58/native/`, untracked), preview captured with `capture_preview.py`, export frames from `tinixcut render`. Natural footage (the Hoi An sample, BT.709-tagged) is used for pixel comparisons; saturated synthetic patterns (testsrc2) were rejected because the browser and FFmpeg decode them differently (red 225,49,24 vs 255,0,0) even with no effect applied.
+
+**Environment findings**
+
+- WebGL2 is available in WebView2, `texImage2D(video)` works on the asset protocol (no CORS taint), and the effect layer activates for LUT and chroma-key clips with no "Effect preview unavailable" badge. For a keyed clip the `<video>` stays hidden under the canvas; with a key the green screen is visibly removed and the track below shows through at the same geometry as export.
+- Pre-existing, independent of Phase 58: preview vs export of the **same clip with no effect** has MAE 5.0 and luma SSIM 0.991 on natural footage (decode path difference), so the 4.0 MAE rule in §4/58B cannot be met by any effect on this content.
+
+**Shader math on the real GPU (strongest evidence)**
+
+- A probe inside the running WebView2 context renders the production shader for known inputs. LUT: 6 colours through the graded 17^3 LUT match the reference sampler exactly (e.g. 230,179,128 -> 221,163,135). Chroma key: 4 key configurations x 111 vectors measured from real FFmpeg output (`chromaKeyGolden.json`) match within 1 level on RGB and alpha (despill and blend included).
+
+**Frame comparison (preview vs export, frame 30)**
+
+| Clip | preview vs export MAE | luma SSIM | reference |
+|---|---|---|---|
+| no effect (`lut_base`) | 5.0 | 0.991 | baseline |
+| 3D LUT (`lut`) | 7.2 | 0.945–0.950 | baseline + 2.2 MAE |
+| identity LUT through the WebGL layer vs plain `<video>` | 1.2 (smooth areas) / 3.1 (all) | 0.966 | layer-only cost |
+| chroma key (`key`) | 8.6 (inflated by the saturated red box) | 0.975 | — |
+
+**Disposition**
+
+- LUT and chroma key preview are **qualified for what they show** (math exact on GPU, geometry and keying correct), but the plan's strict acceptance rule (SSIM within 0.01 of the no-effect baseline) is **not met**: the WebGL canvas path loses ~0.025–0.035 SSIM against the `<video>` path even with a no-op LUT (identity control). Absolute SSIM stays >= 0.945, above the 0.92 G52 threshold.
+- A trial that rendered the canvas at display size with mipmaps did not improve SSIM (0.958 vs 0.966) and was reverted. The remaining gap is a resampling/alignment difference between the canvas and the video compositor and is a candidate for a later preview-renderer change (same item as the G52 pixel-parity decision).
+- Graded-LUT capture vs reference showed a red bias (-4.7 levels) on one comparison, while the GPU probe is exact; the likely cause is a one-frame difference between the two captured frames of a slowly changing clip. Not resolved further.
+- Still not exercised in the native UI: the scopes panel, chapter button and Inspector controls (they were driven only through code paths and unit tests). G54 UI-response was not re-measured with a LUT clip.

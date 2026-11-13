@@ -31,7 +31,7 @@
 2. **Upgrade from an earlier installer** is untested; v0.1.0 is the first release, so no upgrade path exists yet. Test it when 0.2.0 is cut.
 3. **Pixel-level preview/export parity** is not claimed (decision 2026-11-12, approved by Product Owner: threshold 0.92 stays locked and unrelaxed; export scale-filter A/B showed no gain, so the residual gap is in the preview path; revisit with a preview-renderer change in a later release).
 4. **Pointer-drag editing** was not qualified; keyboard and command paths are.
-5. **Phase 58 preview parity** for LUT/chroma clips (WebGL layer vs export frame, MAE <= 4.0) has not been measured in the running app.
+5. **Phase 58 preview parity** for LUT/chroma clips: measured natively on 2026-11-13 (shader math exact on the real GPU; preview vs export luma SSIM 0.945-0.975 on natural footage) but the strict rule of staying within 0.01 SSIM of the no-effect baseline is not met (WebGL canvas path costs ~0.03 SSIM). Pixel parity for effect clips is not claimed.
 6. Physical calibrated A/V sync, clean-VM install and hardware encoders remain optional per the 2026-11-03 decision.
 
 ## 4. Automated test status (2026-11-12)
