@@ -201,3 +201,20 @@ Run with the dev build (`pnpm tauri dev --config scripts/qualification/native/cd
 - A trial that rendered the canvas at display size with mipmaps did not improve SSIM (0.958 vs 0.966) and was reverted. The remaining gap is a resampling/alignment difference between the canvas and the video compositor and is a candidate for a later preview-renderer change (same item as the G52 pixel-parity decision).
 - Graded-LUT capture vs reference showed a red bias (-4.7 levels) on one comparison, while the GPU probe is exact; the likely cause is a one-frame difference between the two captured frames of a slowly changing clip. Not resolved further.
 - Still not exercised in the native UI: the scopes panel, chapter button and Inspector controls (they were driven only through code paths and unit tests). G54 UI-response was not re-measured with a LUT clip.
+
+## 10. Native UI check of the new controls — 2026-11-13
+
+Dev build with the CDP port, `key.tcproj` (two clips), driven through UI Automation (toggle, range, button invoke) with in-page state read over CDP.
+
+| Control | Result |
+|---|---|
+| Inspector sections on a selected clip | CHROMA KEY, 3D LUT, Show video scopes and YOUTUBE CHAPTERS all present |
+| Chroma key checkbox | Off -> rev 1, effect layer removed (`gl` 1 -> 0); On -> rev 2, layer back |
+| Chroma key Similarity slider | 0.3 -> 0.6 = rev 3; Undo -> 0.3 (rev 4); Redo -> 0.6 (rev 5) |
+| Choose LUT (native file dialog, `graded.cube`) | "Set LUT (Phase58 graded) committed (rev 6)", Inspector shows the LUT name, a second effect layer appears, no failure badge |
+| Show video scopes | Histogram, waveform and vectorscope canvases drawn (non-blank), stats line "Luma 0-251, mean 76, black clip 2.8%, white clip 0.00%" plus the text-overlay note |
+| Markers + Copy YouTube chapters | Three markers (rev 9) -> "Not copied", with the three expected violations (each chapter 1 s, minimum 10 s) |
+
+UI response with two effect layers (dev build, `UI_SAMPLES=10`): Play p95 94.7 ms, Pause 28.1, Step 27.2, Go 28.4 (all within the 100 ms budget); Select had 3 of 10 failures because `ui_action select` only sends Enter when TinixCut owns the foreground window and the host was in use. This is **not** a qualified G54 re-measure (dev bundle, n = 10, Select incomplete); it shows no regression signal, and Play near the budget deserves a production-bundle recheck.
+
+Environment notes: a stale `*.recovery` file from an earlier run made one recovery save fail ("different recovery content already exists at the same revision"); the app reported it without crashing. Not exercised: the valid-chapters path in the UI (the fixture is 3 s long; it is covered by unit tests) and scopes values against an independent export of the unsaved state.
