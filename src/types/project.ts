@@ -190,7 +190,17 @@ export type TransitionKind =
   | "FadeOut"
   | "CrossDissolve"
   | "FadeBlack"
-  | "DipToBlack";
+  | "DipToBlack"
+  | "WipeLeft"
+  | "WipeRight"
+  | "WipeUp"
+  | "WipeDown"
+  | "SlideLeft"
+  | "SlideRight"
+  | "CircleOpen";
+
+/** Transitions that join two adjacent clips (the others fade a single clip). */
+export type CutTransitionKind = Exclude<TransitionKind, "FadeIn" | "FadeOut" | "FadeBlack">;
 
 export type VisualEffectPreset = "None" | "Mono" | "Vivid" | "Muted";
 export interface ColorAdjustments {

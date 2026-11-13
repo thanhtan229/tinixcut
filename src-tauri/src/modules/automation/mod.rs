@@ -1006,6 +1006,14 @@ impl AutomationAdapter {
             "FadeOut".to_string(),
             "FadeBlack".to_string(),
             "CrossDissolve".to_string(),
+            "DipToBlack".to_string(),
+            "WipeLeft".to_string(),
+            "WipeRight".to_string(),
+            "WipeUp".to_string(),
+            "WipeDown".to_string(),
+            "SlideLeft".to_string(),
+            "SlideRight".to_string(),
+            "CircleOpen".to_string(),
         ]
     }
 

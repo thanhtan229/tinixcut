@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { waveformPathD } from "./waveformPath";
+import type { CutTransitionKind } from "../types/project";
 import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, ProjectMarker, rationalTimeToFrames, TimelineItem } from "../types/project";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
@@ -36,7 +37,7 @@ interface TimelineProps {
     trackId: string,
     leftItemId: string,
     rightItemId: string,
-    kind: "CrossDissolve" | "DipToBlack",
+    kind: CutTransitionKind,
     durationFrames: number
   ) => void;
   onCreateAudioCrossfade?: (trackId: string, leftItemId: string, rightItemId: string, durationFrames: number) => void;

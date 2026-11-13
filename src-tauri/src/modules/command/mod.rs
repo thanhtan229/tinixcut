@@ -5117,10 +5117,7 @@ impl CommandService {
                 transition,
             } => {
                 if let Some(ref t) = transition {
-                    if matches!(
-                        t.kind,
-                        TransitionKind::CrossDissolve | TransitionKind::DipToBlack
-                    ) {
+                    if t.kind.is_cut_kind() {
                         return Err(CommandError::UnsupportedTransition {
                             operation_id: op_id.to_string(),
                             transition: format!("{:?}", t.kind),
@@ -5771,10 +5768,7 @@ impl CommandService {
                 kind,
                 duration,
             } => {
-                if !matches!(
-                    *kind,
-                    TransitionKind::CrossDissolve | TransitionKind::DipToBlack
-                ) {
+                if !kind.is_cut_kind() {
                     return Err(CommandError::UnsupportedTransition {
                         operation_id: op_id.to_string(),
                         transition: format!("{:?}", kind),
@@ -11887,6 +11881,80 @@ mod tests {
         );
         assert!(refused.is_err());
         assert!(refused.unwrap_err().to_string().contains("limit"));
+    }
+
+    #[test]
+    fn test_phase59_geometric_cut_transitions_create_validate_and_stay_cut_only() {
+        let kinds = [
+            TransitionKind::WipeLeft,
+            TransitionKind::WipeRight,
+            TransitionKind::WipeUp,
+            TransitionKind::WipeDown,
+            TransitionKind::SlideLeft,
+            TransitionKind::SlideRight,
+            TransitionKind::CircleOpen,
+        ];
+        for kind in kinds {
+            assert!(kind.is_cut_kind() && kind.is_geometric());
+            assert!(kind.xfade_name().is_some());
+            let (project, pid, trk_id, itm1, itm2) = setup_phase13_test_project();
+            let mut service = CommandService::new(project);
+            let receipt = service
+                .execute(CommandEnvelope {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    project_id: pid.clone(),
+                    base_revision: 0,
+                    client_id: None,
+                    client_epoch: None,
+                    sequence_number: None,
+                    dry_run: false,
+                    transaction_id: Some("tx_geo_create".to_string()),
+                    operations: vec![OperationEnvelope {
+                        operation_id: "op_geo_create".to_string(),
+                        operation: CommandOperation::CutTransitionCreate {
+                            transition_id: Some("trans_geo".to_string()),
+                            track_id: trk_id.clone(),
+                            left_item_id: itm1.clone(),
+                            right_item_id: itm2.clone(),
+                            kind,
+                            duration: RationalTime::new(10, FrameRate::FPS_30),
+                        },
+                    }],
+                })
+                .unwrap_or_else(|e| panic!("{kind:?} must be accepted as a cut transition: {e}"));
+            assert_eq!(receipt.operations_applied, 1);
+            assert_eq!(service.project().tracks[0].transitions[0].kind, kind);
+
+            // The same kind is refused as an item-level transition.
+            let refused = service.execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid,
+                base_revision: service.project().revision,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some("tx_geo_item".to_string()),
+                operations: vec![OperationEnvelope {
+                    operation_id: "op_geo_item".to_string(),
+                    operation: CommandOperation::ClipTransitionSet {
+                        item_id: itm1,
+                        transition: Some(Transition {
+                            kind,
+                            duration: RationalTime::new(10, FrameRate::FPS_30),
+                        }),
+                    },
+                }],
+            });
+            assert!(refused.is_err(), "{kind:?} is a cut transition only");
+        }
+        for kind in [
+            TransitionKind::FadeIn,
+            TransitionKind::FadeOut,
+            TransitionKind::FadeBlack,
+        ] {
+            assert!(!kind.is_cut_kind() && kind.xfade_name().is_none());
+        }
     }
 
     #[test]

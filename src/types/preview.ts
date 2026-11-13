@@ -7,6 +7,7 @@ import {
   ColorAdjustments,
   ClipLut,
   ChromaKey,
+  TransitionKind,
   TextRichStyle,
   TextAnimation,
 } from "./project";
@@ -62,7 +63,7 @@ export interface PreviewTransitionGroup {
   transition_id: string;
   track_id: string;
   z_index: number;
-  kind: "FadeIn" | "FadeOut" | "CrossDissolve" | "FadeBlack" | "DipToBlack";
+  kind: TransitionKind;
   progress: number;
   left_layer: PreviewSampledLayer;
   right_layer: PreviewSampledLayer;

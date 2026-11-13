@@ -892,6 +892,57 @@ pub enum TransitionKind {
     CrossDissolve,
     FadeBlack,
     DipToBlack,
+    /// The incoming clip enters from the right edge (FFmpeg `xfade=wipeleft`).
+    WipeLeft,
+    /// The incoming clip enters from the left edge (`wiperight`).
+    WipeRight,
+    /// The incoming clip enters from the bottom edge (`wipeup`).
+    WipeUp,
+    /// The incoming clip enters from the top edge (`wipedown`).
+    WipeDown,
+    /// Both clips slide left; the incoming one enters from the right (`slideleft`).
+    SlideLeft,
+    /// Both clips slide right; the incoming one enters from the left (`slideright`).
+    SlideRight,
+    /// The incoming clip opens as a circle from the centre with a soft edge (`circleopen`).
+    CircleOpen,
+}
+
+impl TransitionKind {
+    /// Kinds that join two adjacent clips (as opposed to fading a single clip in or out).
+    pub fn is_cut_kind(self) -> bool {
+        !matches!(self, Self::FadeIn | Self::FadeOut | Self::FadeBlack)
+    }
+
+    /// Cut kinds whose picture is a geometric function of progress (no opacity blending).
+    pub fn is_geometric(self) -> bool {
+        matches!(
+            self,
+            Self::WipeLeft
+                | Self::WipeRight
+                | Self::WipeUp
+                | Self::WipeDown
+                | Self::SlideLeft
+                | Self::SlideRight
+                | Self::CircleOpen
+        )
+    }
+
+    /// FFmpeg `xfade` transition name for cut kinds.
+    pub fn xfade_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::CrossDissolve => "fade",
+            Self::DipToBlack => "fadeblack",
+            Self::WipeLeft => "wipeleft",
+            Self::WipeRight => "wiperight",
+            Self::WipeUp => "wipeup",
+            Self::WipeDown => "wipedown",
+            Self::SlideLeft => "slideleft",
+            Self::SlideRight => "slideright",
+            Self::CircleOpen => "circleopen",
+            Self::FadeIn | Self::FadeOut | Self::FadeBlack => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -975,12 +1026,9 @@ impl CutTransition {
         if self.duration.value <= 0 {
             return Err(DomainError::NonPositiveDuration);
         }
-        if !matches!(
-            self.kind,
-            TransitionKind::CrossDissolve | TransitionKind::DipToBlack
-        ) {
+        if !self.kind.is_cut_kind() {
             return Err(DomainError::Validation(
-                "Only CrossDissolve and DipToBlack are supported for cut transitions".to_string(),
+                "Fade-in, fade-out and fade-black apply to a single clip, not to a cut".to_string(),
             ));
         }
         Ok(())

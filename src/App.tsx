@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "./types/export";
-import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, clipSpeedRatio, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
+import { Asset, AudioCrossfade, ChromaKey, ClipSpeed, clipSpeedRatio, CutTransitionKind, Ducking, ColorAdjustments, Crop, CutTransition, FrameRate, isRangeAdjacent, KeyframeEasing, KeyframeProperty, PlacementMode, Project, rationalTimeToFrames, rationalTimeToSeconds, TextStyle, TimelineItem, Transform, TransitionKind, VisualEffectPreset } from "./types/project";
 import { CommandEnvelope, OperationEnvelope } from "./types/command";
 import { EditPlanDraftReceipt, editorApi, OfflineMediaAsset, ProjectExportJobStatus, UnsavedRecoveryCandidate, VisualSceneAnalysisReport } from "./services/editorApi";
 import { TopBar } from "./components/TopBar";
@@ -60,6 +60,7 @@ import {
   toggleSelect,
 } from "./utils/timelineSelection";
 import { useTimelineShortcuts } from "./hooks/useTimelineShortcuts";
+import { cutTransitionLabel } from "./components/transitionGeometry";
 import "./App.css";
 
 function timelineFramesToSourceFrames(
@@ -2575,7 +2576,7 @@ export function App() {
     trackId: string,
     leftItemId: string,
     rightItemId: string,
-    kind: "CrossDissolve" | "DipToBlack",
+    kind: CutTransitionKind,
     durationFrames: number = 30
   ) => {
     if (!project) return;
@@ -2596,7 +2597,7 @@ export function App() {
           },
         },
       ],
-      `Create ${kind === "CrossDissolve" ? "Cross Dissolve" : "Dip to Black"}`
+      `Create ${cutTransitionLabel(kind)}`
     );
   };
 

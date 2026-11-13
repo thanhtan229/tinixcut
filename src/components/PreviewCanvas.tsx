@@ -15,6 +15,7 @@ import { formatPreviewPlaybackFailure } from "./previewPlaybackErrors";
 import { currentVideoPreviewFailure, hasPendingCompatiblePreview, previewMediaFailurePresentation, VideoPreviewFailure } from "./previewMediaFailure";
 import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorAdjustments";
 import { LutVideoLayer, useLutTable } from "./LutVideoLayer";
+import { isGeometricKind, transitionShape } from "./transitionGeometry";
 import { PreviewProxyMode, PreviewProxySource, policyProxyAssetIds, proxyAssetIdsToPoll, resolvePreviewVideoPath } from "./previewProxyPolicy";
 import {
   canvasCropFromPointerDelta,
@@ -2118,13 +2119,40 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
                   backgroundColor: group.kind === "DipToBlack" ? "#000" : undefined,
                 }}
               >
-                {renderLayer(
-                  group.left_layer,
-                  group.kind === "CrossDissolve" ? "plus-lighter" : undefined
-                )}
-                {renderLayer(
-                  group.right_layer,
-                  group.kind === "CrossDissolve" ? "plus-lighter" : undefined
+                {isGeometricKind(group.kind) ? (() => {
+                  // Geometric transitions show both clips at full opacity; the edge, slide or
+                  // circle is a pure function of progress (same formulas as the export xfade).
+                  const shape = transitionShape(group.kind, group.progress);
+                  const frame: React.CSSProperties = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
+                  return (
+                    <>
+                      <div style={{ ...frame, transform: shape.outgoingTransform }}>
+                        {renderLayer(group.left_layer)}
+                      </div>
+                      <div
+                        style={{
+                          ...frame,
+                          transform: shape.incomingTransform,
+                          clipPath: shape.incomingClipPath,
+                          maskImage: shape.incomingMask,
+                          WebkitMaskImage: shape.incomingMask,
+                        }}
+                      >
+                        {renderLayer(group.right_layer)}
+                      </div>
+                    </>
+                  );
+                })() : (
+                  <>
+                    {renderLayer(
+                      group.left_layer,
+                      group.kind === "CrossDissolve" ? "plus-lighter" : undefined
+                    )}
+                    {renderLayer(
+                      group.right_layer,
+                      group.kind === "CrossDissolve" ? "plus-lighter" : undefined
+                    )}
+                  </>
                 )}
               </div>
             ))}

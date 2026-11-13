@@ -1,0 +1,128 @@
+[
+  {
+    "kind": "WipeLeft",
+    "measured": 0.765625,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeLeft",
+    "measured": 0.5,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeLeft",
+    "measured": 0.265625,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeRight",
+    "measured": 0.234375,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeRight",
+    "measured": 0.515625,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeRight",
+    "measured": 0.734375,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeUp",
+    "measured": 0.78125,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeUp",
+    "measured": 0.515625,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeUp",
+    "measured": 0.265625,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeDown",
+    "measured": 0.234375,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeDown",
+    "measured": 0.5,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "WipeDown",
+    "measured": 0.734375,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideLeft",
+    "measured": 0.765625,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideLeft",
+    "measured": 0.5,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideLeft",
+    "measured": 0.265625,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideRight",
+    "measured": 0.234375,
+    "progress": 0.23333333333333334,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideRight",
+    "measured": 0.5,
+    "progress": 0.5,
+    "unit": "frame"
+  },
+  {
+    "kind": "SlideRight",
+    "measured": 0.734375,
+    "progress": 0.7333333333333333,
+    "unit": "frame"
+  },
+  {
+    "kind": "CircleOpen",
+    "measured": 0.19887377779633933,
+    "progress": 0.4,
+    "unit": "halfDiagonal"
+  },
+  {
+    "kind": "CircleOpen",
+    "measured": 0.3093592099054167,
+    "progress": 0.43333333333333335,
+    "unit": "halfDiagonal"
+  },
+  {
+    "kind": "CircleOpen",
+    "measured": 0.5082329877017561,
+    "progress": 0.5,
+    "unit": "halfDiagonal"
+  }
+]

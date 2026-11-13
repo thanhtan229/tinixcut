@@ -222,7 +222,10 @@ impl CompositionVisualLayer {
                             1.0
                         }
                     }
-                    TransitionKind::CrossDissolve | TransitionKind::DipToBlack => 1.0,
+                    // Cut-transition kinds never reach an item-level transition (rejected on
+                    // creation); treat them as no fade if one is ever loaded.
+                    kind if kind.is_cut_kind() => 1.0,
+                    _ => 1.0,
                 };
                 op *= trans_factor;
             }
@@ -463,6 +466,8 @@ impl TransitionPlan {
             .effective_opacity_at(self.left_effective_clip_offset(time));
         match self.kind {
             TransitionKind::DipToBlack => (1.0 - (2.0 * p)).max(0.0) * base_op,
+            // Geometric kinds show both clips at full opacity; the shape does the work.
+            kind if kind.is_geometric() => base_op,
             _ => (1.0 - p) * base_op,
         }
     }
@@ -474,6 +479,7 @@ impl TransitionPlan {
             .effective_opacity_at(self.right_effective_clip_offset(time));
         match self.kind {
             TransitionKind::DipToBlack => ((2.0 * p) - 1.0).max(0.0) * base_op,
+            kind if kind.is_geometric() => base_op,
             _ => p * base_op,
         }
     }
@@ -799,10 +805,7 @@ impl CompositionPlan {
 
             for item in &track.items {
                 if let Some(ref t) = item.transition {
-                    if matches!(
-                        t.kind,
-                        TransitionKind::CrossDissolve | TransitionKind::DipToBlack
-                    ) {
+                    if t.kind.is_cut_kind() {
                         return Err(CompositionError::UnsupportedTransition {
                             item_id: item.item_id.clone(),
                             transition: format!("{:?}", t.kind),
@@ -1606,8 +1609,7 @@ impl CompositionPlan {
                                                 dur_sec
                                             ));
                                         }
-                                        TransitionKind::CrossDissolve
-                                        | TransitionKind::DipToBlack => {}
+                                        _ => {}
                                     }
                                 }
 
@@ -2033,15 +2035,9 @@ impl CompositionPlan {
 
                     let t0_val = trans.transition_range.start.value;
                     let t0_den = trans.transition_range.start.rate.numerator;
-                    let xfade_transition = match trans.kind {
-                        TransitionKind::CrossDissolve => "fade",
-                        TransitionKind::DipToBlack => "fadeblack",
-                        TransitionKind::FadeIn
-                        | TransitionKind::FadeOut
-                        | TransitionKind::FadeBlack => {
-                            unreachable!("item-only transition cannot enter a cut transition plan")
-                        }
-                    };
+                    let xfade_transition = trans.kind.xfade_name().unwrap_or_else(|| {
+                        unreachable!("item-only transition cannot enter a cut transition plan")
+                    });
                     filter_complex.push_str(&format!(
                         "[{}][{}]xfade=transition={}:duration={:.6}:offset=0,unpremultiply=inplace=1,format=rgba,setpts=PTS-STARTPTS+({})/({}*TB)[{}];",
                         left_branch_tag, right_branch_tag, xfade_transition, dur_sec, t0_val, t0_den, xfade_tag

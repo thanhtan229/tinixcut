@@ -25,6 +25,7 @@ import {
   TransitionKind,
   VisualEffectPreset,
   ChromaKey,
+  CutTransitionKind,
   Ducking,
   formatClipSpeed,
   parseSpeedInput,
@@ -32,6 +33,7 @@ import {
 } from "../types/project";
 import { TemplateLayer, TemplateParameterValue } from "../types/template";
 import { ScopesPanel } from "./ScopesPanel";
+import { CUT_TRANSITION_OPTIONS, cutTransitionLabel } from "./transitionGeometry";
 import { ChaptersSection } from "./ChaptersSection";
 import { TemplateInstanceInspector } from "./TemplateInstanceInspector";
 import { shouldResetInspectorDrafts } from "./inspectorDraftSync";
@@ -128,7 +130,7 @@ interface InspectorProps {
     trackId: string,
     leftItemId: string,
     rightItemId: string,
-    kind: "CrossDissolve" | "DipToBlack",
+    kind: CutTransitionKind,
     durationFrames: number
   ) => void;
   onUpdateCutTransitionDuration?: (transitionId: string, newDurationFrames: number) => void;
@@ -195,6 +197,7 @@ export const Inspector: React.FC<InspectorProps> = ({
 }) => {
   const [audioCrossfadeDurationDraft, setAudioCrossfadeDurationDraft] = useState("");
   const [scopesOpen, setScopesOpen] = useState(false);
+  const [newTransitionKind, setNewTransitionKind] = useState<CutTransitionKind>("WipeLeft");
   const [customSpeedDraft, setCustomSpeedDraft] = useState("");
   const [customSpeedError, setCustomSpeedError] = useState<string | null>(null);
   const [localText, setLocalText] = useState(selectedItem?.text_content ?? "");
@@ -1879,9 +1882,7 @@ export const Inspector: React.FC<InspectorProps> = ({
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", backgroundColor: "var(--bg-secondary)", padding: "8px", borderRadius: "4px" }}>
                 <div style={{ fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
                   <span>
-                    {adjacentInfo.outgoingTransition.kind === "CrossDissolve"
-                      ? "Cross Dissolve"
-                      : "Dip to Black"}{" "}
+                    {cutTransitionLabel(adjacentInfo.outgoingTransition.kind)}{" "}
                     with <strong>{adjacentInfo.nextClip?.name}</strong>
                   </span>
                   <span style={{ color: "#f59e0b", fontWeight: 600 }}>Active</span>
@@ -1966,6 +1967,36 @@ export const Inspector: React.FC<InspectorProps> = ({
                 >
                   + Add Dip to Black (30f)
                 </button>
+                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  <select
+                    aria-label="New transition type"
+                    value={newTransitionKind}
+                    onChange={(event) => setNewTransitionKind(event.currentTarget.value as CutTransitionKind)}
+                    style={{ flex: 1, fontSize: "11px" }}
+                  >
+                    {CUT_TRANSITION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    aria-label="Add selected transition"
+                    onClick={() =>
+                      onCreateCutTransition?.(
+                        adjacentInfo.trackId!,
+                        selectedItem.item_id,
+                        adjacentInfo.nextClip!.item_id,
+                        newTransitionKind,
+                        30
+                      )
+                    }
+                    style={{ fontSize: "11px" }}
+                  >
+                    Add (30f)
+                  </button>
+                </div>
               </div>
             ) : null}
           </section>
