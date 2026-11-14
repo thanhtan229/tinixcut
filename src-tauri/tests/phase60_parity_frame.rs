@@ -174,7 +174,8 @@ fn check(name: &str, animated: bool, frames: &[i64]) {
     let plan = CompositionPlan::from_project(&project).unwrap();
     for &frame in frames {
         let started = Instant::now();
-        let (png, text) = render_parity_frame_png(&plan, frame, CANVAS.0).expect("parity frame");
+        let (png, text) =
+            render_parity_frame_png(&plan, frame, CANVAS.0, &|| false).expect("parity frame");
         let elapsed = started.elapsed();
         assert!(text.is_empty());
         let parity = decode_gray(&png, true, CANVAS.0, CANVAS.1);
@@ -209,7 +210,7 @@ fn p60pf_negative_control_a_neighbouring_frame_is_detected() {
     let project = project(&source, true);
     let export = render_export(&project, &dir);
     let plan = CompositionPlan::from_project(&project).unwrap();
-    let (png, _) = render_parity_frame_png(&plan, 18, CANVAS.0).unwrap();
+    let (png, _) = render_parity_frame_png(&plan, 18, CANVAS.0, &|| false).unwrap();
     let parity = decode_gray(&png, true, CANVAS.0, CANVAS.1);
     let same = mean_abs_diff(&parity, &export_frame_gray(&export, 18));
     let other = mean_abs_diff(&parity, &export_frame_gray(&export, 17));
@@ -227,7 +228,7 @@ fn p60pf_frames_inside_a_transition_or_without_picture_are_not_supported() {
     let project = project(&source, false);
     let plan = CompositionPlan::from_project(&project).unwrap();
     // Past the end of the clip nothing is visible.
-    assert!(render_parity_frame_png(&plan, 80, CANVAS.0).is_err());
+    assert!(render_parity_frame_png(&plan, 80, CANVAS.0, &|| false).is_err());
     assert!(window_plan(&plan, 10).is_ok());
 }
 
@@ -267,10 +268,33 @@ fn p60pf_frames_are_identical_between_runs_including_a_clip_start() {
     project.tracks.push(track);
     let plan = CompositionPlan::from_project(&project).unwrap();
     for frame in [29i64, 30, 31, 44] {
-        let first = render_parity_frame_png(&plan, frame, CANVAS.0).unwrap().0;
+        let first = render_parity_frame_png(&plan, frame, CANVAS.0, &|| false)
+            .unwrap()
+            .0;
         for run in 1..8 {
-            let again = render_parity_frame_png(&plan, frame, CANVAS.0).unwrap().0;
+            let again = render_parity_frame_png(&plan, frame, CANVAS.0, &|| false)
+                .unwrap()
+                .0;
             assert_eq!(first, again, "frame {frame} differs on run {run}");
         }
     }
+}
+
+#[test]
+fn p60pf_a_superseded_render_stops_and_reports_it() {
+    let dir = test_dir("superseded");
+    let source = dir.join("bar.mp4");
+    bar_source(&source);
+    let project = project(&source, true);
+    let plan = CompositionPlan::from_project(&project).unwrap();
+    let started = Instant::now();
+    let result = render_parity_frame_png(&plan, 17, CANVAS.0, &|| true);
+    assert!(
+        matches!(
+            result,
+            Err(tinixcut_lib::modules::composition::parity_frame::ParityFrameError::Superseded)
+        ),
+        "{result:?}"
+    );
+    assert!(started.elapsed().as_secs() < 5);
 }

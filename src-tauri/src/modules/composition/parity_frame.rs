@@ -40,6 +40,8 @@ const TRAIL_FRAMES: i64 = 1;
 pub enum ParityFrameError {
     /// The frame cannot be rendered this way; the live preview stays on screen. Not a failure.
     Unsupported(String),
+    /// A newer request replaced this one before it finished; its FFmpeg process was stopped.
+    Superseded,
     Render(String),
 }
 
@@ -47,6 +49,7 @@ impl std::fmt::Display for ParityFrameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsupported(reason) => write!(f, "Exact frame unavailable: {reason}"),
+            Self::Superseded => write!(f, "Exact frame superseded by a newer request"),
             Self::Render(error) => write!(f, "Exact frame failed: {error}"),
         }
     }
@@ -132,9 +135,10 @@ pub fn window_plan(
         } else {
             None
         };
-        let starts_inside = layer.timeline_range.start.to_seconds()
-            >= window_start.to_seconds() - 1e-9
-            && !(begins_at_target && pre_roll_source.is_some());
+        // Everything is baked (constant values around the target) unless the target itself would
+        // be a layer's first frame: at frame 0, or for a clip that begins at the target with no
+        // source before its start. Those keep the export's own first-frame behaviour.
+        let starts_inside = lead_frames == 0 || (begins_at_target && pre_roll_source.is_none());
         let layer_start = if starts_inside {
             layer.timeline_range.start
         } else {
@@ -318,11 +322,13 @@ impl Drop for ScratchDir {
 }
 
 /// Renders the parity frame of `plan` at `frame` as PNG bytes, `out_width` pixels wide, and
-/// returns the ids of the text layers it leaves out.
+/// returns the ids of the text layers it leaves out. `superseded` is polled while FFmpeg runs;
+/// when it returns true the process is killed and `Superseded` is returned.
 pub fn render_parity_frame_png(
     plan: &CompositionPlan,
     frame: i64,
     out_width: u32,
+    superseded: &dyn Fn() -> bool,
 ) -> Result<(Vec<u8>, Vec<String>), ParityFrameError> {
     let window = window_plan(plan, frame)?;
     if window.plan.visual_layers.is_empty() {
@@ -339,19 +345,48 @@ pub fn render_parity_frame_png(
         ExportAutomationSchedule::build(&window.plan, &dir, window.plan.sample_rate, None)
             .map_err(|e| ParityFrameError::Render(e.to_string()))?;
     let args = window.ffmpeg_args(Some(&schedule), out_width.clamp(16, window.plan.width));
-    let output = MediaBinaryResolver::command("ffmpeg")
+    let mut child = MediaBinaryResolver::command("ffmpeg")
         .map_err(|e| ParityFrameError::Render(e.to_string()))?
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| ParityFrameError::Render(format!("could not run FFmpeg: {e}")))?;
+    // Drain both pipes on threads: the PNG is larger than a pipe buffer.
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let png_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut bytes);
+        bytes
+    });
+    let error_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stderr, &mut bytes);
+        bytes
+    });
+    loop {
+        if superseded() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = png_reader.join();
+            let _ = error_reader.join();
+            return Err(ParityFrameError::Superseded);
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(error) => return Err(ParityFrameError::Render(error.to_string())),
+        }
+    }
     drop(schedule);
-    if output.stdout.len() < 64 {
+    let png = png_reader.join().unwrap_or_default();
+    let log = error_reader.join().unwrap_or_default();
+    if png.len() < 64 {
         return Err(ParityFrameError::Render(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            String::from_utf8_lossy(&log).trim().to_string(),
         ));
     }
-    Ok((output.stdout, window.text_item_ids))
+    Ok((png, window.text_item_ids))
 }

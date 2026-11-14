@@ -3067,6 +3067,9 @@ struct ParityFrameResponse {
 
 type ParityFrameKey = (String, u64, i64, u32);
 
+/// Counts exact-frame requests; a render stops as soon as a newer request exists.
+static PARITY_FRAME_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn parity_frame_cache(
 ) -> &'static std::sync::Mutex<std::collections::VecDeque<(ParityFrameKey, ParityFrameResponse)>> {
     static CACHE: std::sync::OnceLock<
@@ -3111,6 +3114,7 @@ async fn preview_parity_frame(
         return Ok(hit);
     }
     let revision = key.1;
+    let generation = PARITY_FRAME_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let response = tauri::async_runtime::spawn_blocking(move || {
         let started = std::time::Instant::now();
         let mut response = ParityFrameResponse {
@@ -3122,12 +3126,19 @@ async fn preview_parity_frame(
             text_item_ids: Vec::new(),
             render_millis: 0,
         };
-        match render_parity_frame_png(&plan, frame, width) {
+        let superseded =
+            || PARITY_FRAME_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation;
+        match render_parity_frame_png(&plan, frame, width, &superseded) {
             Ok((png, text)) => {
                 response.png_base64 = Some(base64::engine::general_purpose::STANDARD.encode(png));
                 response.text_item_ids = text;
             }
             Err(ParityFrameError::Unsupported(reason)) => response.unavailable = Some(reason),
+            Err(ParityFrameError::Superseded) => {
+                response.unavailable = Some("superseded by a newer request".into());
+                response.render_millis = started.elapsed().as_millis() as u64;
+                return Ok(response);
+            }
             Err(error) => return Err(error.to_string()),
         }
         response.render_millis = started.elapsed().as_millis() as u64;
