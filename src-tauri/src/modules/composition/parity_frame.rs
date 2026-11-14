@@ -6,10 +6,16 @@
 //! schedule (`sendcmd` for keyframed layers) and the same filters, so the picture is the exported
 //! picture, resolution aside. Nothing here is persisted; the result is a disposable cache.
 //!
-//! Window rule: every layer active at the target frame is rebased to start at the target with a
-//! source start that is a couple of frames before the wanted source frame, so the input can be
-//! seeked. Animated properties are baked to their value at the target (kept as two equal
-//! keyframes, so the layer still takes the same keyframe-automation path as in the export).
+//! Window rule: the window starts one frame before the target (the "lead" frame) and the target
+//! is the second frame that comes out. A keyframed layer is driven by `sendcmd` commands that
+//! reach the overlay for frame n+1 while frame n may still be in flight, and its first frame uses
+//! the filter's initial state instead of a command; with the lead frame the target is always a
+//! commanded frame whose neighbours carry the same values, so the result cannot depend on that
+//! timing. Layers that start inside the window are left untouched (their first frame is the
+//! export's first frame too). Older layers are rebased to start at the window with a source start
+//! a couple of frames before the wanted source frame, so the input can be seeked; their animated
+//! properties are baked to the value at the target and kept as equal keyframes, so they still take
+//! the keyframe-automation path of the export.
 //!
 //! Not supported (the caller keeps the live preview): a frame inside a cut transition, reversed
 //! clips, missing media, and text that is drawn below a video layer (text is not part of the
@@ -27,8 +33,8 @@ use std::process::Stdio;
 
 /// Frames of margin before the wanted source frame, so an accurate input seek lands before it.
 const SEEK_MARGIN_FRAMES: i64 = 2;
-/// Frames the windowed layer stays visible; the first one is the target.
-const WINDOW_FRAMES: i64 = 2;
+/// Frames after the target that the windowed layers stay visible.
+const TRAIL_FRAMES: i64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParityFrameError {
@@ -51,6 +57,10 @@ impl std::fmt::Display for ParityFrameError {
 pub struct ParityFrameWindow {
     pub plan: CompositionPlan,
     pub target: RationalTime,
+    /// First frame of the window (one before the target, except at frame 0).
+    pub window_start: RationalTime,
+    /// Index of the target among the frames the window produces.
+    pub output_index: i64,
     /// Input seek in seconds per item id (video layers only).
     pub seeks: HashMap<String, f64>,
     /// Text layers active at the target; the preview keeps drawing them above the frame.
@@ -74,7 +84,10 @@ pub fn window_plan(
         ));
     }
 
-    let window = RationalTime::from_frames(WINDOW_FRAMES, rate);
+    let lead_frames: i64 = if frame >= 1 { 1 } else { 0 };
+    let window_start = RationalTime::new(frame - lead_frames, rate);
+    let window = RationalTime::from_frames(lead_frames + 1 + TRAIL_FRAMES, rate);
+    let window_end = window_start.add_exact(&window);
     let margin = RationalTime::from_frames(SEEK_MARGIN_FRAMES, rate);
     let mut layers: Vec<CompositionVisualLayer> = Vec::new();
     let mut seeks = HashMap::new();
@@ -104,21 +117,57 @@ pub fn window_plan(
 
         let offset = target.sub_exact(&layer.timeline_range.start);
         let mut rebased = layer.clone();
-        rebased.timeline_range = TimeRange::new(target, window);
+        // A layer that begins exactly at the target would show the filter's initial state, which
+        // is not a commanded frame and can differ by a pixel from run to run. When the source has
+        // a frame before the start, give it a lead frame too (its content there is discarded).
+        let lead_duration = RationalTime::from_frames(lead_frames, rate);
+        let begins_at_target = lead_frames > 0
+            && layer.timeline_range.start.to_seconds() > window_start.to_seconds() + 1e-9;
+        let pre_roll_source = if begins_at_target {
+            let before = layer
+                .source_range
+                .start
+                .sub_exact(&layer.speed.source_offset_for(lead_duration));
+            (before.to_seconds() >= 0.0 || layer.kind == ItemKind::Image).then_some(before)
+        } else {
+            None
+        };
+        let starts_inside = layer.timeline_range.start.to_seconds()
+            >= window_start.to_seconds() - 1e-9
+            && !(begins_at_target && pre_roll_source.is_some());
+        let layer_start = if starts_inside {
+            layer.timeline_range.start
+        } else {
+            window_start
+        };
+        let layer_window = window_end.sub_exact(&layer_start);
+        rebased.timeline_range = TimeRange::new(layer_start, layer_window);
 
         if layer.kind == ItemKind::Video {
-            let source_time = layer.source_time_at(target);
-            let seek_time = if source_time.to_seconds() > margin.to_seconds() {
-                source_time.sub_exact(&margin)
+            let source_start = if starts_inside {
+                layer.source_range.start
+            } else if let Some(before) = pre_roll_source {
+                before
             } else {
-                RationalTime::new(0, source_time.rate)
+                layer.source_time_at(window_start)
             };
-            let relative = source_time.sub_exact(&seek_time);
-            let source_window = layer.speed.source_offset_for(window);
+            let seek_time = if source_start.to_seconds() > margin.to_seconds() {
+                source_start.sub_exact(&margin)
+            } else {
+                RationalTime::new(0, source_start.rate)
+            };
+            let relative = source_start.sub_exact(&seek_time);
+            let source_window = layer.speed.source_offset_for(layer_window);
             rebased.source_range = TimeRange::new(relative, source_window);
             seeks.insert(layer.item_id.clone(), seek_time.to_seconds());
         }
         // A still image has one frame: it keeps its own source range.
+
+        if starts_inside {
+            // Same keyframes, transform and fades as the export: nothing to bake.
+            layers.push(rebased);
+            continue;
+        }
 
         // Bake animated properties at the target. An animated layer keeps two equal keyframes
         // per property so it takes the same automation path as in the export.
@@ -153,7 +202,7 @@ pub fn window_plan(
                 KeyframeProperty::Opacity => rebased.opacity = value,
                 KeyframeProperty::Volume => {}
             }
-            for at in [RationalTime::new(0, rate), window] {
+            for at in [RationalTime::new(0, rate), layer_window] {
                 rebased.keyframes.push(Keyframe::new(property, at, value));
             }
         }
@@ -182,6 +231,8 @@ pub fn window_plan(
     Ok(ParityFrameWindow {
         plan: windowed,
         target,
+        window_start,
+        output_index: lead_frames,
         seeks,
         text_item_ids,
     })
@@ -217,9 +268,16 @@ impl ParityFrameWindow {
             schedule,
             &[],
             Some(&layer_input_indices),
-            Some(self.target.to_seconds()),
+            Some(self.window_start.to_seconds()),
         );
         let mut last = base;
+        // Keep only the target frame (the frames before it are the lead-in).
+        filter_complex.push_str(&format!(
+            "[{last}]trim=start_frame={0}:end_frame={1},setpts=PTS-STARTPTS[parity_frame];",
+            self.output_index,
+            self.output_index + 1
+        ));
+        last = "parity_frame".into();
         if out_width != plan.width {
             let out_height = ((f64::from(plan.height) * f64::from(out_width)
                 / f64::from(plan.width))

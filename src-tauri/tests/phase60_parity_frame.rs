@@ -230,3 +230,47 @@ fn p60pf_frames_inside_a_transition_or_without_picture_are_not_supported() {
     assert!(render_parity_frame_png(&plan, 80, CANVAS.0).is_err());
     assert!(window_plan(&plan, 10).is_ok());
 }
+
+/// A clip that starts at the target frame shows the filter's initial state, and keyframe commands
+/// for the next frame can reach the overlay early: without the lead frame the result differed by a
+/// pixel between runs (about one run in six).
+#[test]
+fn p60pf_frames_are_identical_between_runs_including_a_clip_start() {
+    let dir = test_dir("determinism");
+    let source = dir.join("bar.mp4");
+    bar_source(&source);
+    let rate = FrameRate::FPS_30;
+    let mut project = project(&source, true);
+    // A second, keyframed clip that starts at frame 30 on its own track.
+    let timeline = TimeRange::new(RationalTime::new(30, rate), RationalTime::new(30, rate));
+    let mut item = TimelineItem::new(
+        Some("ast_bar".into()),
+        "late".into(),
+        ItemKind::Video,
+        timeline,
+        timeline,
+    )
+    .unwrap();
+    item.source_range = TimeRange::new(RationalTime::new(45, rate), RationalTime::new(30, rate));
+    item.transform.scale_x = 0.25;
+    item.transform.scale_y = 0.25;
+    item.transform.position_y = -30.0;
+    for (frame, value) in [(0, 10.3), (29, 70.7)] {
+        item.keyframes.push(Keyframe::new(
+            KeyframeProperty::PositionX,
+            RationalTime::new(frame, rate),
+            value,
+        ));
+    }
+    let mut track = Track::new("V2".into(), TrackKind::Video);
+    track.items.push(item);
+    project.tracks.push(track);
+    let plan = CompositionPlan::from_project(&project).unwrap();
+    for frame in [29i64, 30, 31, 44] {
+        let first = render_parity_frame_png(&plan, frame, CANVAS.0).unwrap().0;
+        for run in 1..8 {
+            let again = render_parity_frame_png(&plan, frame, CANVAS.0).unwrap().0;
+            assert_eq!(first, again, "frame {frame} differs on run {run}");
+        }
+    }
+}
