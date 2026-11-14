@@ -41,7 +41,7 @@ HIDE = r"""(() => {
   const marked = [];
   for (const e of c.querySelectorAll('*')) {
     const own = [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
-    if (/^\s*(Seek:|Layers:|Superseded:|Text overlays:|Blank:|Overlay errors:|ROI:|Proxies:|\d\d:\d\d:\d\d:\d\d \(\d+f\))/.test(own)) {
+    if (/^\s*(Seek:|Layers:|Exact frame|Superseded:|Text overlays:|Blank:|Overlay errors:|ROI:|Proxies:|\d\d:\d\d:\d\d:\d\d \(\d+f\))/.test(own)) {
       e.setAttribute('data-g52-hide', '1'); marked.push(e);
       // Also hide the HUD row's own box (it has a translucent background).
       const p = e.parentElement;

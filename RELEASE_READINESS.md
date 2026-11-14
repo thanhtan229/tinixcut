@@ -53,3 +53,7 @@ Freeze frame and a reversed preview copy now exist; recovery-copy discard, the M
 ## 8. Phase 59 follow-up 2 (2026-11-14)
 
 Reverse now works up to 60 s of source (pieces of 15 s through scratch files); the editor fits a clip to the nearest exact length when a fractional speed needs it. These are verified by render and unit tests, not natively. G52 pixel parity is still open and needs a preview compositor project (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 12).
+
+## 9. G52 pixel parity (2026-11-14)
+
+Export fixes: video layers at odd pixel positions were drawn 1 px up/left of the preview (4:2:0 `overlay` floors to even), and the overlay position commands could run frames ahead of the overlay; both are fixed and covered by `phase60_overlay_position`. New **Exact frame** toggle in the preview: while paused, the frame is rendered by the export compiler (SSIM 0.927-0.992 against the export at DPR 1 and 2 on a natural-footage fixture). Playback remains the browser's approximation (SSIM 0.80-0.97 on detail-rich footage), and frames inside cut transitions keep the live view, so **do not claim pixel parity for playback**. G52 disposition is a Product Owner decision (`Plans/plan_g52_preview_export_parity.md` section 12). The next NSIS build must include these export changes.

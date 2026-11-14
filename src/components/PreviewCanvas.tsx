@@ -2,7 +2,14 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Crop, Project, TimelineItem, Transform, rationalTimeToFrames } from "../types/project";
 import { PreviewFrameState, PreviewSampledLayer, BenchmarkReport, ParitySuiteReport } from "../types/preview";
-import { editorApi } from "../services/editorApi";
+import { editorApi, ParityFrame } from "../services/editorApi";
+import {
+  EXACT_FRAME_DELAY_MS,
+  EXACT_FRAME_STORAGE_KEY,
+  exactFrameIsCurrent,
+  exactFrameWidth,
+  exactFrameZIndex,
+} from "./exactFrame";
 import {
   getPendingPreviewVideoSeekTarget,
   SEEK_STALL_RECOVERY_DELAY_MS,
@@ -644,6 +651,27 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [canvasDrag, setCanvasDrag] = useState<{ itemId: string; x: number; y: number } | null>(null);
   const [canvasTransformDrag, setCanvasTransformDrag] = useState<CanvasTransformDrag | null>(null);
   const [canvasCropDrag, setCanvasCropDrag] = useState<CanvasCropDrag | null>(null);
+  // Exact frame: while paused, the export compiler renders the current frame and it replaces the
+  // browser-drawn pictures (G52). Off by default: it costs a render per pause.
+  const [exactFrameEnabled, setExactFrameEnabled] = useState(
+    () => typeof localStorage !== "undefined" && localStorage.getItem(EXACT_FRAME_STORAGE_KEY) === "1",
+  );
+  // The exact frame is rendered at device resolution, so it follows monitor/zoom changes.
+  const [devicePixelRatio, setDevicePixelRatio] = useState(() =>
+    typeof window !== "undefined" ? window.devicePixelRatio : 1,
+  );
+  useEffect(() => {
+    const update = () => setDevicePixelRatio(window.devicePixelRatio);
+    const query = window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    query.addEventListener("change", update);
+    window.addEventListener("resize", update);
+    return () => {
+      query.removeEventListener("change", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [devicePixelRatio]);
+  const [exactFrame, setExactFrame] = useState<ParityFrame | null>(null);
+  const [exactFrameNote, setExactFrameNote] = useState<string | null>(null);
   const canvasDragStartRef = useRef<{
     pointerId: number;
     itemId: string;
@@ -1508,6 +1536,42 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const viewportWidth = Math.max(1, Math.round(canvasWidth * scaleRatio));
   const viewportHeight = Math.max(1, Math.round(canvasHeight * scaleRatio));
 
+  const exactRequestWidth = exactFrameWidth({
+    enabled: exactFrameEnabled,
+    isPlaying,
+    gestureActive: canvasDrag !== null || canvasTransformDrag !== null || canvasCropDrag !== null,
+    hasProject: !!project,
+    viewportWidth,
+    devicePixelRatio,
+  });
+  const projectRevision = project?.revision;
+  useEffect(() => {
+    setExactFrame(null);
+    setExactFrameNote(null);
+    if (exactRequestWidth === null) return;
+    let cancelled = false;
+    // Only a paused playhead gets a render; scrubbing restarts this timer without one.
+    const timer = window.setTimeout(() => {
+      editorApi
+        .parityFrame(playheadFrame, exactRequestWidth)
+        .then((result) => {
+          if (cancelled) return;
+          if (result.pngBase64) setExactFrame(result);
+          else setExactFrameNote(result.unavailable ?? "unavailable");
+        })
+        .catch((error) => {
+          if (!cancelled) setExactFrameNote(String(error));
+        });
+    }, EXACT_FRAME_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [exactRequestWidth, playheadFrame, projectRevision]);
+  const exactFrameShown = exactFrameIsCurrent(exactFrame, playheadFrame, projectRevision, exactRequestWidth)
+    ? exactFrame
+    : null;
+
   const activeLayers = sampledState?.active_layers ?? [];
   const transitionGroups = sampledState?.transition_groups ?? [];
   const activeAudio = sampledState?.active_audio ?? [];
@@ -2158,6 +2222,27 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           </div>
         ) : (
           <>
+            {exactFrameShown && (
+              <img
+                data-testid="exact-frame"
+                alt="Exact frame rendered by the export compiler"
+                src={`data:image/png;base64,${exactFrameShown.pngBase64}`}
+                draggable={false}
+                style={{
+                  position: "absolute",
+                  // Centered like the layers, at canvas size x preview scale: a percentage of
+                  // the padding box would shrink the image by the border and resample it.
+                  left: "50%",
+                  top: "50%",
+                  transform: "translate(-50%, -50%)",
+                  width: `${viewportWidth}px`,
+                  height: `${viewportHeight}px`,
+                  zIndex: exactFrameZIndex(activeLayers),
+                  pointerEvents: "none",
+                  userSelect: "none",
+                }}
+              />
+            )}
             {activeLayers.map((layer: PreviewSampledLayer) => renderLayer(layer))}
             {transitionGroups.map((group) => (
               <div
@@ -2504,6 +2589,14 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         >
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
+          {exactFrameShown && (
+            <span title="This frame was rendered by the export compiler, so it is the exported picture.">
+              Exact frame · {exactFrameShown.renderMillis} ms
+            </span>
+          )}
+          {exactFrameEnabled && !exactFrameShown && exactFrameNote && (
+            <span title={exactFrameNote}>Exact frame: live preview</span>
+          )}
           {(sampledState?.active_layers ?? []).some((layer) => layer.reverse && !reverseProxies[layer.item_id]) && (
             <span title="The reversed preview is being prepared; until then the clip plays forward. Export is not affected.">
               Reverse: preparing preview
@@ -2602,6 +2695,25 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
             }}
           >
             Safe zones
+          </button>
+          <button
+            className="btn-action"
+            onClick={() =>
+              setExactFrameEnabled((enabled) => {
+                localStorage.setItem(EXACT_FRAME_STORAGE_KEY, enabled ? "0" : "1");
+                return !enabled;
+              })
+            }
+            title="While paused, show the frame as the export renders it (takes a moment after you stop; playback and scrubbing are unchanged)"
+            aria-pressed={exactFrameEnabled}
+            style={{
+              padding: "4px 8px",
+              fontSize: "11px",
+              color: exactFrameEnabled ? "#bbf7d0" : undefined,
+              borderColor: exactFrameEnabled ? "#22c55e" : undefined,
+            }}
+          >
+            Exact frame
           </button>
           <span style={{ fontSize: "12px", fontFamily: "ui-monospace, monospace", marginLeft: "8px" }}>
             {formatTimecode(playheadFrame)}

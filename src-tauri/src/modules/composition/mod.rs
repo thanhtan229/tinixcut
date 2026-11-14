@@ -42,6 +42,7 @@ pub use crate::modules::domain::{
 
 pub mod ducking;
 pub mod parity;
+pub mod parity_frame;
 pub use parity::{
     ParityDiffMetrics, ParityFixtureResult, ParityLayerSnapshot, ParitySemanticSnapshot,
     ParitySuiteReport,
@@ -1372,10 +1373,14 @@ impl CompositionPlan {
             schedule,
             overlays,
             None,
+            None,
         )
     }
 
-    fn build_video_filtergraph_with_layer_inputs(
+    /// `base_pts_offset` starts the canvas at that timeline time instead of 0, so a graph that
+    /// only needs one frame at time `t` does not composite the `t` seconds before it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_video_filtergraph_with_layer_inputs(
         &self,
         input_paths: &[PathBuf],
         base_duration: f64,
@@ -1383,16 +1388,21 @@ impl CompositionPlan {
         schedule: Option<&crate::modules::export::ExportAutomationSchedule>,
         overlays: &[TextOverlayInput],
         layer_input_indices: Option<&HashMap<String, usize>>,
+        base_pts_offset: Option<f64>,
     ) -> (String, String) {
         let mut filter_complex = String::new();
 
+        let base_shift = base_pts_offset
+            .map(|offset| format!(",setpts=PTS+{:.6}/TB", offset))
+            .unwrap_or_default();
         filter_complex.push_str(&format!(
-            "color=c={}:s={}x{}:r={}:d={:.6}[base];",
+            "color=c={}:s={}x{}:r={}:d={:.6}{}[base];",
             ffmpeg_canvas_color(&self.canvas_background_color),
             self.width,
             self.height,
             self.frame_rate.as_f64(),
-            base_duration
+            base_duration,
+            base_shift
         ));
 
         let mut current_base = "base".to_string();
@@ -2173,6 +2183,7 @@ impl CompositionPlan {
                 schedule,
                 overlays,
                 Some(&layer_input_indices),
+                None,
             );
 
         let canonical_frames = self.duration.rescaled_to(self.frame_rate).value;

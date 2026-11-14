@@ -48,6 +48,16 @@ async def main():
         await call("Emulation.setDeviceMetricsOverride", {"width": base["w"], "height": base["h"],
                    "deviceScaleFactor": dpr, "mobile": False})
         time.sleep(1.5)
+        if os.environ.get("EXACT_FRAME") == "1":
+            # The exact frame is re-requested for the new device width after a short pause.
+            want = round(720 * dpr)
+            for _ in range(60):
+                got = await js("(() => { const i = document.querySelector('[data-testid=exact-frame]'); return i ? i.naturalWidth : 0; })()")
+                if got == want:
+                    break
+                time.sleep(0.5)
+            else:
+                raise SystemExit(f"exact frame of width {want} did not appear (last width {got})")
         geom = await js(GEOM)
         await js(HIDE)
         # radius would round the corners; remove it for the measurement only

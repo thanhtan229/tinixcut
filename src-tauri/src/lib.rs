@@ -3049,6 +3049,100 @@ async fn frame_scopes(
     .map_err(|e| format!("Scopes task failed: {e}"))?
 }
 
+/// One frame of the composition rendered by the export compiler (see
+/// `modules::composition::parity_frame`). Either `png_base64` is set, or `unavailable` says why
+/// the live preview has to stay on screen.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityFrameResponse {
+    frame: i64,
+    width: u32,
+    revision: u64,
+    png_base64: Option<String>,
+    unavailable: Option<String>,
+    /// Text layers the frame leaves out; the preview keeps drawing them on top.
+    text_item_ids: Vec<String>,
+    render_millis: u64,
+}
+
+type ParityFrameKey = (String, u64, i64, u32);
+
+fn parity_frame_cache(
+) -> &'static std::sync::Mutex<std::collections::VecDeque<(ParityFrameKey, ParityFrameResponse)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::VecDeque<(ParityFrameKey, ParityFrameResponse)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Frames kept per session; derived data, invalidated by the project revision in the key.
+const PARITY_FRAME_CACHE_SIZE: usize = 8;
+
+/// Renders the live (possibly unsaved) project at `frame` through the export compiler, `width`
+/// pixels wide, for display while the playhead is paused.
+#[tauri::command]
+async fn preview_parity_frame(
+    state: State<'_, AppState>,
+    frame: i64,
+    width: u32,
+) -> Result<ParityFrameResponse, String> {
+    use base64::Engine;
+    use modules::composition::parity_frame::{render_parity_frame_png, ParityFrameError};
+
+    let (plan, key) = {
+        let engine = state.0.lock().map_err(|e| e.to_string())?;
+        let project = engine.service.project();
+        let plan = CompositionPlan::from_project(project).map_err(|e| e.to_string())?;
+        let key: ParityFrameKey = (
+            project.project_id.clone(),
+            project.revision,
+            frame,
+            width,
+        );
+        (plan, key)
+    };
+    if let Some(hit) = parity_frame_cache()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .find(|(cached, _)| *cached == key)
+        .map(|(_, response)| response.clone())
+    {
+        return Ok(hit);
+    }
+    let revision = key.1;
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let mut response = ParityFrameResponse {
+            frame,
+            width,
+            revision,
+            png_base64: None,
+            unavailable: None,
+            text_item_ids: Vec::new(),
+            render_millis: 0,
+        };
+        match render_parity_frame_png(&plan, frame, width) {
+            Ok((png, text)) => {
+                response.png_base64 = Some(base64::engine::general_purpose::STANDARD.encode(png));
+                response.text_item_ids = text;
+            }
+            Err(ParityFrameError::Unsupported(reason)) => response.unavailable = Some(reason),
+            Err(error) => return Err(error.to_string()),
+        }
+        response.render_millis = started.elapsed().as_millis() as u64;
+        Ok(response)
+    })
+    .await
+    .map_err(|e| format!("Exact frame task failed: {e}"))??;
+    let mut cache = parity_frame_cache().lock().map_err(|e| e.to_string())?;
+    cache.push_back((key, response.clone()));
+    while cache.len() > PARITY_FRAME_CACHE_SIZE {
+        cache.pop_front();
+    }
+    Ok(response)
+}
+
 #[tauri::command]
 fn preview_sample_at(state: State<'_, AppState>, frame: i64) -> Result<PreviewFrameState, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
@@ -4140,6 +4234,7 @@ pub fn run() {
             lut_describe,
             lut_read_table,
             frame_scopes,
+            preview_parity_frame,
             ducking_prepare,
             project_chapters,
             app_health_check,

@@ -1661,3 +1661,5 @@ UIA InvokePattern on the unique workspace 📂 Open control returned without exc
 **Phase 59 follow-up checkpoint (2026-11-14):** freeze frame, reverse preview copy, discard of a stale recovery copy, MCP `ExportProfile` schema fix and a preview-ducking fix for silent video clips are implemented and verified (automated and native). Open: the 15 s reverse limit, exact-time refusal of fractional custom speeds, G52 pixel parity. See plan section 11.
 
 **Phase 59 follow-up 2 (2026-11-14):** long reverse (60 s via pieces) and fitted fractional speeds are implemented and tested. G52 remains open: the comparison filter was ruled out as the cause; closing it needs a preview compositor plan.
+
+**G52 checkpoint (2026-11-14):** export position/overlay-command fixes done; Exact frame (export-rendered paused frame) implemented and natively checked on fixture 2 (all ten locked-method values >= 0.927). Open: Product Owner disposition of G52, Reset/undo/save checks on fixture 2, installed build.

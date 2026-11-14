@@ -20,6 +20,17 @@ export interface ChapterReport {
   durationSeconds: number;
 }
 
+/** One frame rendered by the export compiler; `unavailable` says why the live preview stays. */
+export interface ParityFrame {
+  frame: number;
+  width: number;
+  revision: number;
+  pngBase64: string | null;
+  unavailable: string | null;
+  textItemIds: string[];
+  renderMillis: number;
+}
+
 export interface FrameScopes {
   width: number;
   height: number;
@@ -341,6 +352,8 @@ export const editorApi = {
   describeLut: (path: string) => invoke<ClipLut>("lut_describe", { path }),
   projectChapters: () => invoke<ChapterReport>("project_chapters"),
   frameScopes: (frame: number) => invoke<FrameScopes>("frame_scopes", { frame }),
+  parityFrame: (frame: number, width: number) =>
+    invoke<ParityFrame>("preview_parity_frame", { frame, width }),
   readLutTable: (path: string, sha256: string) =>
     invoke<LutTable>("lut_read_table", { path, sha256 }),
   saveAppSettings: (settings: AppSettings) => invoke<AppSettings>("app_settings_save", { settings }),
