@@ -135,7 +135,11 @@ pub fn voice_track(
             continue;
         }
         let source_start = layer.source_range.start.to_seconds();
-        let samples = decode_mono_pcm(path, source_start, length * speed)?;
+        let mut samples = decode_mono_pcm(path, source_start, length * speed)?;
+        if layer.reverse {
+            // The clip plays its source range backwards, so the decoded samples are mirrored.
+            samples.reverse();
+        }
         for (i, slot) in power.iter_mut().enumerate() {
             let t = i as f64 * HOP_SECONDS;
             if t < start || t >= start + length {

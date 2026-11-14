@@ -127,6 +127,8 @@ export type CommandOperation =
       payload: {
         item_id: string;
         speed: ClipSpeed;
+        /** Shorten the clip to the nearest length the speed represents exactly instead of refusing. */
+        fit_duration?: boolean;
       };
     }
   | {

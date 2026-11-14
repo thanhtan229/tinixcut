@@ -49,3 +49,7 @@ Export loudness targets, per-clip ducking, custom speed (1/8x-8x) and reverse, g
 ## 7. Phase 59 follow-up (2026-11-14)
 
 Freeze frame and a reversed preview copy now exist; recovery-copy discard, the MCP export schema, preview ducking with silent video clips, and `Alt+I` were fixed or checked natively (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 11). Reverse stays limited to 15 s of source and its preview copy is silent. G52 pixel parity is still open.
+
+## 8. Phase 59 follow-up 2 (2026-11-14)
+
+Reverse now works up to 60 s of source (pieces of 15 s through scratch files); the editor fits a clip to the nearest exact length when a fractional speed needs it. These are verified by render and unit tests, not natively. G52 pixel parity is still open and needs a preview compositor project (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 12).

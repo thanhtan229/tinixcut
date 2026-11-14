@@ -728,9 +728,11 @@ impl ChromaKey {
     }
 }
 
-/// Longest source range a clip may play in reverse. FFmpeg's `reverse` filter holds every
-/// decoded frame in memory, so the limit keeps a 1080p reverse near 2 GB.
-pub const MAX_REVERSE_SOURCE_SECONDS: f64 = 15.0;
+/// Longest source range a clip may be set to play in reverse. FFmpeg's `reverse` filter holds
+/// every decoded frame of its input, so the export reverses long ranges in pieces of
+/// `media::ffmpeg::REVERSE_SEGMENT_SECONDS` through temporary files; this cap only bounds the
+/// scratch disk space (about 1 GB of lossless intermediate per 15 s of 1080p).
+pub const MAX_REVERSE_SOURCE_SECONDS: f64 = 60.0;
 
 /// Clip speed as an exact ratio. `Half`, `Normal` and `Double` are the original fixed speeds
 /// and keep their serialized form; `Custom` is any other reduced ratio between 1/8x and 8x.
@@ -852,6 +854,33 @@ impl ClipSpeed {
             ));
         }
         Ok(RationalTime::new(frames as i64, source_rate))
+    }
+
+    /// Largest timeline duration not above `timeline_duration` whose source duration is a whole
+    /// number of source frames at this speed, or `None` when not even one step fits.
+    ///
+    /// Exactness stays the canonical rule (guardrail 7): an editor that wants a fractional speed
+    /// on a clip of an unsuitable length asks for the nearest valid length instead of a rounded
+    /// source range, so splits and trims never have to guess which source frame is meant.
+    pub fn largest_exact_timeline_duration(
+        self,
+        timeline_duration: RationalTime,
+        source_rate: FrameRate,
+    ) -> Option<RationalTime> {
+        let (speed_num, speed_den) = self.ratio();
+        // A timeline duration of `f` frames is exact iff `f * per_frame % denominator == 0`.
+        let per_frame = timeline_duration.rate.denominator as i128
+            * speed_num as i128
+            * source_rate.numerator as i128;
+        let denominator = timeline_duration.rate.numerator as i128
+            * speed_den as i128
+            * source_rate.denominator as i128;
+        if per_frame <= 0 || denominator <= 0 {
+            return None;
+        }
+        let step = denominator / gcd_i128(per_frame, denominator);
+        let fitted = (timeline_duration.value as i128) / step * step;
+        (fitted > 0).then(|| RationalTime::new(fitted as i64, timeline_duration.rate))
     }
 
     pub fn source_offset_for(self, timeline_offset: RationalTime) -> RationalTime {

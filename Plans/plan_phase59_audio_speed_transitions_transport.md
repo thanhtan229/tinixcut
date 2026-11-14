@@ -242,7 +242,19 @@ Closes the open items from sections 8 to 10 where that is possible. Each item li
 
 **Still open, deliberately**
 
-- Reverse stays limited to 15 s of source. FFmpeg `reverse` holds every frame; a longer limit needs separate reverse passes per segment written to temporary files, which is a design of its own.
-- Custom speeds whose source duration is not a whole number of source frames stay refused (guardrail 7: exact rational time).
+- ~~Reverse stays limited to 15 s of source.~~ Superseded by section 12 (60 s through pieces).
+- ~~Custom speeds whose source duration is not a whole number of source frames stay refused.~~ Superseded by section 12 (the editor fits the clip length; automation stays strict).
 - The reversed clip's audio is not reversed in the preview (muted) and is not rendered backwards for audio-only clips there.
 - WebView2 versus export pixel parity of the geometric transitions was measured only on the preview side (section 10) plus separate FFmpeg measurements. G52 pixel parity is unchanged and remains open.
+
+## 12. Fractional speeds, long reverse and G52 — 2026-11-14
+
+| Item | Result | Evidence |
+|---|---|---|
+| Fractional speed on a clip whose length is not exact | Exactness stays the canonical rule (guardrail 7). `ClipSpeedSet` gained `fit_duration` (default off, so MCP/CLI stay strict); the Inspector sets it, and the clip is shortened to the largest length the speed represents exactly (3/4 on 30 frames becomes 28 frames and 21 source frames). The start never moves, linked clips follow, dependent transitions are reconciled | `test_phase59_fractional_speed_fits_the_clip_length_only_when_asked`, `largest_exact_timeline_duration_is_the_nearest_valid_length_below` |
+| Reverse limit 15 s to 60 s | `FFmpegService::render_reversed_range` reverses pieces of at most 15 s and joins them last-first. Export (`materialize_long_reverses`) replaces each long reversed layer with a lossless scratch file (FFV1 + float PCM) in a temporary directory that is removed afterwards; the preview copy uses the same routine. Ducking analysis now mirrors the samples of reversed clips | `phase59_long_reverse.rs`: a 20 s source (pieces 15 s + 5 s) exported reversed shows the mirrored source instant at 0.5, 4.9, 5.1 (the join), 10, 15.5 and 19.4 s; 600 frames with no repeat or loss and a non-increasing gradient across the join; the 20 s preview copy is mirrored across the join; negative control against forward playback; no scratch left behind |
+| G52 pixel parity | **Not implemented.** New measurement: comparing the recorded preview captures with the export frame resampled by bicubic, bilinear, area, lanczos or nearest changes luma SSIM only between 0.895 and 0.927, so the comparison filter is not the cause (bicubic: 0.904, 0.895, 0.921, 0.925, 0.907 at frames 30, 90, 150, 209, 210) | measured with `ffmpeg ssim` on `artifacts/phase52/disposable/g52_parity_20261112/` |
+
+**Why G52 was not started.** The remaining difference comes from how the preview draws the video (browser scaling inside CSS transforms, clip-paths and SVG filters). Closing it needs a preview compositor that draws every layer kind (video, image, text overlay, effects, transitions, blends) through one sampler chosen to match FFmpeg, then a re-measurement against the unchanged 0.92 threshold. That is a renderer project of its own with no evidence yet that it reaches the threshold (the earlier LUT probe showed the WebGL canvas path differs from `<video>` by about 0.03 SSIM, in an unknown direction relative to the export). It needs its own plan and a go/no-go measurement on one layer before any rewrite.
+
+**Not checked natively.** The Inspector speed field with fitting and the long-reverse export were verified by unit and render tests, not by driving the app.

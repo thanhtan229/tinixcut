@@ -20,7 +20,7 @@ fn remove_silent_video_audio_layers(
 }
 
 use crate::modules::composition::{CompositionPlan, TextOverlayInput};
-use crate::modules::domain::time::{FrameRate, RationalTime};
+use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
 use crate::modules::domain::{Project, ProjectSettings};
 use crate::modules::media::ffmpeg::FFmpegService;
 use crate::modules::media::loudness::{self, LoudnessOutcome, LoudnessTarget};
@@ -568,6 +568,79 @@ impl ExportEngine {
         )
     }
 
+    /// Replaces every reversed layer whose source range exceeds one reverse piece with a
+    /// lossless, already reversed scratch file, and clears that layer's `reverse` flag.
+    ///
+    /// The scratch file starts at the layer's source start, so the layer then reads
+    /// `[0, duration)` forward. Video and audio layers over the same range share one file.
+    fn materialize_long_reverses(
+        plan: &mut CompositionPlan,
+        dir: &Path,
+        cancel_flag: Option<&Arc<AtomicBool>>,
+    ) -> Result<(), ExportError> {
+        use crate::modules::media::ffmpeg::{ReverseOutput, REVERSE_SEGMENT_SECONDS};
+
+        let needs = |reverse: bool, path: &Option<PathBuf>, range: &TimeRange| {
+            reverse
+                && path.is_some()
+                && range.duration.to_seconds() > REVERSE_SEGMENT_SECONDS + 1e-9
+        };
+        let mut rendered: HashMap<(PathBuf, i64, i64), PathBuf> = HashMap::new();
+        let mut render = |path: &Path, range: &TimeRange| -> Result<PathBuf, ExportError> {
+            let key = (
+                path.to_path_buf(),
+                (range.start.to_seconds() * 1_000_000.0).round() as i64,
+                (range.duration.to_seconds() * 1_000_000.0).round() as i64,
+            );
+            if let Some(existing) = rendered.get(&key) {
+                return Ok(existing.clone());
+            }
+            fs::create_dir_all(dir).map_err(|error| {
+                ExportError::IoError(format!("Failed to create reverse scratch directory: {error}"))
+            })?;
+            let out = dir.join(format!("reverse_{}.mkv", rendered.len()));
+            FFmpegService::render_reversed_range(
+                path,
+                range.start.to_seconds(),
+                range.duration.to_seconds(),
+                &out,
+                ReverseOutput::Intermediate,
+                cancel_flag.map(|flag| flag.as_ref()),
+            )
+            .map_err(|error| {
+                if cancel_flag.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                    ExportError::Cancelled
+                } else {
+                    ExportError::RenderFailed(format!("Reversing a long clip failed: {error}"))
+                }
+            })?;
+            rendered.insert(key, out.clone());
+            Ok(out)
+        };
+
+        for layer in &mut plan.visual_layers {
+            if layer.kind == crate::modules::domain::ItemKind::Video
+                && needs(layer.reverse, &layer.asset_path, &layer.source_range)
+            {
+                let path = layer.asset_path.clone().unwrap_or_default();
+                layer.asset_path = Some(render(&path, &layer.source_range)?);
+                layer.source_range =
+                    TimeRange::new(RationalTime::new(0, layer.source_range.start.rate), layer.source_range.duration);
+                layer.reverse = false;
+            }
+        }
+        for layer in &mut plan.audio_layers {
+            if needs(layer.reverse, &layer.asset_path, &layer.source_range) {
+                let path = layer.asset_path.clone().unwrap_or_default();
+                layer.asset_path = Some(render(&path, &layer.source_range)?);
+                layer.source_range =
+                    TimeRange::new(RationalTime::new(0, layer.source_range.start.rate), layer.source_range.duration);
+                layer.reverse = false;
+            }
+        }
+        Ok(())
+    }
+
     /// Renders a project snapshot to the target file safely and deterministically.
     /// Invariant: Edits made to other project instances do not affect this frozen snapshot.
     pub fn render_snapshot(
@@ -652,6 +725,19 @@ impl ExportEngine {
             .map(|audio| audio.item_id.clone())
             .collect();
         remove_silent_video_audio_layers(&mut plan, &silent_video_item_ids);
+
+        // Long reversed clips are reversed in pieces into scratch files and read from there,
+        // so no filter in the export graph buffers more than one piece.
+        let reverse_dir = target_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(
+                "tc_rev_{}_{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+        let _reverse_dir_guard = TempDirGuard(reverse_dir.clone());
+        Self::materialize_long_reverses(&mut plan, &reverse_dir, cancel_flag.as_ref())?;
 
         // Ducking is data derived from the mix: measure it once here so the envelope written
         // below and the preview evaluate the same curve.

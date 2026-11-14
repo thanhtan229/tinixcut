@@ -403,6 +403,10 @@ pub enum CommandOperation {
     ClipSpeedSet {
         item_id: String,
         speed: ClipSpeed,
+        /// When the speed cannot represent the clip's length exactly, shorten the clip to the
+        /// nearest valid length instead of refusing. Off by default so automation stays strict.
+        #[serde(default)]
+        fit_duration: bool,
     },
     ClipKeyframeAdd {
         item_id: String,
@@ -5247,7 +5251,7 @@ impl CommandService {
                     return Err(CommandError::OperationValidationFailed {
                         operation_id: op_id.to_string(),
                         message: format!(
-                            "Reverse needs the whole clip in memory; limit is {} s of source (this clip uses {:.1} s). Split it first",
+                            "Reverse is limited to {} s of source per clip (this clip uses {:.1} s). Split it first",
                             crate::modules::domain::MAX_REVERSE_SOURCE_SECONDS,
                             item.source_range.duration.to_seconds()
                         ),
@@ -5350,7 +5354,11 @@ impl CommandService {
                 }))
             }
 
-            CommandOperation::ClipSpeedSet { item_id, speed } => {
+            CommandOperation::ClipSpeedSet {
+                item_id,
+                speed,
+                fit_duration,
+            } => {
                 speed
                     .validate()
                     .map_err(|error| CommandError::OperationValidationFailed {
@@ -5389,15 +5397,36 @@ impl CommandService {
                         message: "Speed controls require a media asset with a known duration"
                             .to_string(),
                     })?;
-                let new_source_duration = speed
-                    .source_duration_for(
-                        item.timeline_range.duration,
-                        item.source_range.duration.rate,
-                    )
-                    .map_err(|error| CommandError::OperationValidationFailed {
-                        operation_id: op_id.to_string(),
-                        message: error.to_string(),
-                    })?;
+                let source_rate = item.source_range.duration.rate;
+                let mut new_timeline_range = item.timeline_range;
+                let new_source_duration = match speed
+                    .source_duration_for(item.timeline_range.duration, source_rate)
+                {
+                    Ok(duration) => duration,
+                    Err(error) => {
+                        let fitted = fit_duration
+                            .then(|| {
+                                speed.largest_exact_timeline_duration(
+                                    item.timeline_range.duration,
+                                    source_rate,
+                                )
+                            })
+                            .flatten();
+                        let Some(fitted) = fitted else {
+                            return Err(CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            });
+                        };
+                        new_timeline_range = TimeRange::new(item.timeline_range.start, fitted);
+                        speed
+                            .source_duration_for(fitted, source_rate)
+                            .map_err(|error| CommandError::OperationValidationFailed {
+                                operation_id: op_id.to_string(),
+                                message: error.to_string(),
+                            })?
+                    }
+                };
                 let new_source_range = TimeRange::new(item.source_range.start, new_source_duration);
 
                 if new_source_range.end().semantic_gt(&asset_duration) {
@@ -5425,7 +5454,7 @@ impl CommandService {
                 Self::reconcile_dependent_transitions_before_trim(
                     project,
                     item_id,
-                    &item.timeline_range,
+                    &new_timeline_range,
                     &new_source_range,
                     Some(*speed),
                     op_id,
@@ -5434,6 +5463,7 @@ impl CommandService {
                 for track in &mut project.tracks {
                     if let Some(current) = track.find_item_mut(item_id) {
                         current.speed = *speed;
+                        current.timeline_range = new_timeline_range;
                         current.source_range = new_source_range;
                         current.validate()?;
                         break;
@@ -5444,6 +5474,7 @@ impl CommandService {
                     for track in &mut project.tracks {
                         if let Some(linked) = track.find_item_mut(linked_id) {
                             linked.speed = *speed;
+                            linked.timeline_range = new_timeline_range;
                             linked.source_range = new_source_range;
                             linked.validate()?;
                             break;
@@ -7155,6 +7186,7 @@ mod tests {
                     operation: CommandOperation::ClipSpeedSet {
                         item_id: video_id.clone(),
                         speed: ClipSpeed::Double,
+                        fit_duration: false,
                     },
                 }],
             })
@@ -11774,6 +11806,80 @@ mod tests {
     }
 
     #[test]
+    fn test_phase59_fractional_speed_fits_the_clip_length_only_when_asked() {
+        // 30 timeline frames at 3/4 would need 22.5 source frames: not exact.
+        let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
+        let mut service = CommandService::new(project);
+        let speed = ClipSpeed::from_ratio(3, 4).unwrap();
+        let run = |service: &mut CommandService, tx: &str, fit: bool| {
+            let base = service.project().revision;
+            service.execute(CommandEnvelope {
+                schema_version: CURRENT_SCHEMA_VERSION,
+                project_id: pid.clone(),
+                base_revision: base,
+                client_id: None,
+                client_epoch: None,
+                sequence_number: None,
+                dry_run: false,
+                transaction_id: Some(tx.into()),
+                operations: vec![OperationEnvelope {
+                    operation_id: format!("op_{tx}"),
+                    operation: CommandOperation::ClipSpeedSet {
+                        item_id: item_id.clone(),
+                        speed,
+                        fit_duration: fit,
+                    },
+                }],
+            })
+        };
+
+        let revision = service.project().revision;
+        assert!(run(&mut service, "tx_fit_strict", false).is_err());
+        assert_eq!(service.project().revision, revision, "strict mode changes nothing");
+
+        run(&mut service, "tx_fit_on", true).expect("fitting shortens to a valid length");
+        let item = service.project().find_item_and_track(&item_id).unwrap().1;
+        // The largest multiple of 4 frames not above 30 is 28; 28 x 3/4 = 21 source frames.
+        assert_eq!(item.timeline_range.duration.value, 28);
+        assert_eq!(item.source_range.duration.value, 21);
+        assert_eq!(item.timeline_range.start.value, 0, "the start does not move");
+        item.validate().expect("the fitted clip satisfies the exactness rule");
+
+        // An already exact length is left untouched.
+        let again = run(&mut service, "tx_fit_again", true);
+        assert!(again.is_ok());
+        let item = service.project().find_item_and_track(&item_id).unwrap().1;
+        assert_eq!(item.timeline_range.duration.value, 28);
+    }
+
+    #[test]
+    fn largest_exact_timeline_duration_is_the_nearest_valid_length_below() {
+        let rate = FrameRate::FPS_30;
+        let speed = ClipSpeed::from_ratio(7, 3).unwrap();
+        // 100 frames at 7/3 is not exact; multiples of 3 are.
+        let fitted = speed
+            .largest_exact_timeline_duration(RationalTime::new(100, rate), rate)
+            .unwrap();
+        assert_eq!(fitted.value, 99);
+        assert!(speed.source_duration_for(fitted, rate).is_ok());
+        assert!(speed
+            .source_duration_for(RationalTime::new(100, rate), rate)
+            .is_err());
+        // Shorter than one step: nothing valid fits.
+        assert!(speed
+            .largest_exact_timeline_duration(RationalTime::new(2, rate), rate)
+            .is_none());
+        // Named speeds that are always exact keep their length.
+        assert_eq!(
+            ClipSpeed::Double
+                .largest_exact_timeline_duration(RationalTime::new(31, rate), rate)
+                .unwrap()
+                .value,
+            31
+        );
+    }
+
+    #[test]
     fn test_phase59_custom_speed_and_reverse_commands() {
         let (project, pid, _track_id, item_id, _) = setup_phase13_test_project();
         let mut service = CommandService::new(project);
@@ -11806,6 +11912,7 @@ mod tests {
                     numerator: 6,
                     denominator: 4,
                 },
+                fit_duration: false,
             },
         );
         assert!(bad.is_err());
@@ -11861,7 +11968,7 @@ mod tests {
         // A very long source range is refused with a clear message.
         let long_range = TimeRange::new(
             RationalTime::new(0, service.project().settings.frame_rate),
-            RationalTime::new(30 * 40, service.project().settings.frame_rate),
+            RationalTime::new(30 * 70, service.project().settings.frame_rate),
         );
         let mut project = service.project().clone();
         project.tracks[0]
@@ -13461,6 +13568,7 @@ mod tests {
                     operation: CommandOperation::ClipSpeedSet {
                         item_id: item_id.clone(),
                         speed: ClipSpeed::Double,
+                        fit_duration: false,
                     },
                 }],
             })
@@ -13494,6 +13602,7 @@ mod tests {
                 operation: CommandOperation::ClipSpeedSet {
                     item_id: too_short_item_id,
                     speed: ClipSpeed::Double,
+                        fit_duration: false,
                 },
             }],
         });

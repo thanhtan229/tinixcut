@@ -2496,11 +2496,12 @@ export function App() {
             payload: {
               item_id: selectedItemId,
               speed,
+              fit_duration: true,
             },
           },
         },
       ],
-      `Set Speed (${formatClipSpeed(speed)})`
+      `Set Speed (${formatClipSpeed(speed)}; the clip is shortened to the nearest exact length if needed)`
     );
   };
 

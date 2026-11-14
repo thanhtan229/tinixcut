@@ -4785,11 +4785,11 @@ mod tests {
         item.reverse = true;
         assert_eq!(reverse_preview_range(&item).unwrap(), (1_000_000, 3_000_000));
         item.source_range =
-            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(16 * 30, rate));
-        assert!(reverse_preview_range(&item).is_err(), "over the 15 s limit");
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(61 * 30, rate));
+        assert!(reverse_preview_range(&item).is_err(), "over the 60 s limit");
         item.source_range =
-            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(450, rate));
-        assert!(reverse_preview_range(&item).is_ok(), "exactly 15 s is allowed");
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60 * 30, rate));
+        assert!(reverse_preview_range(&item).is_ok(), "exactly 60 s is allowed");
     }
 
     #[test]

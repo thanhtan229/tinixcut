@@ -12,7 +12,7 @@ use crate::modules::media::waveform::{WaveformData, WAVEFORM_SCHEMA_VERSION};
 use crate::modules::media::MediaError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -78,6 +78,58 @@ struct FFprobeStream {
 pub const PREVIEW_PROXY_KEYFRAME_INTERVAL_SECS: f64 = 0.5;
 
 pub struct FFmpegService;
+
+/// Longest piece FFmpeg's `reverse` filter is asked to buffer at once (about 2 GB at 1080p).
+pub const REVERSE_SEGMENT_SECONDS: f64 = 15.0;
+
+/// What a reversed copy is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReverseOutput {
+    /// Silent, downscaled H.264 for the preview.
+    Preview { height: u32 },
+    /// Lossless video plus float PCM audio (when present) that the export reads instead of the
+    /// original, so the export graph itself never has to buffer a long reverse.
+    Intermediate,
+}
+
+impl ReverseOutput {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Preview { .. } => "mp4",
+            Self::Intermediate => "mkv",
+        }
+    }
+
+    fn codec_args(self) -> Vec<String> {
+        let list: &[&str] = match self {
+            Self::Preview { .. } => &[
+                "-map", "0:v:0", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset",
+                "ultrafast", "-crf", "28", "-g", "15", "-sc_threshold", "0",
+            ],
+            Self::Intermediate => &[
+                "-map", "0:v:0", "-map", "0:a?", "-af", "areverse", "-c:v", "ffv1", "-c:a",
+                "pcm_f32le",
+            ],
+        };
+        let mut args: Vec<String> = list.iter().map(|value| value.to_string()).collect();
+        let video_filter = match self {
+            Self::Preview { height } => format!("scale=-2:{height},reverse"),
+            Self::Intermediate => "reverse".to_string(),
+        };
+        // `-vf` must precede the codec options of the same stream; position is irrelevant to
+        // FFmpeg as long as it is an output option, so it is appended here.
+        args.push("-vf".to_string());
+        args.push(video_filter);
+        args
+    }
+
+    fn mux_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Preview { .. } => &["-movflags", "+faststart"],
+            Self::Intermediate => &[],
+        }
+    }
+}
 
 impl FFmpegService {
     /// Measures source audio mean and sample peak using FFmpeg volumedetect.
@@ -661,9 +713,171 @@ impl FFmpegService {
         })
     }
 
+    /// Writes a reversed copy of `[start, start + duration)` of the source.
+    ///
+    /// FFmpeg's `reverse` buffers every frame of its input, so long ranges are cut into
+    /// `REVERSE_SEGMENT_SECONDS` pieces: each piece is reversed on its own (bounded memory),
+    /// then the pieces are joined last-first. Pieces are cut with input-side `-ss`/`-t`, so
+    /// every source frame belongs to exactly one piece and none is repeated or lost.
+    pub fn render_reversed_range(
+        source_path: &Path,
+        start_seconds: f64,
+        duration_seconds: f64,
+        out_path: &Path,
+        output: ReverseOutput,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<(), MediaError> {
+        if !(duration_seconds > 0.0 && duration_seconds.is_finite() && start_seconds >= 0.0) {
+            return Err(MediaError::VerificationFailed(
+                "Reverse needs a positive source duration".to_string(),
+            ));
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let segment_count = (duration_seconds / REVERSE_SEGMENT_SECONDS).ceil().max(1.0) as usize;
+        let boundary = |index: usize| -> f64 {
+            if index >= segment_count {
+                start_seconds + duration_seconds
+            } else {
+                start_seconds + index as f64 * REVERSE_SEGMENT_SECONDS
+            }
+        };
+        let partial_path = out_path.with_extension(format!("partial.{}", output.extension()));
+        let cleanup = |paths: &[PathBuf]| {
+            for path in paths {
+                let _ = std::fs::remove_file(path);
+            }
+        };
+
+        if segment_count == 1 {
+            let result = Self::reverse_one_segment(
+                source_path,
+                start_seconds,
+                duration_seconds,
+                &partial_path,
+                output,
+            );
+            if result.is_err() {
+                cleanup(&[partial_path.clone()]);
+            }
+            result?;
+            return Self::finish_reverse_output(&partial_path, out_path);
+        }
+
+        let mut created: Vec<PathBuf> = vec![partial_path.clone()];
+        let stem = out_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "reverse".to_string());
+        let dir = out_path.parent().unwrap_or_else(|| Path::new("."));
+        // Segments are produced from the end of the range to its start: that is playback order.
+        let mut ordered_segments: Vec<PathBuf> = Vec::new();
+        for index in (0..segment_count).rev() {
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                cleanup(&created);
+                return Err(MediaError::VerificationFailed(
+                    "Reverse rendering was cancelled".to_string(),
+                ));
+            }
+            let from = boundary(index);
+            let to = boundary(index + 1);
+            let segment_path = dir.join(format!("{stem}.seg{index}.{}", output.extension()));
+            created.push(segment_path.clone());
+            if let Err(error) =
+                Self::reverse_one_segment(source_path, from, to - from, &segment_path, output)
+            {
+                cleanup(&created);
+                return Err(error);
+            }
+            ordered_segments.push(segment_path);
+        }
+
+        let list_path = dir.join(format!("{stem}.concat.txt"));
+        created.push(list_path.clone());
+        let list: String = ordered_segments
+            .iter()
+            .map(|path| {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                format!("file '{}'\n", name.replace('\'', "'\\''"))
+            })
+            .collect();
+        if let Err(error) = std::fs::write(&list_path, list) {
+            cleanup(&created);
+            return Err(error.into());
+        }
+        let joined = MediaBinaryResolver::command("ffmpeg")
+            .and_then(|mut command| {
+                command
+                    .args(["-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
+                    .arg(&list_path)
+                    .args(["-c", "copy"])
+                    .args(output.mux_args())
+                    .arg("-y")
+                    .arg(&partial_path)
+                    .output()
+                    .map_err(|e| {
+                        MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {e}"))
+                    })
+            })
+            .and_then(|result| {
+                if result.status.success() {
+                    Ok(())
+                } else {
+                    Err(MediaError::VerificationFailed(format!(
+                        "Joining reversed segments failed: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    )))
+                }
+            });
+        let finished = joined.and_then(|()| Self::finish_reverse_output(&partial_path, out_path));
+        // The segments and the list are scratch files; the finished output was renamed away.
+        cleanup(&created);
+        finished
+    }
+
+    fn reverse_one_segment(
+        source_path: &Path,
+        start_seconds: f64,
+        duration_seconds: f64,
+        out_path: &Path,
+        output: ReverseOutput,
+    ) -> Result<(), MediaError> {
+        let mut command = MediaBinaryResolver::command("ffmpeg")?;
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-ss"])
+            .arg(format!("{start_seconds:.6}"))
+            .arg("-t")
+            .arg(format!("{duration_seconds:.6}"))
+            .arg("-i")
+            .arg(source_path)
+            .args(output.codec_args());
+        let result = command
+            .arg("-y")
+            .arg(out_path)
+            .output()
+            .map_err(|e| MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {e}")))?;
+        if !result.status.success() {
+            return Err(MediaError::VerificationFailed(format!(
+                "Reverse rendering failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            )));
+        }
+        Ok(())
+    }
+
+    fn finish_reverse_output(partial_path: &Path, out_path: &Path) -> Result<(), MediaError> {
+        std::fs::rename(partial_path, out_path).map_err(|error| {
+            let _ = std::fs::remove_file(partial_path);
+            MediaError::VerificationFailed(format!(
+                "Could not finalize reverse output at {}: {error}",
+                out_path.display()
+            ))
+        })
+    }
+
     /// Writes a video-only, reversed, downscaled copy of `[start, start + duration)` of the
-    /// source. `reverse` buffers every frame, so the caller bounds the duration and the frames
-    /// are downscaled first to keep the buffer small. The output is derived cache only.
+    /// source for the preview. Derived cache only.
     pub fn generate_reverse_proxy(
         source_path: &Path,
         start_seconds: f64,
@@ -671,60 +885,16 @@ impl FFmpegService {
         out_path: &Path,
         target_height: u32,
     ) -> Result<(), MediaError> {
-        if !(duration_seconds > 0.0 && duration_seconds.is_finite() && start_seconds >= 0.0) {
-            return Err(MediaError::VerificationFailed(
-                "Reverse preview needs a positive source duration".to_string(),
-            ));
-        }
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let partial_path = out_path.with_extension("partial.mp4");
-        let output = MediaBinaryResolver::command("ffmpeg")?
-            .args(["-hide_banner", "-loglevel", "error", "-ss"])
-            .arg(format!("{start_seconds:.6}"))
-            .arg("-t")
-            .arg(format!("{duration_seconds:.6}"))
-            .arg("-i")
-            .arg(source_path)
-            .args(["-map", "0:v:0", "-an", "-vf"])
-            .arg(format!("scale=-2:{target_height},reverse"))
-            .args([
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "28",
-                "-g",
-                "15",
-                "-sc_threshold",
-                "0",
-                "-movflags",
-                "+faststart",
-                "-y",
-            ])
-            .arg(&partial_path)
-            .output()
-            .map_err(|e| {
-                MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {}", e))
-            })?;
-        if !output.status.success() {
-            let _ = std::fs::remove_file(&partial_path);
-            return Err(MediaError::VerificationFailed(format!(
-                "Reverse preview generation failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        std::fs::rename(&partial_path, out_path).map_err(|error| {
-            let _ = std::fs::remove_file(&partial_path);
-            MediaError::VerificationFailed(format!(
-                "Could not finalize reverse preview at {}: {error}",
-                out_path.display()
-            ))
-        })
+        Self::render_reversed_range(
+            source_path,
+            start_seconds,
+            duration_seconds,
+            out_path,
+            ReverseOutput::Preview {
+                height: target_height,
+            },
+            None,
+        )
     }
 
     /// Extracts compact waveform peak buckets from an audio or video file.

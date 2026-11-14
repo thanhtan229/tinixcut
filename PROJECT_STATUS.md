@@ -1659,3 +1659,5 @@ UIA InvokePattern on the unique workspace 📂 Open control returned without exc
 **Phase 59 checkpoint (2026-11-13):** loudness target (59A), ducking (59B), custom speed and reverse with schema v19 (59C), geometric xfade transitions (59D) and J/K/L, In/Out and shortcut remapping (59E) implemented and committed. Export behaviour is verified on real renders; new UI is not natively qualified. See `Plans/plan_phase59_audio_speed_transitions_transport.md` section 8.
 
 **Phase 59 follow-up checkpoint (2026-11-14):** freeze frame, reverse preview copy, discard of a stale recovery copy, MCP `ExportProfile` schema fix and a preview-ducking fix for silent video clips are implemented and verified (automated and native). Open: the 15 s reverse limit, exact-time refusal of fractional custom speeds, G52 pixel parity. See plan section 11.
+
+**Phase 59 follow-up 2 (2026-11-14):** long reverse (60 s via pieces) and fitted fractional speeds are implemented and tested. G52 remains open: the comparison filter was ruled out as the cause; closing it needs a preview compositor plan.
