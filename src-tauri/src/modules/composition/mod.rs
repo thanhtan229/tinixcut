@@ -1564,12 +1564,12 @@ impl CompositionPlan {
                             });
 
                             if let Some(auto) = layer_auto {
-                                let init_angle_rad = rotation * std::f32::consts::PI / 180.0;
+                                // The first frame has no command: start from its keyframe values.
                                 filter_chain.push_str(&format!(
                                     ",format=yuva420p,sendcmd=f='{}',scale@sc_{}=eval=frame:w={}:h={},rotate@rot_{}=angle={:.4}:ow={}:oh={}:c=none",
                                     auto.escaped_command_file,
-                                    layer_idx, render_w, render_h,
-                                    layer_idx, init_angle_rad,
+                                    layer_idx, auto.initial_render_w, auto.initial_render_h,
+                                    layer_idx, auto.initial_angle_rad,
                                     // Fixed box sized for the clip's largest scaled frame;
                                     // the schedule positions the overlay against it.
                                     auto.rotate_box, auto.rotate_box
@@ -1581,7 +1581,7 @@ impl CompositionPlan {
                                 filter_chain.push_str(&ffmpeg_lut_filter(layer.color_lut.as_ref()));
                                 filter_chain.push_str(&format!(
                                     ",colorchannelmixer@ccm_{}=aa={:.3}[{}];",
-                                    layer_idx, opacity, layer_tag
+                                    layer_idx, auto.initial_opacity, layer_tag
                                 ));
                             } else {
                                 // Scale filter
@@ -1630,31 +1630,24 @@ impl CompositionPlan {
                             }
                             filter_complex.push_str(&filter_chain);
 
-                            let ov_tag = if layer_auto.is_some() {
-                                format!("overlay@ov_{}", layer_idx)
-                            } else {
-                                "overlay".to_string()
-                            };
-
                             // `format=yuv444`: in 4:2:0 `overlay` floors x/y to even pixels (chroma
                             // alignment), which moved every layer at an odd position up/left by one
                             // pixel against the preview (G52 Step 2, 2026-11-14). Compositing in 4:4:4
                             // keeps the requested position; the encoder converts back to 4:2:0.
-                            // Overlay position commands fire on the overlay's main input, which
-                            // advances in lockstep with it (see `LayerVideoAutomation`).
-                            let overlay_main = if let Some(auto) = layer_auto {
-                                let tag = format!("{}_ovcmd_{}", current_base, layer_idx);
-                                filter_complex.push_str(&format!(
-                                    "[{}]sendcmd=f='{}'[{}];",
-                                    current_base, auto.escaped_overlay_command_file, tag
-                                ));
-                                tag
-                            } else {
-                                current_base.clone()
+                            // An animated layer's x/y are expressions of the frame time, not
+                            // `sendcmd` commands (see `LayerVideoAutomation`).
+                            let (x_expr, y_expr) = match layer_auto {
+                                Some(auto) => {
+                                    (auto.overlay_x_expr.clone(), auto.overlay_y_expr.clone())
+                                }
+                                None => (
+                                    format!("(W-w)/2+{:.1}", pos_x),
+                                    format!("(H-h)/2+{:.1}", pos_y),
+                                ),
                             };
                             filter_complex.push_str(&format!(
-                                "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':format=yuv444:enable='between(t,{:.4},{:.4})'[{}];",
-                                overlay_main, layer_tag, ov_tag, pos_x, pos_y, start_bound, end_bound, next_base
+                                "[{}][{}]overlay=x='{}':y='{}':format=yuv444:enable='between(t,{:.4},{:.4})'[{}];",
+                                current_base, layer_tag, x_expr, y_expr, start_bound, end_bound, next_base
                             ));
                             current_base = next_base;
 

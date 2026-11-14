@@ -110,6 +110,107 @@ fn audio_sample_time(
     Ok(RationalTime::new(ticks, FrameRate::new(common_rate, 1)))
 }
 
+/// Longest accepted overlay position expression. It becomes part of the FFmpeg command line
+/// (about 32 000 characters on Windows for everything together).
+const MAX_POSITION_EXPR_LEN: usize = 8000;
+
+/// A stretch of consecutive frames whose pixel positions are `round(a + slope * (frame - start))`.
+struct PositionRun {
+    start: i64,
+    a: i32,
+    slope: f64,
+}
+
+/// Splits per-frame integer positions into the fewest runs a straight line reproduces exactly.
+/// Every run is verified against the values, so the expression returns exactly the integers of
+/// the table (the pixel positions the keyframe evaluator and rounding produce).
+fn position_runs(first_frame: i64, values: &[i32]) -> Vec<PositionRun> {
+    // A line within 0.45 px of every value rounds to it, with margin for float noise.
+    const MARGIN: f64 = 0.45;
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < values.len() {
+        let a = f64::from(values[i]);
+        let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+        let mut end = i + 1;
+        while end < values.len() {
+            let k = (end - i) as f64;
+            let v = f64::from(values[end]);
+            let (next_lo, next_hi) = (lo.max((v - a - MARGIN) / k), hi.min((v - a + MARGIN) / k));
+            if next_lo > next_hi {
+                break;
+            }
+            (lo, hi) = (next_lo, next_hi);
+            end += 1;
+        }
+        let mut slope = if end == i + 1 || (lo <= 0.0 && hi >= 0.0) {
+            0.0
+        } else {
+            (lo + hi) / 2.0
+        };
+        // The slope is written with 9 decimals: check what FFmpeg will actually read.
+        slope = format!("{slope:.9}").parse().unwrap_or(0.0);
+        let exact = (i..end).all(|j| (a + slope * (j - i) as f64).round() == f64::from(values[j]));
+        if !exact {
+            end = i + 1;
+            slope = 0.0;
+        }
+        runs.push(PositionRun {
+            start: first_frame + i as i64,
+            a: values[i],
+            slope,
+        });
+        i = end;
+    }
+    runs
+}
+
+fn position_run_tree(runs: &[PositionRun]) -> String {
+    if let [run] = runs {
+        return if run.slope == 0.0 {
+            format!("{}", run.a)
+        } else {
+            format!("round({}+{:.9}*(ld(0)-{}))", run.a, run.slope, run.start)
+        };
+    }
+    let mid = runs.len() / 2;
+    format!(
+        "if(lt(ld(0),{}),{},{})",
+        runs[mid].start,
+        position_run_tree(&runs[..mid]),
+        position_run_tree(&runs[mid..])
+    )
+}
+
+/// FFmpeg expression of the frame time `t` that yields `values[n - first_frame]` for timeline
+/// frame `n` (clamped to the table outside it). A balanced `if` tree over the runs keeps the
+/// evaluation cost logarithmic, whatever the length of the clip.
+pub fn frame_position_expression(
+    first_frame: i64,
+    values: &[i32],
+    frame_rate: FrameRate,
+) -> Result<String, ExportError> {
+    let runs = position_runs(first_frame, values);
+    let tree = position_run_tree(&runs);
+    let expr = if runs.len() == 1 && runs[0].slope == 0.0 {
+        tree
+    } else {
+        format!(
+            "st(0,floor(t*{}/{}+0.5));{}",
+            frame_rate.numerator, frame_rate.denominator, tree
+        )
+    };
+    if expr.len() > MAX_POSITION_EXPR_LEN {
+        return Err(ExportError::RenderFailed(format!(
+            "Keyframed motion needs {} runs ({} characters of overlay expression); the limit is {}",
+            runs.len(),
+            expr.len(),
+            MAX_POSITION_EXPR_LEN
+        )));
+    }
+    Ok(expr)
+}
+
 /// Video layer automation schedule metadata
 #[derive(Debug, Clone)]
 pub struct LayerVideoAutomation {
@@ -117,11 +218,24 @@ pub struct LayerVideoAutomation {
     /// Scale, rotate and opacity commands: they run on the layer's own filter chain.
     pub command_file: PathBuf,
     pub escaped_command_file: String,
-    /// `overlay` x/y commands. They must fire on the overlay's *main* input, which advances in
-    /// lockstep with the overlay: fired from the layer chain they could run ahead of it by
-    /// several frames whenever the overlay is the slower filter.
-    pub overlay_command_file: PathBuf,
-    pub escaped_overlay_command_file: String,
+    /// `overlay` x/y as pure functions of the main input's frame time (`t`). `sendcmd` commands
+    /// reach a filter when a frame passes the `sendcmd` filter, not when the filter consumes it:
+    /// with a slow secondary input, commands for frame n+1 moved the overlay while frame n was
+    /// still in flight, and the first frame (no command) used the static position. An
+    /// expression depends only on the frame it is evaluated for.
+    pub overlay_x_expr: String,
+    pub overlay_y_expr: String,
+    /// The whole-pixel positions the expressions reproduce, one per frame from `first_frame`.
+    pub first_frame: i64,
+    pub overlay_xs: Vec<i32>,
+    pub overlay_ys: Vec<i32>,
+    /// Keyframe values of the first frame. The chain starts in this state because no command
+    /// precedes the first frame; the static transform is wrong whenever the keyframes differ
+    /// from it (or a fade-in starts the clip transparent).
+    pub initial_render_w: u32,
+    pub initial_render_h: u32,
+    pub initial_angle_rad: f32,
+    pub initial_opacity: f32,
     /// Fixed square output of the layer's `rotate` filter, large enough for the
     /// largest scaled frame in the clip. FFmpeg evaluates rotate's `ow`/`oh` once,
     /// so a per-frame size would crop scaled-up frames and misplace the overlay.
@@ -290,14 +404,7 @@ impl ExportAutomationSchedule {
                 pid,
                 &random_nonce[..6]
             ));
-            let overlay_cmd_file = temp_dir.join(format!(
-                "cmd_layer_ov_{}_{}_{}.txt",
-                idx,
-                pid,
-                &random_nonce[..6]
-            ));
             let mut cmd_content = String::new();
-            let mut overlay_cmd_content = String::new();
 
             let start_frame = (ord_start_sec * fps).floor() as i64;
             let end_frame = (ord_end_sec * fps).ceil() as i64;
@@ -366,11 +473,23 @@ impl ExportAutomationSchedule {
                 rotate_box += 1;
             }
 
-            // Emit runtime commands for frames n > start_frame using midpoint dispatch.
-            for f in frames.iter().skip(1) {
-                let top_left_x = ((base_w - rotate_box as f32) / 2.0 + f.pos_x).round() as i32;
-                let top_left_y = ((base_h - rotate_box as f32) / 2.0 + f.pos_y).round() as i32;
+            // Overlay position of every frame in whole pixels (see `overlay_x_expr`).
+            let overlay_xs: Vec<i32> = frames
+                .iter()
+                .map(|f| ((base_w - rotate_box as f32) / 2.0 + f.pos_x).round() as i32)
+                .collect();
+            let overlay_ys: Vec<i32> = frames
+                .iter()
+                .map(|f| ((base_h - rotate_box as f32) / 2.0 + f.pos_y).round() as i32)
+                .collect();
+            let overlay_x_expr =
+                frame_position_expression(start_frame, &overlay_xs, plan.frame_rate)?;
+            let overlay_y_expr =
+                frame_position_expression(start_frame, &overlay_ys, plan.frame_rate)?;
 
+            // Emit runtime commands for frames n > start_frame using midpoint dispatch. They only
+            // address filters of the layer's own chain, which handles one frame at a time.
+            for f in frames.iter().skip(1) {
                 cmd_content.push_str(&format!(
                     "{:.6} scale@sc_{} w {};\n\
                      {:.6} scale@sc_{} h {};\n\
@@ -389,32 +508,31 @@ impl ExportAutomationSchedule {
                     idx,
                     f.opacity,
                 ));
-                overlay_cmd_content.push_str(&format!(
-                    "{:.6} overlay@ov_{} x {};\n\
-                     {:.6} overlay@ov_{} y {};\n",
-                    f.t_mid, idx, top_left_x, f.t_mid, idx, top_left_y,
-                ));
             }
+            let first = &frames[0];
+            let (initial_render_w, initial_render_h, initial_angle_rad, initial_opacity) =
+                (first.render_w, first.render_h, first.angle_rad, first.opacity);
 
             fs::write(&cmd_file, &cmd_content).map_err(|e| {
                 ExportError::IoError(format!("Failed to write sendcmd script: {e}"))
             })?;
 
-            fs::write(&overlay_cmd_file, &overlay_cmd_content).map_err(|e| {
-                ExportError::IoError(format!("Failed to write overlay sendcmd script: {e}"))
-            })?;
-
             let escaped = escape_ffmpeg_filter_path(&cmd_file);
             guard.track(cmd_file.clone());
-            let escaped_overlay = escape_ffmpeg_filter_path(&overlay_cmd_file);
-            guard.track(overlay_cmd_file.clone());
 
             video_layers.push(LayerVideoAutomation {
                 layer_index: idx,
                 command_file: cmd_file,
                 escaped_command_file: escaped,
-                overlay_command_file: overlay_cmd_file,
-                escaped_overlay_command_file: escaped_overlay,
+                overlay_x_expr,
+                overlay_y_expr,
+                first_frame: start_frame,
+                overlay_xs,
+                overlay_ys,
+                initial_render_w,
+                initial_render_h,
+                initial_angle_rad,
+                initial_opacity,
                 rotate_box,
             });
         }
@@ -646,6 +764,34 @@ impl ExportAutomationSchedule {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn position_runs_reproduce_every_value_and_stay_short() {
+        let eased: Vec<i32> = (0..300)
+            .map(|n| {
+                let u = f64::from(n) / 299.0;
+                (-142.0 + 900.0 * (u * u * (3.0 - 2.0 * u)) + 0.4).round() as i32
+            })
+            .collect();
+        let tables = [
+            vec![7; 40],
+            (0..120).map(|n| -142 + (n * 7) / 3).collect(),
+            eased,
+            vec![5, -9, 120, 3, 3, 4],
+        ];
+        for values in tables {
+            let runs = super::position_runs(10, &values);
+            for (i, v) in values.iter().enumerate() {
+                let frame = 10 + i as i64;
+                let run = runs.iter().rev().find(|r| r.start <= frame).unwrap();
+                let got = (f64::from(run.a) + run.slope * (frame - run.start) as f64).round();
+                assert_eq!(got, f64::from(*v), "frame {frame}");
+            }
+            let expr =
+                super::frame_position_expression(10, &values, FrameRate::FPS_30).unwrap();
+            assert!(expr.len() < 3000, "{} chars for {} runs", expr.len(), runs.len());
+        }
+    }
+
     use super::ExportAutomationSchedule;
     use crate::modules::composition::CompositionPlan;
     use crate::modules::domain::time::{FrameRate, RationalTime, TimeRange};
@@ -703,13 +849,11 @@ mod tests {
         assert_eq!(schedule.video_layers.len(), 1);
 
         let commands = std::fs::read_to_string(&schedule.video_layers[0].command_file)
-            .expect("generated automation command file")
-            + &std::fs::read_to_string(&schedule.video_layers[0].overlay_command_file)
-                .expect("generated overlay command file");
+            .expect("generated automation command file");
         assert!(commands.contains("scale@sc_0 w 640;"), "{commands}");
         assert!(commands.contains("scale@sc_0 h 1080;"), "{commands}");
-        assert!(commands.contains("overlay@ov_0 x 372;"), "{commands}");
-        assert!(commands.contains("overlay@ov_0 y -88;"), "{commands}");
+        assert!(schedule.video_layers[0].overlay_xs.contains(&372));
+        assert!(schedule.video_layers[0].overlay_ys.contains(&-88));
 
         drop(schedule);
         let _ = std::fs::remove_dir(temp_dir);
@@ -783,25 +927,14 @@ mod tests {
         let auto = &schedule.video_layers[0];
         assert_eq!(auto.rotate_box, expected_box, "box must fit the 1.5x frame");
 
-        let commands = std::fs::read_to_string(&auto.command_file).expect("command file")
-            + &std::fs::read_to_string(&auto.overlay_command_file).expect("overlay command file");
         let last_x = (1920 - expected_box as i32) / 2 + 300;
         let last_y = (1080 - expected_box as i32) / 2;
-        assert!(
-            commands.contains(&format!("overlay@ov_0 x {last_x};")),
-            "{commands}"
-        );
-        assert!(
-            commands.contains(&format!("overlay@ov_0 y {last_y};")),
-            "{commands}"
-        );
+        assert_eq!(auto.overlay_xs.last(), Some(&last_x));
+        assert_eq!(auto.overlay_ys.last(), Some(&last_y));
         // Every frame is positioned against the same box: at scale 1.0 (frame 1) the
         // x offset is still relative to the large box, not the small frame.
         let first_x = ((1920.0 - expected_box as f32) / 2.0 + 5.0).round() as i32;
-        assert!(
-            commands.contains(&format!("overlay@ov_0 x {first_x};")),
-            "{commands}"
-        );
+        assert!(auto.overlay_xs.contains(&first_x), "{:?}", auto.overlay_xs);
 
         drop(schedule);
         let _ = std::fs::remove_dir(temp_dir);
