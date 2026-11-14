@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
-import { ClipLut, Project } from "../types/project";
+import { Asset, ClipLut, Project } from "../types/project";
 import { CommandEnvelope, CommandReceipt, DiffReport, OperationEnvelope } from "../types/command";
 import { ExportPreset, LoudnessTarget } from "../types/export";
 import { TemplateDefinition, TemplatePackManifest } from "../types/template";
@@ -555,6 +555,10 @@ export const editorApi = {
     return invoke<void>("project_discard_unsaved_recovery", { projectId, expectedRecoveryRevision });
   },
 
+  async discardSavedRecovery(path: string, expectedRecoveryRevision: number, expectedRecoveryFingerprint: string): Promise<void> {
+    return invoke<void>("project_discard_saved_recovery", { path, expectedRecoveryRevision, expectedRecoveryFingerprint });
+  },
+
   async undo(): Promise<string | null> {
     return invoke<string | null>("project_undo");
   },
@@ -604,6 +608,11 @@ export const editorApi = {
     warnings: string[];
   }> {
     return invoke("project_export_preflight", { outputPath, preset, loudness: loudness ?? undefined, range: range ?? undefined });
+  },
+
+  /** Extracts the clip's frame at `timelineFrame` and imports it as an image asset. */
+  async createFreezeFrame(itemId: string, timelineFrame: number): Promise<Asset> {
+    return invoke<Asset>("freeze_frame_create", { itemId, timelineFrame });
   },
 
   async importMedia(filePath: string): Promise<unknown> {
@@ -663,6 +672,11 @@ export const editorApi = {
       itemId,
       frame,
     });
+  },
+
+  /** Reversed, downscaled preview file for a reversed video clip (derived cache). */
+  async getReversePreviewVideo(itemId: string): Promise<PreviewVideoSourceStatus> {
+    return invoke<PreviewVideoSourceStatus>("media_get_reverse_preview_video", { itemId });
   },
 
   async getCompatiblePreviewVideo(assetId: string): Promise<PreviewVideoSourceStatus> {

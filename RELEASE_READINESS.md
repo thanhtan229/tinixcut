@@ -45,3 +45,7 @@ Native runs use `scripts/qualification/native/` (see its README); Rust and front
 ## 6. Phase 59 additions (2026-11-13)
 
 Export loudness targets, per-clip ducking, custom speed (1/8x-8x) and reverse, geometric cut transitions, and In/Out range export are verified on real FFmpeg renders (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 8). Their UI paths (Inspector controls, preview of geometric transitions, J/K/L shuttle, ruler marks, shortcut dialog) are only partly natively qualified (see plan section 9). Reverse plays forward in the preview and is limited to 15 s of source; freeze frame is not implemented.
+
+## 7. Phase 59 follow-up (2026-11-14)
+
+Freeze frame and a reversed preview copy now exist; recovery-copy discard, the MCP export schema, preview ducking with silent video clips, and `Alt+I` were fixed or checked natively (`Plans/plan_phase59_audio_speed_transitions_transport.md` section 11). Reverse stays limited to 15 s of source and its preview copy is silent. G52 pixel parity is still open.

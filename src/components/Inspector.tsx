@@ -1809,7 +1809,7 @@ export const Inspector: React.FC<InspectorProps> = ({
               Play this clip backwards
             </label>
             <div style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-              Applied when exporting (up to 15 s of source); the preview plays it forward.
+              Applied when exporting (up to 15 s of source); the preview shows a silent reversed copy once it is prepared.
             </div>
           </section>
         )}

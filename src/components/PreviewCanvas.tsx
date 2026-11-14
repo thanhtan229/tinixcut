@@ -17,6 +17,7 @@ import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorA
 import { LutVideoLayer, useLutTable } from "./LutVideoLayer";
 import { isGeometricKind, transitionShape } from "./transitionGeometry";
 import { PreviewProxyMode, PreviewProxySource, policyProxyAssetIds, proxyAssetIdsToPoll, resolvePreviewVideoPath } from "./previewProxyPolicy";
+import { ReverseProxySource, reverseProxyKey, reverseProxySeconds, reversedVideoItems } from "./reversePreview";
 import {
   canvasCropFromPointerDelta,
   CanvasCropEdge,
@@ -614,6 +615,10 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
     setRichTextOverlays((previous) => ({ ...previous, [key]: entry }));
   }, []);  const [proxyRequestedAssetIds, setProxyRequestedAssetIds] = useState<Record<string, true>>({});
+  // Reversed preview files per clip. The browser cannot play backwards, so a reversed clip
+  // plays this derived file forward; until it is ready the original plays forward.
+  const [reverseProxies, setReverseProxies] = useState<Record<string, ReverseProxySource>>({});
+  const [reversePollAttempt, setReversePollAttempt] = useState(0);
   const [compatibleVideoSources, setCompatibleVideoSources] = useState<Record<string, PreviewProxySource>>({});
   // Policy proxies that could not be built: the preview keeps the original quietly.
   const [policyProxyUnavailable, setPolicyProxyUnavailable] = useState<Record<string, string>>({});
@@ -1195,6 +1200,49 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     };
   }, [proxyRequestedAssetIds, compatibleVideoSources, proxyPollAttempt, policyAssetKey, policyProxyUnavailable, project?.assets]);
 
+  const reverseCandidatesKey = (() => {
+    const active = new Set((sampledState?.active_layers ?? []).map((layer) => layer.item_id));
+    const items = (project?.tracks ?? []).flatMap((track) => track.items);
+    const assetPaths = new Map((project?.assets ?? []).map((asset) => [asset.asset_id, asset.path]));
+    return JSON.stringify(
+      reversedVideoItems(items, active).map((item) => [
+        item.item_id,
+        reverseProxyKey(item, item.asset_id ? assetPaths.get(item.asset_id) : null),
+      ]),
+    );
+  })();
+  useEffect(() => {
+    const candidates = JSON.parse(reverseCandidatesKey) as Array<[string, string]>;
+    const missing = candidates.filter(([itemId, key]) => reverseProxies[itemId]?.key !== key);
+    if (missing.length === 0) return;
+    let disposed = false;
+    let pollAgain = false;
+    void Promise.all(
+      missing.map(async ([itemId, key]) => {
+        try {
+          const result = await editorApi.getReversePreviewVideo(itemId);
+          if (disposed) return;
+          if (result.status === "Ready") {
+            setReverseProxies((previous) => ({ ...previous, [itemId]: { key, path: result.payload.path } }));
+          } else if (result.status === "Pending") {
+            pollAgain = true;
+          }
+        } catch {
+          // Keep the forward preview; export is unaffected.
+        }
+      }),
+    ).then(() => {
+      if (!disposed && pollAgain) {
+        window.setTimeout(() => {
+          if (!disposed) setReversePollAttempt((attempt) => attempt + 1);
+        }, 500);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [reverseCandidatesKey, reverseProxies, reversePollAttempt]);
+
   // 4. Synchronize video elements to exact source times when paused or seeking
   useEffect(() => {
     if (!sampledState) return;
@@ -1205,16 +1253,21 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     for (const layer of allVideoLayers) {
       if (layer.kind === "Video" && layer.asset_path) {
         const v = videoRefs.current[layer.item_id];
-        const targetSec =
+        const forwardSec =
           layer.source_time.value /
           (layer.source_time.rate.numerator / layer.source_time.rate.denominator);
+        const reversedItem = layer.reverse && reverseProxies[layer.item_id]
+          ? (project?.tracks ?? []).flatMap((track) => track.items).find((item) => item.item_id === layer.item_id)
+          : undefined;
+        const targetSec = reversedItem ? reverseProxySeconds(forwardSec, reversedItem) : forwardSec;
         videoSeekTargetsRef.current[layer.item_id] = { targetSec, isPlaying };
         if (v) {
           v.playbackRate = layer.playback_rate;
           v.preservesPitch = true;
           syncVideoToLatestTarget(layer.item_id, v);
           const audio = sampledState.active_audio.find((sample) => sample.item_id === layer.item_id);
-          const gain = audio ? Math.max(0, Math.min(1, audio.effective_volume)) : 0;
+          // The reversed file has no audio track; the forward original must not play under it.
+          const gain = audio && !reversedItem ? Math.max(0, Math.min(1, audio.effective_volume)) : 0;
           v.volume = gain;
           v.muted = gain === 0;
           if (isPlaying && v.paused) {
@@ -1510,8 +1563,11 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       videoPreviewFailure: currentVideoPreviewFailure(videoPreviewErrors[layer.item_id], layer.asset_path),
     });
     const hasError = failure !== null;
+    const reverseProxy = layer.reverse ? reverseProxies[layer.item_id] : undefined;
     const assetUrl = safeConvertFileSrc(
-      resolvePreviewVideoPath(layer.asset_id, layer.asset_path, compatibleVideoSources)
+      reverseProxy
+        ? reverseProxy.path
+        : resolvePreviewVideoPath(layer.asset_id, layer.asset_path, compatibleVideoSources)
     );
 
     // Rich text is rasterized once by the shared native renderer with placement
@@ -2448,9 +2504,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         >
           <span>Seek: {seekLatencyMs.toFixed(1)}ms</span>
           <span>Layers: {activeLayers.length}</span>
-          {(sampledState?.active_layers ?? []).some((layer) => layer.reverse) && (
-            <span title="Reverse is applied when exporting; the preview plays this clip forward.">
-              Reverse: export only
+          {(sampledState?.active_layers ?? []).some((layer) => layer.reverse && !reverseProxies[layer.item_id]) && (
+            <span title="The reversed preview is being prepared; until then the clip plays forward. Export is not affected.">
+              Reverse: preparing preview
             </span>
           )}
           {sampledState?.ducking_pending && (

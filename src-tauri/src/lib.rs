@@ -20,7 +20,8 @@ use crate::modules::composition::{CompositionPlan, PreviewFrameState};
 use crate::modules::domain::id::{generate_item_id, generate_operation_id, generate_track_id};
 use crate::modules::domain::time::{FrameRate, RationalTime};
 use crate::modules::domain::{
-    Asset, AssetDimensions, ItemKind, MediaKind, Project, TrackKind, CURRENT_SCHEMA_VERSION,
+    Asset, AssetDimensions, ItemKind, MediaKind, Project, TimelineItem, TrackKind,
+    CURRENT_SCHEMA_VERSION,
 };
 use crate::modules::export::{
     ExportEngine, ExportPreflightReport, ExportPreset, ExportProfile, ExportReport,
@@ -1214,6 +1215,29 @@ fn project_save_recovery_snapshot(
     })
 }
 
+/// Delete the reviewed recovery copy of a saved project (the user chose the saved version).
+#[tauri::command]
+fn project_discard_saved_recovery(
+    app: AppHandle,
+    path: String,
+    expected_recovery_revision: u64,
+    expected_recovery_fingerprint: String,
+) -> Result<(), String> {
+    let canonical = PathBuf::from(path);
+    require_explicit_file_scope(
+        &canonical,
+        asset_scope_allows_path(&app.asset_protocol_scope(), &canonical),
+        "Project recovery discard",
+    )?;
+    let recovery_path = canonical.with_extension("tcproj.recovery");
+    crate::modules::persistence::discard_saved_recovery(
+        &recovery_path,
+        expected_recovery_revision,
+        &expected_recovery_fingerprint,
+    )
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn project_restore_recovery(
     app: AppHandle,
@@ -1769,6 +1793,76 @@ fn media_import(
         .ok_or_else(|| "Failed to find imported asset in project".to_string())?;
 
     Ok(asset)
+}
+
+/// Source time (seconds) shown by `item` at project frame `timeline_frame`, or an error when the
+/// clip cannot be frozen there. Pure so the mapping is unit-tested without FFmpeg.
+fn freeze_source_seconds(item: &TimelineItem, timeline_frame: i64) -> Result<f64, String> {
+    if item.kind != ItemKind::Video {
+        return Err("Freeze frame needs a video clip".to_string());
+    }
+    if item.reverse {
+        return Err("Freeze frame is not available on a reversed clip".to_string());
+    }
+    let start = item.timeline_range.start.value;
+    let end = start + item.timeline_range.duration.value;
+    if timeline_frame < start || timeline_frame >= end {
+        return Err("The playhead is outside the selected clip".to_string());
+    }
+    let project_rate = item.timeline_range.start.rate;
+    let offset_seconds = (timeline_frame - start) as f64
+        * f64::from(project_rate.denominator)
+        / f64::from(project_rate.numerator);
+    let (speed_num, speed_den) = item.speed.ratio();
+    // A millisecond past the frame boundary keeps float error from selecting the previous frame.
+    Ok(item.source_range.start.to_seconds()
+        + offset_seconds * speed_num as f64 / speed_den as f64
+        + 0.001)
+}
+
+/// Extract the frame of a video clip at `timeline_frame` into `<project>_freeze/` next to the
+/// saved project and import it as an image asset. The clip placement itself is a normal
+/// command transaction issued by the editor, so undo/redo and automation stay uniform.
+#[tauri::command]
+fn freeze_frame_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item_id: String,
+    timeline_frame: i64,
+) -> Result<Asset, String> {
+    let (source_path, seconds, out_path) = {
+        let engine = state.0.lock().map_err(|e| e.to_string())?;
+        let project = engine.service.project();
+        let (_, item) = project
+            .find_item_and_track(&item_id)
+            .ok_or_else(|| "The selected clip no longer exists".to_string())?;
+        let seconds = freeze_source_seconds(item, timeline_frame)?;
+        let asset = item
+            .asset_id
+            .as_deref()
+            .and_then(|id| project.find_asset(id))
+            .ok_or_else(|| "The clip has no media asset".to_string())?;
+        let project_path = engine
+            .current_file_path
+            .as_deref()
+            .ok_or_else(|| "Save the project before creating a freeze frame".to_string())?;
+        let stem = project_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".to_string());
+        let dir = project_path
+            .parent()
+            .ok_or_else(|| "The project path has no folder".to_string())?
+            .join(format!("{stem}_freeze"));
+        let out_path = dir.join(format!("freeze_{}_{}.png", item_id, timeline_frame));
+        (PathBuf::from(&asset.path), seconds, out_path)
+    };
+    FFmpegService::extract_freeze_frame(&source_path, seconds, &out_path)
+        .map_err(|error| error.to_string())?;
+    app.asset_protocol_scope()
+        .allow_file(&out_path)
+        .map_err(|error| format!("Freeze frame could not be made readable: {error}"))?;
+    media_import(app, state, out_path.to_string_lossy().into_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3173,6 +3267,159 @@ fn media_get_compatible_preview_video(
     Ok(PreviewVideoSourceStatus::Pending)
 }
 
+const REVERSE_PREVIEW_HEIGHT: u32 = 540;
+
+/// Source range (microseconds) a reversed preview proxy covers, or why the clip has none.
+fn reverse_preview_range(item: &TimelineItem) -> Result<(i64, i64), String> {
+    if item.kind != ItemKind::Video || !item.reverse {
+        return Err("The clip is not a reversed video clip".to_string());
+    }
+    let rate = item.source_range.start.rate;
+    let micros = |frames: i64| -> i64 {
+        (frames as i128 * 1_000_000 * i128::from(rate.denominator) / i128::from(rate.numerator))
+            as i64
+    };
+    let start = micros(item.source_range.start.value);
+    let duration = micros(item.source_range.duration.value);
+    if duration <= 0
+        || duration as f64 / 1_000_000.0 > crate::modules::domain::MAX_REVERSE_SOURCE_SECONDS
+    {
+        return Err("The reversed range is empty or longer than the reverse limit".to_string());
+    }
+    Ok((start, duration))
+}
+
+/// Reversed, downscaled preview of a reversed clip's source range. The browser cannot play
+/// backwards, so the preview plays this derived file forward: at timeline offset `o` it shows
+/// proxy time `o x speed`, exactly the source instant the export shows. Disposable cache only.
+#[tauri::command]
+fn media_get_reverse_preview_video(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<PreviewVideoSourceStatus, String> {
+    let mut engine = state.0.lock().map_err(|e| e.to_string())?;
+    let (asset_id, source_path, start_micros, duration_micros) = {
+        let project = engine.service.project();
+        let Some((_, item)) = project.find_item_and_track(&item_id) else {
+            return Ok(PreviewVideoSourceStatus::Unavailable {
+                reason: "The clip no longer exists".to_string(),
+            });
+        };
+        let (start, duration) = match reverse_preview_range(item) {
+            Ok(range) => range,
+            Err(reason) => return Ok(PreviewVideoSourceStatus::Unavailable { reason }),
+        };
+        let Some(asset) = item
+            .asset_id
+            .as_deref()
+            .and_then(|id| project.find_asset(id))
+        else {
+            return Ok(PreviewVideoSourceStatus::Unavailable {
+                reason: "The clip has no media asset".to_string(),
+            });
+        };
+        (
+            asset.asset_id.clone(),
+            PathBuf::from(&asset.path),
+            start,
+            duration,
+        )
+    };
+    if !source_path.is_file() {
+        return Ok(PreviewVideoSourceStatus::Unavailable {
+            reason: format!("Media file not found at path '{}'", source_path.display()),
+        });
+    }
+    if let Err(reason) = require_explicit_file_scope(
+        &source_path,
+        asset_scope_allows_path(&app.asset_protocol_scope(), &source_path),
+        "Preview media access",
+    ) {
+        return Ok(PreviewVideoSourceStatus::Unavailable { reason });
+    }
+    let source_fingerprint = match FFmpegService::source_fingerprint(&source_path) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return Ok(PreviewVideoSourceStatus::Unavailable {
+                reason: format!("Could not read source media metadata: {error}"),
+            });
+        }
+    };
+    let proxy_path = engine.cache.reverse_proxy_path(
+        &asset_id,
+        &source_fingerprint,
+        start_micros,
+        duration_micros,
+        REVERSE_PREVIEW_HEIGHT,
+    );
+    if proxy_path.is_file() {
+        return Ok(ready_preview_proxy(&app, &proxy_path));
+    }
+
+    let dedupe_key = format!(
+        "reverse-preview:{asset_id}:{source_fingerprint}:{start_micros}:{duration_micros}"
+    );
+    let job_id_candidate = format!("reverse_preview_{}", uuid::Uuid::new_v4().simple());
+    let (job_id, _is_deduped) =
+        engine
+            .jobs
+            .submit_job(job_id_candidate, JobKind::Proxy, dedupe_key, 10);
+    let Some(job) = engine.jobs.get_job(&job_id) else {
+        return Ok(PreviewVideoSourceStatus::Pending);
+    };
+    match &job.status {
+        JobStatus::Completed => {
+            if proxy_path.is_file() {
+                Ok(ready_preview_proxy(&app, &proxy_path))
+            } else {
+                Ok(PreviewVideoSourceStatus::Unavailable {
+                    reason: "Reverse preview finished without a usable file".to_string(),
+                })
+            }
+        }
+        JobStatus::Failed(reason) => Ok(PreviewVideoSourceStatus::Unavailable {
+            reason: reason.clone(),
+        }),
+        JobStatus::Cancelled => Ok(PreviewVideoSourceStatus::Unavailable {
+            reason: "Reverse preview generation was cancelled".to_string(),
+        }),
+        JobStatus::Running => Ok(PreviewVideoSourceStatus::Pending),
+        JobStatus::Queued if engine.jobs.can_start() => {
+            let cancel_flag = engine.jobs.start_job(&job_id).map_err(|e| e.to_string())?;
+            let state_arc = Arc::clone(&state.0);
+            let job_id = job_id.clone();
+            std::thread::spawn(move || {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    if let Ok(mut engine) = state_arc.lock() {
+                        engine.jobs.cancel_job(&job_id);
+                    }
+                    return;
+                }
+                let result = FFmpegService::generate_reverse_proxy(
+                    &source_path,
+                    start_micros as f64 / 1_000_000.0,
+                    duration_micros as f64 / 1_000_000.0,
+                    &proxy_path,
+                    REVERSE_PREVIEW_HEIGHT,
+                );
+                if let Ok(mut engine) = state_arc.lock() {
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        engine.jobs.cancel_job(&job_id);
+                    } else {
+                        match result {
+                            Ok(()) => engine.jobs.mark_completed(&job_id),
+                            Err(error) => engine.jobs.mark_failed(&job_id, error.to_string()),
+                        }
+                    }
+                }
+            });
+            Ok(PreviewVideoSourceStatus::Pending)
+        }
+        JobStatus::Queued => Ok(PreviewVideoSourceStatus::Pending),
+    }
+}
+
 #[tauri::command]
 fn preview_run_benchmark(
     app: AppHandle,
@@ -3922,6 +4169,9 @@ pub fn run() {
             project_list_unsaved_recoveries,
             project_restore_unsaved_recovery,
             project_discard_unsaved_recovery,
+            project_discard_saved_recovery,
+            freeze_frame_create,
+            media_get_reverse_preview_video,
             project_undo,
             project_redo,
             project_export,
@@ -4483,6 +4733,63 @@ mod tests {
         assert!(verify_recovery_fingerprint(&replacement, &fingerprint)
             .unwrap_err()
             .contains("content changed"));
+    }
+
+    #[test]
+    fn freeze_source_time_follows_speed_and_rejects_unsuitable_clips() {
+        use crate::freeze_source_seconds;
+        use crate::modules::domain::time::TimeRange;
+        use crate::modules::domain::ClipSpeed;
+        let rate = FrameRate::FPS_30;
+        let timeline = TimeRange::new(RationalTime::new(90, rate), RationalTime::new(60, rate));
+        let source = TimeRange::new(RationalTime::new(30, rate), RationalTime::new(120, rate));
+        let mut item = TimelineItem::new(
+            Some("ast".into()),
+            "Clip".into(),
+            ItemKind::Video,
+            timeline,
+            timeline,
+        )
+        .unwrap();
+        item.source_range = source;
+        item.speed = ClipSpeed::Double;
+        // 15 frames into a 2x clip that starts at source second 1.0 shows source second 2.0.
+        let seconds = freeze_source_seconds(&item, 105).unwrap();
+        assert!((seconds - 2.001).abs() < 1e-9, "{seconds}");
+        assert!(freeze_source_seconds(&item, 89).is_err());
+        assert!(freeze_source_seconds(&item, 150).is_err());
+        item.reverse = true;
+        assert!(freeze_source_seconds(&item, 100).is_err());
+        item.reverse = false;
+        item.kind = ItemKind::Audio;
+        assert!(freeze_source_seconds(&item, 100).is_err());
+    }
+
+    #[test]
+    fn reverse_preview_range_is_bounded_and_needs_a_reversed_video_clip() {
+        use crate::modules::domain::time::TimeRange;
+        use crate::reverse_preview_range;
+        let rate = FrameRate::FPS_30;
+        let timeline = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(90, rate));
+        let mut item = TimelineItem::new(
+            Some("ast".into()),
+            "Clip".into(),
+            ItemKind::Video,
+            timeline,
+            timeline,
+        )
+        .unwrap();
+        item.source_range =
+            TimeRange::new(RationalTime::new(30, rate), RationalTime::new(90, rate));
+        assert!(reverse_preview_range(&item).is_err(), "not reversed yet");
+        item.reverse = true;
+        assert_eq!(reverse_preview_range(&item).unwrap(), (1_000_000, 3_000_000));
+        item.source_range =
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(16 * 30, rate));
+        assert!(reverse_preview_range(&item).is_err(), "over the 15 s limit");
+        item.source_range =
+            TimeRange::new(RationalTime::new(0, rate), RationalTime::new(450, rate));
+        assert!(reverse_preview_range(&item).is_ok(), "exactly 15 s is allowed");
     }
 
     #[test]

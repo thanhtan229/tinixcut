@@ -674,6 +674,20 @@ export function App() {
     }
   };
 
+  const handleOpenSavedAndDiscardRecovery = async () => {
+    if (!recoveryPrompt) return;
+    const prompt = recoveryPrompt;
+    const { recoveryRevision, recoveryFingerprint } = prompt;
+    if (recoveryRevision === undefined || recoveryFingerprint === undefined) return;
+    try {
+      await editorApi.discardSavedRecovery(prompt.path, recoveryRevision, recoveryFingerprint);
+      await openProjectIntoEditor(prompt.path);
+      setRecoveryPrompt(null);
+    } catch (err) {
+      setStatusMsg(`Discard recovery failed: ${err}`);
+    }
+  };
+
   const handleRestoreRecovery = async () => {
     if (!recoveryPrompt || recoveryPrompt.unreadableReason || recoveryPrompt.projectRevision === undefined || recoveryPrompt.recoveryRevision === undefined || recoveryPrompt.recoveryFingerprint === undefined) return;
     const prompt = recoveryPrompt;
@@ -1543,6 +1557,71 @@ export function App() {
       ],
       "Split Clip"
     );
+  };
+
+  /** Seconds a new freeze frame holds the picture; the clip can be trimmed afterwards. */
+  const FREEZE_FRAME_SECONDS = 2;
+
+  const handleFreezeFrame = async (itemId: string, frame: number) => {
+    if (!project) return;
+    try {
+      const asset = await editorApi.createFreezeFrame(itemId, frame);
+      const rate = project.settings.frame_rate;
+      const durationFrames = Math.max(
+        1,
+        Math.round((FREEZE_FRAME_SECONDS * rate.numerator) / rate.denominator),
+      );
+      const now = Date.now();
+      const stillId = `clip_freeze_${now}`;
+      await executeCommandEnvelope((current) => {
+        const track = current.tracks.find((candidate) => candidate.items.some((item) => item.item_id === itemId));
+        if (!track) throw new Error("The clip no longer exists");
+        const plan = getTimelineInsertPlan(current, track.track_id, frame, durationFrames, `clip_freeze_right_${now}`);
+        const operations: OperationEnvelope[] = [];
+        if (plan.splitItemId) {
+          operations.push({
+            operation_id: `op_freeze_split_${now}`,
+            operation: {
+              type: "ClipSplit",
+              payload: {
+                item_id: plan.splitItemId,
+                split_time: { value: frame, rate },
+                new_right_item_id: `clip_freeze_right_${now}`,
+              },
+            },
+          });
+        }
+        if (plan.downstreamItemIds.length > 0) {
+          operations.push({
+            operation_id: `op_freeze_shift_${now}`,
+            operation: {
+              type: "ClipGroupMove",
+              payload: { item_ids: plan.downstreamItemIds, delta: { value: durationFrames, rate } },
+            },
+          });
+        }
+        operations.push({
+          operation_id: `op_freeze_clip_${now}`,
+          operation: {
+            type: "ClipCreate",
+            payload: {
+              item_id: stillId,
+              track_id: track.track_id,
+              name: `Freeze ${frame}f`,
+              kind: "Image",
+              asset_id: asset.asset_id,
+              timeline_start: { value: frame, rate },
+              duration: { value: durationFrames, rate },
+              source_start: { value: 0, rate },
+            },
+          },
+        });
+        return operations;
+      }, "Freeze frame");
+      setSelection({ selectedItemIds: new Set([stillId]), primarySelectedItemId: stillId });
+    } catch (error) {
+      setStatusMsg(`Freeze frame failed: ${error}`);
+    }
   };
 
   const handleDeleteSelected = (itemIds: string[]) => {
@@ -3157,6 +3236,7 @@ export function App() {
             onSplitClip={handleSplitClip}
             onDeleteClip={handleDeleteClip}
             onDuplicateClip={handleDuplicateClip}
+            onFreezeFrame={handleFreezeFrame}
             canCloseGap={Boolean(gapClosePlan)}
             onCloseGap={handleCloseGap}
             onMoveKeyframe={handleMoveKeyframe}
@@ -3337,6 +3417,11 @@ export function App() {
               <button type="button" className="btn-action" onClick={handleOpenSavedVersion}>
                 Open saved project
               </button>
+              {recoveryPrompt.recoveryFingerprint !== undefined && (
+                <button type="button" className="btn-action" onClick={handleOpenSavedAndDiscardRecovery}>
+                  Open saved project and discard recovery copy
+                </button>
+              )}
               <button type="button" className="btn-action" onClick={() => setRecoveryPrompt(null)}>
                 Cancel
               </button>

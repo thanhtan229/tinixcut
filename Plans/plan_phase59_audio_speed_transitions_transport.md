@@ -1,6 +1,6 @@
 # Phase 59 — Loudness, ducking, flexible speed, xfade transitions, transport keys
 
-**Status:** IMPLEMENTED 2026-11-13 (59A–59E) with the deviations in section 8. Native UI qualification is partial (section 9).
+**Status:** IMPLEMENTED 2026-11-13 (59A–59E) with the deviations in section 8. Native UI qualification and the follow-ups are in sections 9 to 11.
 **Basis:** second review of the reference repositories (Clypra, blyacut, OpenCut-AI, Mono Cut), recorded in the session of 2026-11-13. Only gaps confirmed in the TinixCut source are included.
 
 ## 1. Objective
@@ -224,3 +224,25 @@ Same harness and fixtures (`p59 mix`, `p59 trans`).
 - Keyboard shortcuts are ignored while the "Unsaved projects recovered" dialog is open (by design).
 
 **Still not verified**: ducked preview audio while playing, `Alt+I`, reversed-clip behaviour in the preview, Redo of a Delete In-Out after reload, export parity of the WebView2 transition (only formula plus separate FFmpeg measurements).
+
+## 11. Follow-up changes — 2026-11-14
+
+Closes the open items from sections 8 to 10 where that is possible. Each item lists its evidence.
+
+| Item | Change | Evidence |
+|---|---|---|
+| Recovery copy newer than the reopened project | New "Open saved project and discard recovery copy" button; backend `project_discard_saved_recovery` deletes the copy only if its revision and fingerprint still match what the prompt showed | unit test (stale copy blocks saves, wrong fingerprint or revision deletes nothing, discard unblocks saves); native: prompt shows the button, the `.recovery` file is gone and the project opens |
+| MCP `ExportProfile` schema | Advertises the real snake_case keys, the required fields, and `range` (camelCase keys were ignored by the deserializer) | schema compiles; full suite green |
+| Freeze frame (59C, not done before) | "Freeze" button. `freeze_frame_create` extracts the clip's frame (PNG, full size) to `<project>_freeze/`, imports it as an image asset; the editor then splits at the playhead, shifts downstream clips and adds a 2 s image clip in one transaction. No schema change | `phase59_freeze.rs` measures that the still shows the requested source instant (and differs from another instant); unit test for the speed-aware source time; native: Red clip at frame 60 became Red 60f + Freeze 60f + Red 120f, one revision |
+| Reverse preview (D5, not done before) | `media_get_reverse_preview_video` builds a silent, 540p reversed copy of the clip's source range in the derived cache; the preview plays it forward at proxy time = forward source time minus range start (the instant the export shows). HUD says "Reverse: preparing preview" until it is ready; the reversed clip's embedded audio is muted in the preview | `phase59_freeze.rs`: proxy time t shows source instant (start + duration - t) with a negative control; vitest for the mapping and cache key; native: the reversed clip loads the `_rev_` file and the video sits at 0.333 s for frame 10 |
+| Ducking preview audio | Native: Music volume 1.0 outside the voice, 0.251 (-12 dB) while the voice plays, 0.98 after the release | measured on the `<audio>` element volumes at frames 20, 100, 200 |
+| `Alt+I` | Native: clears the In mark only, the Out mark stays | marker labels before and after |
+
+**Defect found and fixed.** The preview ducking analysis (`ducking_prepare`) failed on any project that has a video clip without an audio stream, because such a clip is still an audio layer (embedded audio defaults to on); the preview then stayed on "Ducking pending" and never ducked. Export was not affected (it removes those layers first). The analysis now skips media without an audio stream; regression test `p59b_preview_analysis_ignores_a_silent_video_clip`.
+
+**Still open, deliberately**
+
+- Reverse stays limited to 15 s of source. FFmpeg `reverse` holds every frame; a longer limit needs separate reverse passes per segment written to temporary files, which is a design of its own.
+- Custom speeds whose source duration is not a whole number of source frames stay refused (guardrail 7: exact rational time).
+- The reversed clip's audio is not reversed in the preview (muted) and is not rendered backwards for audio-only clips there.
+- WebView2 versus export pixel parity of the geometric transitions was measured only on the preview side (section 10) plus separate FFmpeg measurements. G52 pixel parity is unchanged and remains open.

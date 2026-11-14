@@ -13,6 +13,7 @@ use super::CompositionPlan;
 use crate::modules::domain::time::RationalTime;
 use crate::modules::domain::Ducking;
 use crate::modules::media::align::{decode_mono_pcm, ALIGN_SAMPLE_RATE};
+use crate::modules::media::ffmpeg::FFmpegService;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -102,6 +103,8 @@ pub fn voice_track(
     let hops = (duration / HOP_SECONDS).ceil() as usize + 1;
     let mut power = vec![0.0f64; hops];
     let half = RMS_WINDOW_SAMPLES / 2;
+    let mut has_audio_stream: std::collections::HashMap<std::path::PathBuf, bool> =
+        std::collections::HashMap::new();
 
     for layer in &plan.audio_layers {
         if is_cancelled(cancel) {
@@ -117,6 +120,18 @@ pub fn voice_track(
         let start = layer.timeline_range.start.to_seconds();
         let length = layer.timeline_range.duration.to_seconds();
         if length <= 0.0 {
+            continue;
+        }
+        // A silent video is an audio layer too (embedded audio defaults to on) but has no
+        // stream to measure; it contributes no voice power rather than failing the analysis.
+        let has_audio = *has_audio_stream
+            .entry(path.clone())
+            .or_insert_with(|| {
+                FFmpegService::probe_file(path)
+                    .map(|metadata| metadata.audio_codec.is_some())
+                    .unwrap_or(true)
+            });
+        if !has_audio {
             continue;
         }
         let source_start = layer.source_range.start.to_seconds();

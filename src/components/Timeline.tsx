@@ -33,6 +33,8 @@ interface TimelineProps {
   onSplitClip: (itemId: string, splitFrame: number) => void;
   onDeleteClip: (itemId: string) => void;
   onDuplicateClip: (itemId: string) => void;
+  /** Holds the picture of the selected video clip at the playhead for a few seconds. */
+  onFreezeFrame?: (itemId: string, frame: number) => void;
   canCloseGap?: boolean;
   onCloseGap?: () => void;
   onMoveKeyframe?: (itemId: string, property: KeyframeProperty, oldOffsetFrame: number, newOffsetFrame: number) => void;
@@ -89,6 +91,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSplitClip,
   onDeleteClip,
   onDuplicateClip,
+  onFreezeFrame,
   canCloseGap = false,
   onCloseGap,
   onMoveKeyframe,
@@ -223,6 +226,13 @@ export const Timeline: React.FC<TimelineProps> = ({
   const canSplit =
     selectedItem &&
     playheadFrame > selectedItem.timeline_range.start.value &&
+    playheadFrame < selectedItem.timeline_range.start.value + selectedItem.timeline_range.duration.value;
+
+  const canFreeze =
+    Boolean(onFreezeFrame) &&
+    selectedItem?.kind === "Video" &&
+    !selectedItem.reverse &&
+    playheadFrame >= selectedItem.timeline_range.start.value &&
     playheadFrame < selectedItem.timeline_range.start.value + selectedItem.timeline_range.duration.value;
 
   // Calculate maximum frame across all tracks to determine total timeline width
@@ -691,6 +701,14 @@ export const Timeline: React.FC<TimelineProps> = ({
             title="Duplicate selected primary clip (Ctrl+D)"
           >
             📋 Duplicate
+          </button>
+          <button
+            className="btn-action"
+            disabled={!canFreeze}
+            onClick={() => selectedItem && onFreezeFrame?.(selectedItem.item_id, playheadFrame)}
+            title="Insert a 2 second still of the selected video clip at the playhead (needs a saved project)"
+          >
+            ❄ Freeze
           </button>
           <button
             className="btn-action"

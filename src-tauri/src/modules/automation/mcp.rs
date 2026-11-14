@@ -256,7 +256,7 @@ impl JsonSchema for ExportProfile {
             "properties": {
                 "width": { "type": "integer", "minimum": 1 },
                 "height": { "type": "integer", "minimum": 1 },
-                "frameRate": {
+                "frame_rate": {
                     "type": "object",
                     "properties": {
                         "numerator": { "type": "integer" },
@@ -265,20 +265,31 @@ impl JsonSchema for ExportProfile {
                 },
                 "crf": { "type": "integer" },
                 "preset": { "type": "string" },
-                "videoCodec": { "type": "string" },
-                "audioCodec": { "type": "string" },
-                "audioBitrate": { "type": "string" },
-                "audioSampleRate": { "type": "integer" },
+                "video_codec": { "type": "string" },
+                "audio_codec": { "type": "string" },
+                "audio_bitrate": { "type": "string" },
+                "audio_sample_rate": { "type": "integer" },
                 "loudness": {
-                    "description": "Optional loudness target; the exported audio is normalized to it and the measured result is returned in the export report. Field names are snake_case as serialized.",
+                    "description": "Optional loudness target; the exported audio is normalized to it and the measured result is returned in the export report.",
                     "type": ["object", "null"],
                     "properties": {
                         "integrated_lufs": { "type": "number", "minimum": -36, "maximum": -5 },
                         "true_peak_db": { "type": "number", "minimum": -9, "maximum": 0 }
                     },
                     "required": ["integrated_lufs", "true_peak_db"]
+                },
+                "range": {
+                    "description": "Optional half-open frame range [start_frame, end_frame) at the project frame rate (an In/Out selection); omit to export everything.",
+                    "type": ["object", "null"],
+                    "properties": {
+                        "start_frame": { "type": "integer", "minimum": 0 },
+                        "end_frame": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": ["start_frame", "end_frame"]
                 }
-            }
+            },
+            "required": ["width", "height", "frame_rate", "crf", "preset", "video_codec", "audio_codec", "audio_bitrate"],
+            "description": "Field names are snake_case exactly as the profile serializes."
         })
     }
 }

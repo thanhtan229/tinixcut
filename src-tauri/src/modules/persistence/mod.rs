@@ -340,6 +340,32 @@ pub fn check_recovery_status(
     }
 }
 
+/// Delete the recovery copy of a saved project after the user chose the saved version.
+///
+/// Without this, a recovery copy with a higher revision than the reopened project makes every
+/// later recovery save fail with a revision conflict. The revision and fingerprint must still
+/// match what the user reviewed, so a copy written meanwhile is never deleted by mistake.
+pub fn discard_saved_recovery(
+    recovery_path: &Path,
+    expected_recovery_revision: u64,
+    expected_recovery_fingerprint: &str,
+) -> Result<(), PersistenceError> {
+    let _write_lock = acquire_project_write_lock(recovery_path)?;
+    if !recovery_path.exists() {
+        return Ok(());
+    }
+    let current = load_project(recovery_path)?;
+    if current.revision != expected_recovery_revision
+        || recovery_snapshot_fingerprint(&current)? != expected_recovery_fingerprint
+    {
+        return Err(PersistenceError::InvalidProject(
+            "The recovery snapshot changed after it was reviewed; it was not discarded".to_string(),
+        ));
+    }
+    fs::remove_file(recovery_path)?;
+    Ok(())
+}
+
 pub fn recovery_snapshot_fingerprint(project: &Project) -> Result<String, PersistenceError> {
     use sha2::Digest;
 
@@ -1290,6 +1316,42 @@ mod tests {
         assert_eq!(load_project(&path).unwrap(), current);
 
         save_recovery_snapshot_if_newer(&current, &path).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn discarding_a_stale_recovery_copy_unblocks_later_recovery_saves() {
+        let dir = std::env::temp_dir().join(format!(
+            "tinixcut_recovery_discard_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let recovery = dir.join("project.tcproj.recovery");
+        let mut stale = Project::new("Stale".into());
+        stale.revision = 6;
+        save_recovery_snapshot_if_newer(&stale, &recovery).unwrap();
+        let fingerprint = recovery_snapshot_fingerprint(&stale).unwrap();
+
+        // Reopened at revision 1: the newer-revision recovery copy blocks every save.
+        let mut reopened = stale.clone();
+        reopened.revision = 1;
+        reopened.name = "Edited after reopen".into();
+        assert!(matches!(
+            save_recovery_snapshot_if_newer(&reopened, &recovery),
+            Err(PersistenceError::RevisionConflict { .. })
+        ));
+
+        // A wrong fingerprint or revision must not delete anything.
+        assert!(discard_saved_recovery(&recovery, 6, "not-the-fingerprint").is_err());
+        assert!(discard_saved_recovery(&recovery, 5, &fingerprint).is_err());
+        assert!(recovery.exists());
+
+        discard_saved_recovery(&recovery, 6, &fingerprint).unwrap();
+        assert!(!recovery.exists());
+        save_recovery_snapshot_if_newer(&reopened, &recovery).unwrap();
+        // Discarding a missing copy is a no-op.
+        fs::remove_file(&recovery).unwrap();
+        discard_saved_recovery(&recovery, 6, &fingerprint).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
 

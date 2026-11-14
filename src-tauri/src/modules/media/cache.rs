@@ -62,6 +62,21 @@ impl CacheManager {
         ))
     }
 
+    /// Reversed preview of one source range (derived cache; the project never references it).
+    pub fn reverse_proxy_path(
+        &self,
+        asset_id: &str,
+        source_fingerprint: &str,
+        start_micros: i64,
+        duration_micros: i64,
+        target_height: u32,
+    ) -> PathBuf {
+        let fingerprint: String = source_fingerprint.chars().take(16).collect();
+        self.root_dir.join("proxies").join(format!(
+            "{asset_id}_{fingerprint}_rev_{start_micros}_{duration_micros}_{target_height}p.mp4"
+        ))
+    }
+
     pub fn waveform_path(&self, asset_id: &str, source_fingerprint: &str) -> PathBuf {
         self.root_dir
             .join("waveforms")

@@ -470,6 +470,45 @@ impl FFmpegService {
         Ok(())
     }
 
+    /// Extract one full-resolution PNG frame (a freeze frame) at `time_seconds`.
+    ///
+    /// Unlike thumbnails the frame is not scaled: the still becomes a real project asset.
+    pub fn extract_freeze_frame(
+        source_path: &Path,
+        time_seconds: f64,
+        out_path: &Path,
+    ) -> Result<(), MediaError> {
+        if !source_path.is_file() {
+            return Err(MediaError::TargetNotFound(source_path.to_path_buf()));
+        }
+        if !time_seconds.is_finite() || time_seconds < 0.0 {
+            return Err(MediaError::VerificationFailed(
+                "Freeze frame time must be a non-negative number".to_string(),
+            ));
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let output = MediaBinaryResolver::command("ffmpeg")?
+            .args(["-hide_banner", "-loglevel", "error", "-ss"])
+            .arg(format!("{time_seconds:.6}"))
+            .arg("-i")
+            .arg(source_path)
+            .args(["-frames:v", "1", "-an", "-y"])
+            .arg(out_path)
+            .output()
+            .map_err(|e| {
+                MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {}", e))
+            })?;
+        if !output.status.success() || !out_path.is_file() {
+            return Err(MediaError::VerificationFailed(format!(
+                "Freeze frame extraction failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(())
+    }
+
     /// Extract one JPEG frame with a strict maximum side and cancellable bounded runtime.
     pub fn extract_bounded_frame(
         source_path: &Path,
@@ -617,6 +656,72 @@ impl FFmpegService {
             let _ = std::fs::remove_file(&partial_path);
             MediaError::VerificationFailed(format!(
                 "Could not finalize preview proxy at {}: {error}",
+                out_path.display()
+            ))
+        })
+    }
+
+    /// Writes a video-only, reversed, downscaled copy of `[start, start + duration)` of the
+    /// source. `reverse` buffers every frame, so the caller bounds the duration and the frames
+    /// are downscaled first to keep the buffer small. The output is derived cache only.
+    pub fn generate_reverse_proxy(
+        source_path: &Path,
+        start_seconds: f64,
+        duration_seconds: f64,
+        out_path: &Path,
+        target_height: u32,
+    ) -> Result<(), MediaError> {
+        if !(duration_seconds > 0.0 && duration_seconds.is_finite() && start_seconds >= 0.0) {
+            return Err(MediaError::VerificationFailed(
+                "Reverse preview needs a positive source duration".to_string(),
+            ));
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let partial_path = out_path.with_extension("partial.mp4");
+        let output = MediaBinaryResolver::command("ffmpeg")?
+            .args(["-hide_banner", "-loglevel", "error", "-ss"])
+            .arg(format!("{start_seconds:.6}"))
+            .arg("-t")
+            .arg(format!("{duration_seconds:.6}"))
+            .arg("-i")
+            .arg(source_path)
+            .args(["-map", "0:v:0", "-an", "-vf"])
+            .arg(format!("scale=-2:{target_height},reverse"))
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "28",
+                "-g",
+                "15",
+                "-sc_threshold",
+                "0",
+                "-movflags",
+                "+faststart",
+                "-y",
+            ])
+            .arg(&partial_path)
+            .output()
+            .map_err(|e| {
+                MediaError::VerificationFailed(format!("Failed to spawn ffmpeg: {}", e))
+            })?;
+        if !output.status.success() {
+            let _ = std::fs::remove_file(&partial_path);
+            return Err(MediaError::VerificationFailed(format!(
+                "Reverse preview generation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        std::fs::rename(&partial_path, out_path).map_err(|error| {
+            let _ = std::fs::remove_file(&partial_path);
+            MediaError::VerificationFailed(format!(
+                "Could not finalize reverse preview at {}: {error}",
                 out_path.display()
             ))
         })

@@ -32,7 +32,7 @@ export interface PreviewSampledLayer {
   color_adjustments?: ColorAdjustments;
   color_lut?: ClipLut | null;
   chroma_key?: ChromaKey | null;
-  /** The clip is reversed at export; the preview plays it forward. */
+  /** The clip is reversed at export; the preview plays a silent reversed copy once it is ready. */
   reverse?: boolean;
   text?: string | null;
   font_family?: string | null;

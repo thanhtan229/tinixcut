@@ -224,3 +224,56 @@ fn p59b_a_clip_alone_is_never_ducked() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn p59b_preview_analysis_ignores_a_silent_video_clip() {
+    // The preview analysis (`ducking::prepare`) runs on the unfiltered plan, where a video clip
+    // without an audio stream is still an audio layer. It must not abort the analysis.
+    use tinixcut_lib::modules::composition::{ducking, CompositionPlan};
+    let dir = test_dir("silent_video");
+    let music = dir.join("music.wav");
+    let voice = dir.join("voice.wav");
+    tone(&music, 220, 8, -12.0);
+    tone(&voice, 1000, 3, -10.0);
+    let silent = dir.join("silent.mp4");
+    let status = Command::new(ffmpeg_path())
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("color=c=red:s=64x64:r=30:d=8")
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+        .arg(&silent)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let mut mixed = project(&music, &voice, Some(ducking(12.0)));
+    let rate = FrameRate::FPS_30;
+    mixed.assets.push(Asset {
+        asset_id: "ast_silent".into(),
+        name: "silent".into(),
+        path: silent.to_string_lossy().into_owned(),
+        media_kind: MediaKind::Video,
+        duration: Some(RationalTime::new(240, rate)),
+        file_size: 1000,
+        dimensions: None,
+    });
+    let range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(240, rate));
+    let mut track = Track::new("V1".into(), TrackKind::Video);
+    track.items.push(
+        TimelineItem::new(
+            Some("ast_silent".into()),
+            "Silent".into(),
+            ItemKind::Video,
+            range,
+            range,
+        )
+        .unwrap(),
+    );
+    mixed.tracks.push(track);
+
+    let plan = CompositionPlan::from_project(&mixed).expect("plan");
+    let curves = ducking::prepare(&plan, None).expect("analysis must skip the silent video");
+    assert_eq!(curves.len(), 1, "only the Music clip ducks");
+    let deepest = curves.values().map(|c| c.min_gain()).fold(1.0f32, f32::min);
+    assert!(deepest < 0.5, "the voice still ducks the music: {deepest}");
+    fs::remove_dir_all(dir).unwrap();
+}
