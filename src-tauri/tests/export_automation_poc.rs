@@ -889,13 +889,10 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
 
     let instrumented_filtergraph = prod_filter_complex
         // Instrument Ordinary A branch
-        .replace(
-            "format=yuva420p,colorchannelmixer=aa=1.000[layer_0];",
-            &format!("format=yuva420p,colorchannelmixer=aa=1.000,sendcmd=f='{escaped_cmd_ord_a}'[layer_0];"),
-        )
+        // The overlay position commands fire on the overlay's main input, as in production.
         .replace(
             "[base][layer_0]overlay=x='(W-w)/2+-85.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,0.0000,1.7417)'[v_over_0];",
-            "[base][layer_0]overlay@ov_ord_a=x='(W-w)/2+-85.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,0.0000,1.7417)'[v_over_0];",
+            &format!("[base]sendcmd=f='{escaped_cmd_ord_a}'[base_cmd_a];[base_cmd_a][layer_0]overlay@ov_ord_a=x='(W-w)/2+-85.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,0.0000,1.7417)'[v_over_0];"),
         )
         // Instrument Transition Left branch
         .replace(
@@ -903,17 +900,13 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
             &format!("color=c=black@0:s=640x360:r=60:d=0.500000,sendcmd=f='{escaped_cmd_tr_l}'[tr_l_canvas_0];"),
         )
         .replace(
-            "[tr_l_canvas_0][tr_l_clip_0]overlay=x='(W-w)/2+-85.0':y='(H-h)/2+0.0',format=rgba,premultiply=inplace=1[tr_l_branch_0];",
+            "[tr_l_canvas_0][tr_l_clip_0]overlay=x='(W-w)/2+-85.0':y='(H-h)/2+0.0':format=yuv444,format=rgba,premultiply=inplace=1[tr_l_branch_0];",
             "[tr_l_canvas_0][tr_l_clip_0]overlay@ov_tr_l=x=260:y=135,format=rgba,premultiply=inplace=1[tr_l_branch_0];",
         )
         // Instrument Ordinary B branch
         .replace(
-            "format=yuva420p,colorchannelmixer=aa=1.000[layer_2];",
-            &format!("format=yuva420p,colorchannelmixer=aa=1.000,sendcmd=f='{escaped_cmd_ord_b}'[layer_2];"),
-        )
-        .replace(
             "[v_over_1][layer_2]overlay=x='(W-w)/2+-150.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,2.2417,3.9917)'[v_over_2];",
-            "[v_over_1][layer_2]overlay@ov_ord_b=x='(W-w)/2+-150.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,2.2417,3.9917)'[v_over_2];",
+            &format!("[v_over_1]sendcmd=f='{escaped_cmd_ord_b}'[base_cmd_b];[base_cmd_b][layer_2]overlay@ov_ord_b=x='(W-w)/2+-150.0':y='(H-h)/2+0.0':format=yuv444:enable='between(t,2.2417,3.9917)'[v_over_2];"),
         );
 
     // 7. Execute Positive Run — Render Rawvideo
@@ -959,7 +952,10 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
         (bbox_104.0 as isize - 259).abs() <= 1,
         "Frame 104 x must match evaluated position within chroma margin"
     );
-    assert_eq!(bbox_104.1, 135, "Frame 104 y must match evaluated position (4:4:4 overlay keeps the odd row)");
+    assert_eq!(
+        bbox_104.1, 135,
+        "Frame 104 y must match evaluated position (4:4:4 overlay keeps the odd row)"
+    );
     assert!(
         find_blue_bounding_box_with_threshold(&frames[104], width, height, 50).is_none(),
         "Clip B must NOT be visible before T0"
@@ -995,7 +991,13 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
     );
     let bbox_134_b = find_blue_bounding_box_with_threshold(&frames[134], width, height, 50)
         .expect("Frame 134 Clip B must be detected");
-    assert_eq!(bbox_134_b.0, 90, "Frame 134 Clip B x must be 90");
+    // Edge pixel next to the box can cross the threshold after the 4:2:0 encode; the position
+    // is exact to within one pixel.
+    assert!(
+        (bbox_134_b.0 as isize - 90).abs() <= 1,
+        "Frame 134 Clip B x must be 90 (got {})",
+        bbox_134_b.0
+    );
 
     // Frame 135: First frame at/after T1 (t = 135/60 = 2.250s = T1)
     // A double render of Clip A would show a green box at full or half level. Compositing in
@@ -1014,7 +1016,8 @@ fn test_poc_v4_existing_crossdissolve_coexistence() {
         .expect("Frame 135 Clip B must be visible in ordinary branch");
     assert!(
         (bbox_135_b.0 as isize - 90).abs() <= 2,
-        "Frame 135 Clip B initial resume position"
+        "Frame 135 Clip B initial resume position (got {})",
+        bbox_135_b.0
     );
 
     // Frame 180: Middle of Ordinary B (t = 180/60 = 3.000s)

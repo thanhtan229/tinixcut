@@ -1630,9 +1630,21 @@ impl CompositionPlan {
                             // alignment), which moved every layer at an odd position up/left by one
                             // pixel against the preview (G52 Step 2, 2026-11-14). Compositing in 4:4:4
                             // keeps the requested position; the encoder converts back to 4:2:0.
+                            // Overlay position commands fire on the overlay's main input, which
+                            // advances in lockstep with it (see `LayerVideoAutomation`).
+                            let overlay_main = if let Some(auto) = layer_auto {
+                                let tag = format!("{}_ovcmd_{}", current_base, layer_idx);
+                                filter_complex.push_str(&format!(
+                                    "[{}]sendcmd=f='{}'[{}];",
+                                    current_base, auto.escaped_overlay_command_file, tag
+                                ));
+                                tag
+                            } else {
+                                current_base.clone()
+                            };
                             filter_complex.push_str(&format!(
                                 "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':format=yuv444:enable='between(t,{:.4},{:.4})'[{}];",
-                                current_base, layer_tag, ov_tag, pos_x, pos_y, start_bound, end_bound, next_base
+                                overlay_main, layer_tag, ov_tag, pos_x, pos_y, start_bound, end_bound, next_base
                             ));
                             current_base = next_base;
 
@@ -1923,7 +1935,7 @@ impl CompositionPlan {
                     };
 
                     filter_complex.push_str(&format!(
-                        "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}',format=rgba,premultiply=inplace=1[{}];",
+                        "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':format=yuv444,format=rgba,premultiply=inplace=1[{}];",
                         left_canvas_tag, left_clip_tag, left_ov, left_pos_x, left_pos_y, left_branch_tag
                     ));
 
@@ -2027,7 +2039,7 @@ impl CompositionPlan {
                     };
 
                     filter_complex.push_str(&format!(
-                        "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}',format=rgba,premultiply=inplace=1[{}];",
+                        "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':format=yuv444,format=rgba,premultiply=inplace=1[{}];",
                         right_canvas_tag, right_clip_tag, right_ov, right_pos_x, right_pos_y, right_branch_tag
                     ));
 

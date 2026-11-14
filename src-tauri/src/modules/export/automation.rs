@@ -114,8 +114,14 @@ fn audio_sample_time(
 #[derive(Debug, Clone)]
 pub struct LayerVideoAutomation {
     pub layer_index: usize,
+    /// Scale, rotate and opacity commands: they run on the layer's own filter chain.
     pub command_file: PathBuf,
     pub escaped_command_file: String,
+    /// `overlay` x/y commands. They must fire on the overlay's *main* input, which advances in
+    /// lockstep with the overlay: fired from the layer chain they could run ahead of it by
+    /// several frames whenever the overlay is the slower filter.
+    pub overlay_command_file: PathBuf,
+    pub escaped_overlay_command_file: String,
     /// Fixed square output of the layer's `rotate` filter, large enough for the
     /// largest scaled frame in the clip. FFmpeg evaluates rotate's `ow`/`oh` once,
     /// so a per-frame size would crop scaled-up frames and misplace the overlay.
@@ -284,7 +290,14 @@ impl ExportAutomationSchedule {
                 pid,
                 &random_nonce[..6]
             ));
+            let overlay_cmd_file = temp_dir.join(format!(
+                "cmd_layer_ov_{}_{}_{}.txt",
+                idx,
+                pid,
+                &random_nonce[..6]
+            ));
             let mut cmd_content = String::new();
+            let mut overlay_cmd_content = String::new();
 
             let start_frame = (ord_start_sec * fps).floor() as i64;
             let end_frame = (ord_end_sec * fps).ceil() as i64;
@@ -362,9 +375,7 @@ impl ExportAutomationSchedule {
                     "{:.6} scale@sc_{} w {};\n\
                      {:.6} scale@sc_{} h {};\n\
                      {:.6} rotate@rot_{} angle {:.4};\n\
-                     {:.6} colorchannelmixer@ccm_{} aa {:.3};\n\
-                     {:.6} overlay@ov_{} x {};\n\
-                     {:.6} overlay@ov_{} y {};\n",
+                     {:.6} colorchannelmixer@ccm_{} aa {:.3};\n",
                     f.t_mid,
                     idx,
                     f.render_w,
@@ -377,12 +388,11 @@ impl ExportAutomationSchedule {
                     f.t_mid,
                     idx,
                     f.opacity,
-                    f.t_mid,
-                    idx,
-                    top_left_x,
-                    f.t_mid,
-                    idx,
-                    top_left_y,
+                ));
+                overlay_cmd_content.push_str(&format!(
+                    "{:.6} overlay@ov_{} x {};\n\
+                     {:.6} overlay@ov_{} y {};\n",
+                    f.t_mid, idx, top_left_x, f.t_mid, idx, top_left_y,
                 ));
             }
 
@@ -390,13 +400,21 @@ impl ExportAutomationSchedule {
                 ExportError::IoError(format!("Failed to write sendcmd script: {e}"))
             })?;
 
+            fs::write(&overlay_cmd_file, &overlay_cmd_content).map_err(|e| {
+                ExportError::IoError(format!("Failed to write overlay sendcmd script: {e}"))
+            })?;
+
             let escaped = escape_ffmpeg_filter_path(&cmd_file);
             guard.track(cmd_file.clone());
+            let escaped_overlay = escape_ffmpeg_filter_path(&overlay_cmd_file);
+            guard.track(overlay_cmd_file.clone());
 
             video_layers.push(LayerVideoAutomation {
                 layer_index: idx,
                 command_file: cmd_file,
                 escaped_command_file: escaped,
+                overlay_command_file: overlay_cmd_file,
+                escaped_overlay_command_file: escaped_overlay,
                 rotate_box,
             });
         }
@@ -685,7 +703,9 @@ mod tests {
         assert_eq!(schedule.video_layers.len(), 1);
 
         let commands = std::fs::read_to_string(&schedule.video_layers[0].command_file)
-            .expect("generated automation command file");
+            .expect("generated automation command file")
+            + &std::fs::read_to_string(&schedule.video_layers[0].overlay_command_file)
+                .expect("generated overlay command file");
         assert!(commands.contains("scale@sc_0 w 640;"), "{commands}");
         assert!(commands.contains("scale@sc_0 h 1080;"), "{commands}");
         assert!(commands.contains("overlay@ov_0 x 372;"), "{commands}");
@@ -763,7 +783,8 @@ mod tests {
         let auto = &schedule.video_layers[0];
         assert_eq!(auto.rotate_box, expected_box, "box must fit the 1.5x frame");
 
-        let commands = std::fs::read_to_string(&auto.command_file).expect("command file");
+        let commands = std::fs::read_to_string(&auto.command_file).expect("command file")
+            + &std::fs::read_to_string(&auto.overlay_command_file).expect("overlay command file");
         let last_x = (1920 - expected_box as i32) / 2 + 300;
         let last_y = (1080 - expected_box as i32) / 2;
         assert!(
