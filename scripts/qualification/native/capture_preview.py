@@ -103,4 +103,5 @@ def main():
     json.dump(results, open(os.path.join(out_dir, "preview_capture.json"), "w"), indent=1)
 
 
-main()
+if __name__ == "__main__":
+    main()

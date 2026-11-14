@@ -107,4 +107,5 @@ def main():
     print("ALL PASS" if summary["allPass"] else "FAIL")
 
 
-main()
+if __name__ == "__main__":
+    main()
