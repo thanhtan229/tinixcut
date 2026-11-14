@@ -163,3 +163,11 @@ Chosen by the Product Owner on 2026-11-12 before any measurement below. Do not r
 ### G52 disposition — approved by Product Owner, 2026-11-12
 
 G52 stays **OPEN for pixel-level preview/export parity** and v0.1.0 ships with that non-claim. The locked SSIM ≥ 0.92 threshold is **not** relaxed. Geometry, animation, cut, Reset, history and persistence are qualified. Reopening for a later release requires changing the preview renderer so its video scaling matches export (new architecture/plan item), then re-measuring against the unchanged threshold.
+
+### G52 disposition update — 2026-11-14 (approved in chat by the project owner)
+
+Superseding the 2026-11-12 disposition. The locked tolerance (luma SSIM >= 0.92 at a keyframe, mid-easing and both sides of a cut; centroid <= 1 % of the canvas width; Reset returns to the baseline) is unchanged. Two things changed: the comparison geometry was corrected (the 2026-11-12 capture stretched the export by half a pixel vertically and included the viewport border), and a real export defect was fixed (4:2:0 `overlay` floored odd positions, moving layers 1 px up/left of the preview). A paused-frame renderer, **Exact frame**, shows the frame as the export compiler renders it.
+
+**Claim now made:** with **Exact frame** on, a paused frame outside a cut transition is the exported picture (locked method, DPR 1 and 2, no shifts: original fixture 0.956-0.989 at all ten points, natural-footage fixture 0.927-0.992 at all ten points, centroids <= 3.6 px of 19.2; Reset identical to the baseline; undo/redo and save/reopen verified; reopened frames identical).
+
+**Not claimed:** playback and frames inside a transition, which stay the browser's approximation (measured 0.80-0.97 on detail-rich footage with the live `<video>` view); reversed clips; text below a video layer. These limits belong in the release notes. G52 is therefore **CLOSED for paused frames** and **remains a documented limitation for playback**. Evidence and method: `Plans/plan_g52_preview_export_parity.md` sections 9-12; artifacts under `artifacts/phase60/g52/`.

@@ -1663,3 +1663,5 @@ UIA InvokePattern on the unique workspace 📂 Open control returned without exc
 **Phase 59 follow-up 2 (2026-11-14):** long reverse (60 s via pieces) and fitted fractional speeds are implemented and tested. G52 remains open: the comparison filter was ruled out as the cause; closing it needs a preview compositor plan.
 
 **G52 checkpoint (2026-11-14):** export position/overlay-command fixes done; Exact frame (export-rendered paused frame) implemented and natively checked on fixture 2 (all ten locked-method values >= 0.927). Open: Product Owner disposition of G52, Reset/undo/save checks on fixture 2, installed build.
+
+**G52 closed with a narrow claim (2026-11-14):** paused frames with Exact frame on match the export (details in `Plans/phase52_visual_canvas_keyframes.md`). Open follow-ups: installed-build smoke, export first-frame determinism (separate session), text overlay position rounding, cancelling an in-flight exact frame.
