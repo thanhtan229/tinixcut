@@ -110,9 +110,10 @@ fn audio_sample_time(
     Ok(RationalTime::new(ticks, FrameRate::new(common_rate, 1)))
 }
 
-/// Longest accepted overlay position expression. It becomes part of the FFmpeg command line
-/// (about 32 000 characters on Windows for everything together).
-const MAX_POSITION_EXPR_LEN: usize = 8000;
+/// Longest accepted overlay position expression. A graph longer than the command line allows is
+/// passed to FFmpeg through a file (`export::spill_long_filter_graph`), so this is a sanity bound
+/// for runaway motion, not the Windows command-line limit.
+const MAX_POSITION_EXPR_LEN: usize = 400_000;
 
 /// A stretch of consecutive frames whose pixel positions are `round(a + slope * (frame - start))`.
 struct PositionRun {
@@ -510,8 +511,12 @@ impl ExportAutomationSchedule {
                 ));
             }
             let first = &frames[0];
-            let (initial_render_w, initial_render_h, initial_angle_rad, initial_opacity) =
-                (first.render_w, first.render_h, first.angle_rad, first.opacity);
+            let (initial_render_w, initial_render_h, initial_angle_rad, initial_opacity) = (
+                first.render_w,
+                first.render_h,
+                first.angle_rad,
+                first.opacity,
+            );
 
             fs::write(&cmd_file, &cmd_content).map_err(|e| {
                 ExportError::IoError(format!("Failed to write sendcmd script: {e}"))
@@ -786,9 +791,13 @@ mod tests {
                 let got = (f64::from(run.a) + run.slope * (frame - run.start) as f64).round();
                 assert_eq!(got, f64::from(*v), "frame {frame}");
             }
-            let expr =
-                super::frame_position_expression(10, &values, FrameRate::FPS_30).unwrap();
-            assert!(expr.len() < 3000, "{} chars for {} runs", expr.len(), runs.len());
+            let expr = super::frame_position_expression(10, &values, FrameRate::FPS_30).unwrap();
+            assert!(
+                expr.len() < 3000,
+                "{} chars for {} runs",
+                expr.len(),
+                runs.len()
+            );
         }
     }
 

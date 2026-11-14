@@ -267,6 +267,32 @@ impl Drop for TempDirGuard {
     }
 }
 
+/// Longest filter graph passed on the command line. Windows allows about 32 000 characters for
+/// everything together; longer graphs (long keyframed motion makes long position expressions)
+/// are read from a file with `-/filter_complex`.
+const MAX_INLINE_FILTER_GRAPH_CHARS: usize = 6000;
+
+/// Moves a long `-filter_complex` graph out of the argument list into `<dir>/filter_complex.txt`
+/// and replaces it with `-/filter_complex <file>`. Returns whether it did. The graph text is
+/// unchanged: FFmpeg parses the file with the same filter-graph syntax as the argument.
+fn spill_long_filter_graph(args: &mut [String], dir: &Path) -> std::io::Result<bool> {
+    let Some(position) = args.iter().position(|a| a == "-filter_complex") else {
+        return Ok(false);
+    };
+    let Some(graph) = args.get(position + 1) else {
+        return Ok(false);
+    };
+    if graph.len() <= MAX_INLINE_FILTER_GRAPH_CHARS {
+        return Ok(false);
+    }
+    fs::create_dir_all(dir)?;
+    let file = dir.join("filter_complex.txt");
+    fs::write(&file, graph)?;
+    args[position] = "-/filter_complex".to_string();
+    args[position + 1] = file.to_string_lossy().into_owned();
+    Ok(true)
+}
+
 fn remove_existing_output(path: &Path) {
     for _ in 0..10 {
         if !path.exists() {
@@ -596,7 +622,9 @@ impl ExportEngine {
                 return Ok(existing.clone());
             }
             fs::create_dir_all(dir).map_err(|error| {
-                ExportError::IoError(format!("Failed to create reverse scratch directory: {error}"))
+                ExportError::IoError(format!(
+                    "Failed to create reverse scratch directory: {error}"
+                ))
             })?;
             let out = dir.join(format!("reverse_{}.mkv", rendered.len()));
             FFmpegService::render_reversed_range(
@@ -624,8 +652,10 @@ impl ExportEngine {
             {
                 let path = layer.asset_path.clone().unwrap_or_default();
                 layer.asset_path = Some(render(&path, &layer.source_range)?);
-                layer.source_range =
-                    TimeRange::new(RationalTime::new(0, layer.source_range.start.rate), layer.source_range.duration);
+                layer.source_range = TimeRange::new(
+                    RationalTime::new(0, layer.source_range.start.rate),
+                    layer.source_range.duration,
+                );
                 layer.reverse = false;
             }
         }
@@ -633,8 +663,10 @@ impl ExportEngine {
             if needs(layer.reverse, &layer.asset_path, &layer.source_range) {
                 let path = layer.asset_path.clone().unwrap_or_default();
                 layer.asset_path = Some(render(&path, &layer.source_range)?);
-                layer.source_range =
-                    TimeRange::new(RationalTime::new(0, layer.source_range.start.rate), layer.source_range.duration);
+                layer.source_range = TimeRange::new(
+                    RationalTime::new(0, layer.source_range.start.rate),
+                    layer.source_range.duration,
+                );
                 layer.reverse = false;
             }
         }
@@ -966,6 +998,9 @@ impl ExportEngine {
                 &overlays,
             );
             let mut args = args;
+            spill_long_filter_graph(&mut args, &automation_dir).map_err(|error| {
+                ExportError::IoError(format!("Failed to write the filter graph file: {error}"))
+            })?;
             let output_argument = args
                 .pop()
                 .expect("FFmpeg export arguments always end with an output path");
@@ -1195,6 +1230,39 @@ pub mod tests {
         Asset, ItemKind, MediaKind, Project, ProjectSettings, TimelineItem, Track, TrackKind,
     };
     use std::fs;
+
+    #[test]
+    fn long_filter_graphs_are_read_from_a_file_and_short_ones_stay_inline() {
+        let dir = std::env::temp_dir().join(format!("tinixcut_spill_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let long = format!("color=c=red:s=64x64:d=1[o];{}", "[o]null[o];".repeat(700));
+        let mut args: Vec<String> = ["-i", "in.mp4", "-filter_complex", &long, "-map", "[o]"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(spill_long_filter_graph(&mut args, &dir).unwrap());
+        assert_eq!(args[2], "-/filter_complex");
+        assert_eq!(
+            fs::read_to_string(&args[3]).unwrap(),
+            long,
+            "graph text is unchanged"
+        );
+        assert_eq!(args.len(), 6, "only the graph argument was replaced");
+
+        let mut short: Vec<String> = [
+            "-filter_complex",
+            "color=c=red:s=64x64:d=1[o]",
+            "-map",
+            "[o]",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let before = short.clone();
+        assert!(!spill_long_filter_graph(&mut short, &dir).unwrap());
+        assert_eq!(short, before);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn get_fixture_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("tinixcut_test_fixtures_phase8");
