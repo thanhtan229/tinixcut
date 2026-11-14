@@ -1626,8 +1626,12 @@ impl CompositionPlan {
                                 "overlay".to_string()
                             };
 
+                            // `format=yuv444`: in 4:2:0 `overlay` floors x/y to even pixels (chroma
+                            // alignment), which moved every layer at an odd position up/left by one
+                            // pixel against the preview (G52 Step 2, 2026-11-14). Compositing in 4:4:4
+                            // keeps the requested position; the encoder converts back to 4:2:0.
                             filter_complex.push_str(&format!(
-                                "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':enable='between(t,{:.4},{:.4})'[{}];",
+                                "[{}][{}]{}=x='(W-w)/2+{:.1}':y='(H-h)/2+{:.1}':format=yuv444:enable='between(t,{:.4},{:.4})'[{}];",
                                 current_base, layer_tag, ov_tag, pos_x, pos_y, start_bound, end_bound, next_base
                             ));
                             current_base = next_base;
