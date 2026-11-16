@@ -2,6 +2,7 @@ import { Project, TimelineItem, rationalTimeToFrames } from "../types/project";
 import type { OperationEnvelope } from "../types/command";
 
 export interface CaptionRow {
+  trackId: string;
   item: TimelineItem;
   trackName: string;
   locked: boolean;
@@ -127,6 +128,7 @@ export function buildCaptionMergeOperations(
 
   return [
     { operation_id: `op_caption_merge_text_${leftId}_${operationNonce}`, operation: { type: "ClipTextSet", payload: { item_id: leftId, text: mergedText } } },
+    { operation_id: `op_caption_merge_delete_${rightId}_${operationNonce}`, operation: { type: "ClipDelete", payload: { item_id: rightId } } },
     { operation_id: `op_caption_merge_trim_${leftId}_${operationNonce}`, operation: {
       type: "ClipTrim",
       payload: {
@@ -141,7 +143,6 @@ export function buildCaptionMergeOperations(
         },
       },
     } },
-    { operation_id: `op_caption_merge_delete_${rightId}_${operationNonce}`, operation: { type: "ClipDelete", payload: { item_id: rightId } } },
   ];
 }
 
@@ -150,10 +151,50 @@ export function collectCaptionRows(project: Project | null): CaptionRow[] {
   return project.tracks
     .flatMap((track) => track.items
       .filter((item) => item.kind === "Text")
-      .map((item) => ({ item, trackName: track.name, locked: track.locked ?? false })))
+      .map((item) => ({ item, trackId: track.track_id, trackName: track.name, locked: track.locked ?? false })))
     .sort((left, right) =>
       rationalTimeToFrames(left.item.timeline_range.start, project.settings.frame_rate)
       - rationalTimeToFrames(right.item.timeline_range.start, project.settings.frame_rate));
+}
+
+export type CaptionTimingNotice = { kind: "gap" | "overlap"; frames: number };
+
+/** Compare against earlier coverage on the same track, including nested captions. */
+export function getCaptionTimingNotices(
+  rows: CaptionRow[],
+  rate: Project["settings"]["frame_rate"],
+  drafts: Record<string, { start_frame: number; duration_frames: number }>,
+): { notices: Record<string, CaptionTimingNotice>; invalidTrackIds: Set<string> } {
+  const tracks = new Map<string, Array<{ id: string; start: number; end: number }>>();
+  const invalidTrackIds = new Set<string>();
+  for (const { item, trackId } of rows) {
+    const draft = drafts[item.item_id];
+    const start = draft?.start_frame ?? rationalTimeToFrames(item.timeline_range.start, rate);
+    const duration = draft?.duration_frames ?? rationalTimeToFrames(item.timeline_range.duration, rate);
+    const end = start + duration;
+    if (!isValidCaptionStartFrame(start) || !isValidCaptionDurationFrames(duration) || !Number.isSafeInteger(end)) {
+      invalidTrackIds.add(trackId);
+      continue;
+    }
+    const entries = tracks.get(trackId) ?? [];
+    entries.push({ id: item.item_id, start, end });
+    tracks.set(trackId, entries);
+  }
+  const notices: Record<string, CaptionTimingNotice> = {};
+  for (const [trackId, entries] of tracks) {
+    if (invalidTrackIds.has(trackId)) continue;
+    entries.sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
+    let coveredEnd: number | undefined;
+    for (const entry of entries) {
+      if (coveredEnd !== undefined && entry.start > coveredEnd) {
+        notices[entry.id] = { kind: "gap", frames: entry.start - coveredEnd };
+      } else if (coveredEnd !== undefined && entry.start < coveredEnd) {
+        notices[entry.id] = { kind: "overlap", frames: Math.min(entry.end, coveredEnd) - entry.start };
+      }
+      coveredEnd = Math.max(coveredEnd ?? entry.end, entry.end);
+    }
+  }
+  return { notices, invalidTrackIds };
 }
 
 export function captionMatchesSearch(text: string, query: string): boolean {

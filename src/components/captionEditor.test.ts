@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCaptionMergeOperations, buildCaptionTimingOperations, canMergeCaptions, canSplitCaptionAtFrame, captionMatchesSearch, collectCaptionRows, isValidCaptionDurationFrames, isValidCaptionStartFrame } from "./captionEditor";
+import { buildCaptionMergeOperations, buildCaptionTimingOperations, canMergeCaptions, canSplitCaptionAtFrame, captionMatchesSearch, collectCaptionRows, getCaptionTimingNotices, isValidCaptionDurationFrames, isValidCaptionStartFrame } from "./captionEditor";
 import type { Project, TimelineItem } from "../types/project";
 
 const item = (id: string, start: number, kind: TimelineItem["kind"] = "Text"): TimelineItem => ({
@@ -24,6 +24,34 @@ const project = {
 } as Project;
 
 describe("caption editor helpers", () => {
+  it("finds gaps and nested overlaps within each track using pending frame edits", () => {
+    const p = { ...project, tracks: [
+      { track_id: "one", name: "One", items: [item("a", 0), item("b", 10), item("c", 20), item("d", 50), item("e", 90)] },
+      { track_id: "two", name: "Two", items: [item("f", 10), item("g", 40)] },
+    ] } as Project;
+    const rows = collectCaptionRows(p);
+    const result = getCaptionTimingNotices(rows, p.settings.frame_rate, {
+      a: { start_frame: 0, duration_frames: 100 },
+      b: { start_frame: 10, duration_frames: 5 },
+      c: { start_frame: 20, duration_frames: 5 },
+      d: { start_frame: 110, duration_frames: 10 },
+      e: { start_frame: 120, duration_frames: 10 },
+    });
+    expect(result.notices).toEqual({ b: { kind: "overlap", frames: 5 }, c: { kind: "overlap", frames: 5 }, d: { kind: "gap", frames: 10 } });
+    expect(result.invalidTrackIds.size).toBe(0);
+  });
+
+  it("suppresses the whole invalid track without hiding notices on other tracks", () => {
+    const p = { ...project, tracks: [
+      { track_id: "one", name: "One", items: [item("a", 0), item("b", 60)] },
+      { track_id: "two", name: "Two", items: [item("c", 0), item("d", 60)] },
+    ] } as Project;
+    for (const draft of [{ start_frame: NaN, duration_frames: 30 }, { start_frame: 0, duration_frames: 0 }, { start_frame: Number.MAX_SAFE_INTEGER, duration_frames: 30 }]) {
+      const result = getCaptionTimingNotices(collectCaptionRows(p), p.settings.frame_rate, { a: draft });
+      expect([...result.invalidTrackIds]).toEqual(["one"]);
+      expect(result.notices).toEqual({ d: { kind: "gap", frames: 30 } });
+    }
+  });
   it("lists only text clips in timeline order", () => {
     expect(collectCaptionRows(project).map(({ item: caption }) => caption.item_id))
       .toEqual(["caption-first", "caption-later"]);
@@ -118,8 +146,8 @@ describe("caption editor helpers", () => {
     const ops = buildCaptionMergeOperations(mergeProject, "left", "right", 5);
     expect(ops).toHaveLength(3);
     expect(ops[0].operation).toEqual({ type: "ClipTextSet", payload: { item_id: "left", text: "Xin chào\nViệt Nam" } });
-    expect(ops[1].operation).toMatchObject({ type: "ClipTrim", payload: { item_id: "left", new_timeline_range: { duration: { value: 60, rate: project.settings.frame_rate } } } });
-    expect(ops[2].operation).toEqual({ type: "ClipDelete", payload: { item_id: "right" } });
+    expect(ops[1].operation).toEqual({ type: "ClipDelete", payload: { item_id: "right" } });
+    expect(ops[2].operation).toMatchObject({ type: "ClipTrim", payload: { item_id: "left", new_timeline_range: { duration: { value: 60, rate: project.settings.frame_rate } } } });
     expect(canMergeCaptions({ ...mergeProject, tracks: [{ ...mergeProject.tracks[0], items: [mergeProject.tracks[0].items[0], { ...mergeProject.tracks[0].items[1], timeline_range: { ...mergeProject.tracks[0].items[1].timeline_range, start: { value: 45, rate: project.settings.frame_rate } } }] }] } as Project, "left", "right")).toBe(false);
   });
 });
