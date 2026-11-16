@@ -287,3 +287,90 @@ fn phase51_voice_and_stereo_music_ducking_survives_mp4_export() {
         "expected 48 kHz output: {stream}"
     );
 }
+
+#[test]
+fn phase51_track_gain_and_summed_sources_preserve_export_levels() {
+    let dir = temp_dir();
+    let source = dir.join("tone.wav");
+    run(
+        media_tool(BinaryKind::FFmpeg)
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=1",
+                "-ac",
+                "2",
+            ])
+            .arg(&source),
+        "generate coherent stereo source",
+    );
+    let rate = FrameRate::FPS_30;
+    let range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(30, rate));
+    let mut project = Project::new("Track gain and sum regression".into());
+    project.settings.width = 64;
+    project.settings.height = 64;
+    project.assets.push(Asset {
+        asset_id: "tone_asset".into(),
+        name: "tone.wav".into(),
+        path: source.to_string_lossy().into_owned(),
+        media_kind: MediaKind::Audio,
+        duration: Some(range.duration),
+        file_size: fs::metadata(&source).unwrap().len(),
+        dimensions: None,
+    });
+    let mut track = Track::new("Tone".into(), TrackKind::Audio);
+    track.items.push(
+        TimelineItem::new(
+            Some("tone_asset".into()),
+            "Tone".into(),
+            ItemKind::Audio,
+            range,
+            range,
+        )
+        .unwrap(),
+    );
+    project.tracks.push(track);
+    let profile = ExportProfile {
+        width: 64,
+        height: 64,
+        ..Default::default()
+    };
+    let render_level = |project: &Project, name: &str| {
+        let output = dir.join(format!("{name}.mp4"));
+        ExportEngine::render_snapshot(project, &output, &profile, None)
+            .expect("render level regression");
+        rms(
+            &decode_stereo(&output, &dir.join(format!("{name}.f32"))),
+            2,
+            0.1,
+            0.9,
+        )
+    };
+    let baseline = render_level(&project, "baseline");
+    for (name, gain, second, expected) in [
+        ("minus6", 0.5_f32, false, 0.5_f64),
+        ("plus6", 1.9952623, false, 1.9952623),
+        ("coherent_sum", 1.0, true, 2.0),
+    ] {
+        let mut edited = project.clone();
+        edited.tracks[0].volume = gain;
+        if second {
+            let mut other = edited.tracks[0].clone();
+            other.track_id = "second_track".into();
+            other.items[0].item_id = "second_item".into();
+            edited.tracks.push(other);
+        }
+        edited.validate().expect("valid regression project");
+        let measured = render_level(&edited, name) / baseline;
+        let error_db = 20.0 * (measured / expected).log10();
+        assert!(
+            error_db.abs() <= 0.5,
+            "{name}: measured ratio {measured}, expected {expected}, error {error_db} dB"
+        );
+    }
+    fs::remove_dir_all(&dir).expect("remove owned regression fixture");
+}

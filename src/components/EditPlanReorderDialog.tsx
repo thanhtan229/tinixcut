@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { EditPlanDraftReceipt, editorApi } from "../services/editorApi";
 import { Project, TimelineItem, rationalTimeToFrames } from "../types/project";
 import { getOrderedClipIds } from "./editPlanReview";
+import { useReviewContext } from "../hooks/useReviewContext";
 
 interface EditPlanReorderDialogProps {
   isOpen: boolean;
@@ -36,6 +37,7 @@ export function EditPlanReorderDialog({
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const activeRequestId = useRef<string | null>(null);
+  const context = useReviewContext(JSON.stringify([isOpen, project?.project_id, project?.revision, project?.assets, Object.keys(offlineMedia).sort(), selectedItemIds]), isOpen, () => setReceipt(null));
 
   const candidateTracks = useMemo(() => {
     if (!project) return [];
@@ -97,6 +99,12 @@ export function EditPlanReorderDialog({
     setReceipt(null);
     const requestId = crypto.randomUUID();
     activeRequestId.current = requestId;
+    const version = context.current.version;
+    const stale = () => {
+      if (context.current.version === version) return false;
+      if (context.current.isOpen) setError("The project or media changed during preview. Generate a new preview.");
+      return true;
+    };
     try {
       const preview = await editorApi.previewEditPlanReorder(
         goal,
@@ -107,10 +115,11 @@ export function EditPlanReorderDialog({
         localModel,
         requestId,
       );
+      if (stale()) return;
       if (!preview.validation.valid) throw new Error(preview.validation.issues.join("; ") || "Reorder plan validation failed");
       setReceipt(preview);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : String(previewError));
+      if (!stale()) setError(previewError instanceof Error ? previewError.message : String(previewError));
     } finally {
       if (activeRequestId.current === requestId) activeRequestId.current = null;
       setIsBusy(false);
@@ -155,7 +164,7 @@ export function EditPlanReorderDialog({
     }
   };
 
-  const operationCount = receipt?.validation.diff?.operations_evaluated ?? receipt?.plan.operations.length ?? 0;
+  const operationCount = receipt?.validation.diff?.operationsEvaluated ?? receipt?.plan.operations.length ?? 0;
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={() => !isBusy && onClose()}>

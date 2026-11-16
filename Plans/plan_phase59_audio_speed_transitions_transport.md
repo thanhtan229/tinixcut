@@ -258,3 +258,22 @@ Closes the open items from sections 8 to 10 where that is possible. Each item li
 **Why G52 was not started.** The remaining difference comes from how the preview draws the video (browser scaling inside CSS transforms, clip-paths and SVG filters). Closing it needs a preview compositor that draws every layer kind (video, image, text overlay, effects, transitions, blends) through one sampler chosen to match FFmpeg, then a re-measurement against the unchanged 0.92 threshold. That is a renderer project of its own with no evidence yet that it reaches the threshold (the earlier LUT probe showed the WebGL canvas path differs from `<video>` by about 0.03 SSIM, in an unknown direction relative to the export). It needs its own plan and a go/no-go measurement on one layer before any rewrite.
 
 **Not checked natively.** The Inspector speed field with fitting and the long-reverse export were verified by unit and render tests, not by driving the app.
+
+
+## 13. Current-source native follow-up — 2026-11-14
+
+On workspace commit `a019520523f992826c76d901eace20abd1177842`, a separate copy of `mix.tcproj` was opened in the dev app (Core Healthy). On its 180-frame Red clip the Inspector applied `0.73` as `73/100×`, shortened the timeline duration to 100 frames, and committed revision 1. Undo restored 1× / 180 frames at revision 2; Redo restored 73/100× / 100 frames at revision 3. Atomic Save to `artifacts/phase59/current_native/mix-check.tcproj` and native reopen retained the 100-frame clip. The original fixture SHA-256 remained `914049E527E623B7315A9FE9662B8300A176B004652C9AB9D9D60347D50FB322`. This verifies one fitted-speed UI case, not native long-reverse export.
+
+A native UI export of the in-memory project completed to `artifacts/phase59/current_native/native-export.mp4`; ffprobe reports 8 s H.264 1920×1080 30 fps plus AAC, and FFmpeg full decode passed. This verifies the fitted-speed project export completes, not pixel-level source-time accuracy.
+
+
+### Current installed candidate smoke — 2026-11-14
+
+`pnpm tauri build` completed for source commit `a019520523f992826c76d901eace20abd1177842`; NSIS installer SHA-256 `C1571C0B26D54B117408AA1C8F099A766A633ADB06AF2E1DA5478D71A235CFCE`. Silent installation into `%TEMP%/tinixcut-qualification-20261114-a019520` exited 0. Installed executable SHA-256 `2276B1ADC2AC79A0C3FEE1159603D1CAE85AF55304E2F718D32461C414C901D0`; its native accessibility tree showed Core Healthy and schema 19. The screenshot mapping showed the separate dev window instead of the installed window, so no installed UI action or installed GUI workflow is claimed.
+
+The installed executable's `render` command produced `artifacts/phase59/current_native/installed-export.mp4` from the saved fitted-speed copy. FFprobe reports 8 s H.264 1920×1080 at 30 fps plus AAC; full FFmpeg decode passed. This is an installed executable export smoke, not native long-reverse export or full installed acceptance. The isolated installation and both app processes remain present; existing recovery choices were not selected in the installed instance.
+
+
+### Installed GUI long-reverse qualification — 2026-11-15
+
+Installed candidate SHA-256 `2276B1ADC2AC79A0C3FEE1159603D1CAE85AF55304E2F718D32461C414C901D0` opened an independent copy of the fitted-speed project at revision 3 and displayed the red source at frame 30. Through its native GUI, imported `reverse-gradient-20s.mp4` (320×180, 30 fps, 20 s red ramp and audio), appended its 600 frames after frame 100, and enabled Reverse at revision 6. Native Export completed to `artifacts/phase59/current_native/installed-long-reverse.mp4`. The 700-frame, 23.333333 s H.264 1920×1080/30 fps and AAC output fully decoded. Red samples at clip-relative 0.5, 4.9, 5.1, 10, 15.5 and 19.4 s were 245, 189, 187, 124, 52 and 4; expected ramp values were 248.6, 192.5, 190.0, 127.5, 57.4 and 7.7 (all within 9 levels), including either side of the 5 s output join. This proves this installed GUI 20 s reverse case; it does not qualify every speed, codec or boundary. The project copy was not saved after import/reverse; its recovery snapshot holds the edits.

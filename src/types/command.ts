@@ -598,9 +598,9 @@ export interface CommandReceipt {
 }
 
 export interface DiffReport {
-  project_id: string;
-  base_revision: number;
-  operations_evaluated: number;
+  projectId: string;
+  baseRevision: number;
+  operationsEvaluated: number;
   changes: unknown[];
   warnings: string[];
 }

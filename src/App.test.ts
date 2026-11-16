@@ -25,7 +25,18 @@ import {
 } from "./components/previewVideoSync";
 import { shouldResetInspectorDrafts } from "./components/inspectorDraftSync";
 import { getMediaTimelinePlacement } from "./components/mediaTimelinePlacement";
-import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./components/frameSeek";
+import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur, timelineEndFrame } from "./components/frameSeek";
+
+describe("Timeline playback end", () => {
+  it("uses actual end frames and converts reduced timebases", () => {
+    const project = { settings: { frame_rate: { numerator: 30, denominator: 1 } }, tracks: [
+      { items: [{ timeline_range: { start: { value: 1, rate: { numerator: 1, denominator: 1 } }, duration: { value: 7, rate: { numerator: 1, denominator: 1 } } } }] },
+    ] } as Project;
+    expect(timelineEndFrame(project)).toBe(240);
+    expect(timelineEndFrame({ ...project, tracks: [] })).toBe(0);
+    expect(timelineEndFrame(null)).toBe(0);
+  });
+});
 
 describe("Exact frame seek input", () => {
   it("accepts whole frame numbers within the timeline bounds", () => {

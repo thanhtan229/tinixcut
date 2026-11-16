@@ -76,10 +76,7 @@ fn legacy_text_style(style: &TextStyle) -> TextRichStyle {
 }
 
 fn legacy_background_text_style(style: &TextStyle) -> Option<TextRichStyle> {
-    if style.background_color.is_none()
-        || style.background_opacity <= 0.0
-        || style.background_corner_radius <= 0.0
-    {
+    if style.background_color.is_none() || style.background_opacity <= 0.0 {
         return None;
     }
     Some(legacy_text_style(style))

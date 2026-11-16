@@ -13,6 +13,7 @@ pub mod lut;
 pub mod qualification;
 pub mod resolver;
 pub mod scene;
+pub mod silence;
 pub mod scopes;
 pub mod text_overlay;
 pub mod text_renderer_poc;

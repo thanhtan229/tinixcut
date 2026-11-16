@@ -19,6 +19,7 @@ export interface TimelineShortcutsCallbacks {
   onTrimTailToPlayhead: (itemId: string, newDuration: number) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  onMarkerNavigation?: (direction: 1 | -1) => void;
   onToggleSnapping: () => void;
   /** Effective shortcut map (built-in chords plus the user's overrides). */
   shortcuts?: ShortcutMap;
@@ -110,21 +111,27 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
 
       const action = resolveShortcut(e, callbacksRef.current.shortcuts ?? DEFAULT_SHORTCUTS);
       if (action === null) return;
-      const isClipboardShortcut = action === "copy" || action === "paste";
+      const isClipAllowedShortcut = action === "copy" || action === "paste" || action === "previous_marker" || action === "next_marker";
       const dialogIsOpen = typeof document !== "undefined" &&
         Boolean(document.querySelector(".dialog-backdrop, [role='dialog']"));
 
-      // Timeline clips use role=button for keyboard accessibility. Allow only
-      // clipboard shortcuts on a focused clip; keep other focused controls isolated.
+      // Timeline clips use role=button; clipboard and marker navigation remain
+      // available there while editable fields and other controls stay isolated.
       if (
         dialogIsOpen ||
         (shouldSuppressTimelineShortcutsForTarget() &&
-          !(isClipboardShortcut && isTimelineClipShortcutTarget()))
+          !(isClipAllowedShortcut && isTimelineClipShortcutTarget()))
       ) {
         return;
       }
 
       const cb = callbacksRef.current;
+
+      if (action === "previous_marker" || action === "next_marker") {
+        e.preventDefault();
+        cb.onMarkerNavigation?.(action === "previous_marker" ? -1 : 1);
+        return;
+      }
 
       // Ctrl/Cmd+C and Ctrl/Cmd+V -> same-project clip clipboard
       if (action === "copy") {

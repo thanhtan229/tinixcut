@@ -1,9 +1,9 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { EditPlanDraftReceipt, editorApi } from "../services/editorApi";
 import { OperationEnvelope } from "../types/command";
 import { Project } from "../types/project";
-import { countPlannedVideoClips } from "./editPlanReview";
+import { countPlannedVideoClips, formatDraftTime } from "./editPlanReview";
 
 interface EditPlanDraftDialogProps {
   isOpen: boolean;
@@ -25,9 +25,12 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const activeRequestId = useRef<string | null>(null);
+  const contextKey = JSON.stringify([isOpen, project?.project_id, project?.revision, project?.assets, Object.keys(offlineMedia).sort()]);
+  const context = useRef({ key: contextKey, version: 0, isOpen });
   const videoAssets = useMemo(() => project?.assets.filter((asset) => asset.media_kind === "Video") ?? [], [project]);
   const audioAssets = useMemo(() => project?.assets.filter((asset) => asset.media_kind === "Audio") ?? [], [project]);
-  const orderedSelectedIds = videoAssets.filter((asset) => selectedIds.includes(asset.asset_id)).map((asset) => asset.asset_id);
+  const orderedSelectedIds = selectedIds.filter(id => videoAssets.some(asset => asset.asset_id === id) && !offlineMedia[id]);
+  const orderedVideoAssets = [...orderedSelectedIds.map(id => videoAssets.find(asset => asset.asset_id === id)!), ...videoAssets.filter(asset => !orderedSelectedIds.includes(asset.asset_id))];
 
   useEffect(() => {
     if (!isOpen) return;
@@ -38,7 +41,24 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
     setError(null);
     setAudioAssetId("");
     setSubtitleFilePath("");
-  }, [isOpen, project?.project_id, project?.revision, videoAssets, offlineMedia]);
+  }, [isOpen, project?.project_id]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedIds(current => {
+      const next=current.filter(id => videoAssets.some(asset => asset.asset_id === id) && !offlineMedia[id]);
+      return next.length===current.length ? current : next;
+    });
+  }, [isOpen, videoAssets, offlineMedia]);
+
+  useLayoutEffect(() => {
+    if (context.current.key === contextKey) return;
+    context.current = { key: contextKey, version: context.current.version + 1, isOpen };
+    setReceipt(null);
+    if (isOpen && activeRequestId.current) {
+      setError("The project or media changed during generation. Generate a new preview when it finishes.");
+    }
+  }, [contextKey, isOpen]);
 
   if (!isOpen || !project) return null;
 
@@ -56,12 +76,21 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
     setReceipt(null);
     const requestId = crypto.randomUUID();
     activeRequestId.current = requestId;
+    const requestContextVersion = context.current.version;
+    const requestIsStale = () => {
+      if (context.current.version === requestContextVersion) return false;
+      if (context.current.isOpen) setError("The project or media changed during generation. Generate a new preview.");
+      return true;
+    };
     try {
       const draft = await editorApi.previewEditPlanDraft(goal, orderedSelectedIds, frames, audioAssetId || null, subtitleFilePath || null, plannerProvider, localModel, requestId);
+      if (requestIsStale()) return;
       if (!draft.validation.valid) throw new Error(draft.validation.issues.join("; ") || "Draft validation failed");
       setReceipt(draft);
     } catch (draftError) {
-      setError(draftError instanceof Error ? draftError.message : String(draftError));
+      if (!requestIsStale()) {
+        setError(draftError instanceof Error ? draftError.message : String(draftError));
+      }
     } finally {
       if (activeRequestId.current === requestId) activeRequestId.current = null;
       setIsBusy(false);
@@ -115,7 +144,8 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
     operation: operation.operation,
   })) ?? [];
   const plannedClips = countPlannedVideoClips(planOperations);
-  const evaluatedCount = receipt?.validation.diff?.operations_evaluated ?? planOperations.length;
+  const plannedVideos = planOperations.flatMap(({operation})=>operation.type === "ClipCreate" && operation.payload.kind === "Video" ? [operation.payload] : []);
+  const evaluatedCount = receipt?.validation.diff?.operationsEvaluated ?? planOperations.length;
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={() => !isBusy && onClose()}>
@@ -153,19 +183,23 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
           </label>
           <fieldset className="draft-media-list" disabled={isBusy || !!receipt}>
             <legend>Video order</legend>
-            {videoAssets.length === 0 ? <p className="draft-muted">No video assets in this project. Import video media first.</p> : videoAssets.map((asset) => {
+            {videoAssets.length === 0 ? <p className="draft-muted">No video assets in this project. Import video media first.</p> : orderedVideoAssets.map((asset) => {
               const offline = Boolean(offlineMedia[asset.asset_id]);
               return (
-                <label className="draft-media-row" key={asset.asset_id}>
+                <div className="draft-media-row" key={asset.asset_id}><label>
                   <input type="checkbox" checked={selectedIds.includes(asset.asset_id)} disabled={offline || isBusy || !!receipt} onChange={(event) => {
                     setReceipt(null);
                     setSelectedIds((current) => event.target.checked ? [...current, asset.asset_id] : current.filter((id) => id !== asset.asset_id));
                   }} />
-                  <span>{asset.name}{offline ? " (offline)" : ""}</span>
-                </label>
+                  <span>{asset.name}{offline ? " (offline)" : ""}</span></label>
+                  {orderedSelectedIds.includes(asset.asset_id) && ([[-1,"up"],[1,"down"]] as const).map(([delta,label])=>{
+                    const index=orderedSelectedIds.indexOf(asset.asset_id);
+                    return <button key={label} type="button" className="btn-action" aria-label={`Move ${asset.name} ${label}`} disabled={index+delta<0 || index+delta>=orderedSelectedIds.length} onClick={()=>setSelectedIds(current=>{const next=[...current];const i=next.indexOf(asset.asset_id);const j=i+delta;if(i<0||j<0||j>=next.length)return current;[next[i],next[j]]=[next[j],next[i]];return next;})}>{label === "up" ? "↑" : "↓"}</button>;
+                  })}
+                </div>
               );
             })}
-            <p className="draft-muted">Selected assets are used in the order shown above. Offline assets cannot be selected.</p>
+            <p className="draft-muted">Deterministic planner uses the selected order. Local AI may propose a different order; review the result. Offline assets cannot be selected.</p>
           </fieldset>
 
           <label className="dialog-field">
@@ -189,7 +223,10 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
           {receipt && (
             <section className="draft-review" aria-label="Draft review">
               <h3>Review changes</h3>
-              <p>{plannedClips} video clips · {evaluatedCount} validated operations · 9:16 portrait · {durationSeconds}s</p>
+              <p>{plannedClips} video clips · {evaluatedCount} validated operations</p>
+              <h4>Planned video order</h4>
+              <ol>{plannedVideos.map((clip,index)=><li key={clip.item_id ?? index}>{clip.name} · start {formatDraftTime(clip.timeline_start)} · duration {formatDraftTime(clip.duration)}</li>)}</ol>
+              <p className="draft-muted">Seconds are rounded; frame values and their rates are exact. Check the plan before applying.</p>
               {receipt.plan.referencedMediaIds.length > plannedClips && <p>Includes selected audio bed.</p>}
               {planOperations.filter((operation) => operation.operation.type === "ClipTextSet").length > 0 && <p>{planOperations.filter((operation) => operation.operation.type === "ClipTextSet").length} subtitle cues included.</p>}
               <p className="draft-muted">Provider: {receipt.provider}. Nothing has changed in the project yet.</p>
@@ -207,7 +244,7 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
                 <button className="btn-action btn-primary" type="button" onClick={handleApply} disabled={isBusy}>Apply draft</button>
               </>
             ) : (
-              <button className="btn-action btn-primary" type="submit" disabled={isBusy || selectedIds.length === 0 || !goal.trim()}>{isBusy ? "Validating…" : "Generate preview"}</button>
+              <button className="btn-action btn-primary" type="submit" disabled={isBusy || orderedSelectedIds.length === 0 || !goal.trim()}>{isBusy ? "Validating…" : "Generate preview"}</button>
             )}
           </div>
         </form>

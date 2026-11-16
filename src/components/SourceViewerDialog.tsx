@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Asset } from "../types/project";
 
 interface SourceViewerDialogProps {
+  reviewControls?: React.ReactNode;
   asset: Asset | null;
   initialSeekSeconds?: number;
   onClose: () => void;
@@ -14,7 +15,7 @@ function assetDurationSeconds(asset: Asset): number {
   return Math.max(0.001, asset.duration.value * asset.duration.rate.denominator / asset.duration.rate.numerator);
 }
 
-export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onAddRange }: SourceViewerDialogProps) {
+export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onAddRange, reviewControls }: SourceViewerDialogProps) {
   const duration = useMemo(() => asset ? assetDurationSeconds(asset) : 0, [asset]);
   const [sourceIn, setSourceIn] = useState(0);
   const [sourceOut, setSourceOut] = useState(duration);
@@ -26,6 +27,7 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onA
     setSourceOut(duration);
     const seekTo = Math.min(Math.max(initialSeekSeconds, 0), duration);
     setPlayhead(seekTo);
+    if (mediaRef.current) { mediaRef.current.pause(); mediaRef.current.currentTime = seekTo; }
   }, [asset?.asset_id, duration, initialSeekSeconds]);
 
   if (!asset) return null;
@@ -42,6 +44,7 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onA
           </div>
           <button type="button" className="btn-action" onClick={onClose}>Close</button>
         </header>
+        {reviewControls}
         <div className="source-viewer-preview">
           {asset.media_kind === "Video" ? (
             <video ref={mediaRef as RefObject<HTMLVideoElement>} src={sourceUrl} controls preload="metadata" onLoadedMetadata={(event) => {
@@ -67,9 +70,9 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onA
           <span>{Math.max(0, sourceOut - sourceIn).toFixed(3)} s selected</span>
         </div>
         <footer className="modal-dialog-actions">
-          <button type="button" className="btn-primary" disabled={!canAdd} onClick={() => onAddRange(asset, sourceIn, sourceOut)}>
+          {!reviewControls && <button type="button" className="btn-primary" disabled={!canAdd} onClick={() => onAddRange(asset, sourceIn, sourceOut)}>
             Add range to timeline
-          </button>
+          </button>}
           <button type="button" className="btn-action" onClick={onClose}>Cancel</button>
         </footer>
       </section>

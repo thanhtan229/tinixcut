@@ -128,9 +128,7 @@ impl CompositionVisualLayer {
                 || self.text_animation.is_some()
                 || !self.keyframes.is_empty()
                 || self.text_style.as_ref().is_some_and(|style| {
-                    style.background_color.is_some()
-                        && style.background_opacity > 0.0
-                        && style.background_corner_radius > 0.0
+                    style.background_color.is_some() && style.background_opacity > 0.0
                 }))
     }
 
@@ -2232,7 +2230,7 @@ impl CompositionPlan {
                     let mut filter_chain =
                         format!(
                         "{}atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS{},volume={:.3}",
-                        audio_source, src_start, src_dur, audio_tempo_filters(audio), audio.volume
+                        audio_source, src_start, src_dur, audio_tempo_filters(audio), audio.volume * audio.track_volume
                     );
 
                     if let Some(fade_in) = audio.fade_in {
@@ -2271,7 +2269,7 @@ impl CompositionPlan {
                 .join("");
             let channel_layout = ffmpeg_channel_layout(self.channels);
             filter_complex.push_str(&format!(
-                "{}amix=inputs={}:duration=longest:dropout_transition=0,asetpts=N/SR/TB,apad,atrim=duration={:.6},aformat=channel_layouts={}[outa];",
+                "{}amix=inputs={}:duration=longest:dropout_transition=0:normalize=0,asetpts=N/SR/TB,apad,atrim=duration={:.6},aformat=channel_layouts={}[outa];",
                 combined,
                 audio_tags.len(),
                 duration_secs,

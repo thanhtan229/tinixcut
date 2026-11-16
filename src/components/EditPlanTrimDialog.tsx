@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { EditPlanDraftReceipt, editorApi } from "../services/editorApi";
 import { Project, TimelineItem, rationalTimeToFrames } from "../types/project";
+import { useReviewContext } from "../hooks/useReviewContext";
 
 interface EditPlanTrimDialogProps {
   isOpen: boolean;
@@ -31,6 +32,7 @@ export function EditPlanTrimDialog({
   const [receipt, setReceipt] = useState<EditPlanDraftReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const context = useReviewContext(JSON.stringify([isOpen, project?.project_id, project?.revision, project?.assets, item, Object.keys(offlineMedia).sort()]), isOpen, () => setReceipt(null));
   const isEligible = !!project && !!item && !!selectedTrack && !selectedTrack.locked && item.kind === "Video" && !!item.asset_id &&
     !offlineMedia[item.asset_id] && currentDurationFrames > 1;
 
@@ -53,18 +55,25 @@ export function EditPlanTrimDialog({
     setIsBusy(true);
     setError(null);
     setReceipt(null);
+    const version = context.current.version;
+    const stale = () => {
+      if (context.current.version === version) return false;
+      if (context.current.isOpen) setError("The project or media changed during preview. Generate a new preview.");
+      return true;
+    };
     try {
       const preview = await editorApi.previewEditPlanTrim(
         goal,
         item.item_id,
         targetDurationFrames,
       );
+      if (stale()) return;
       if (!preview.validation.valid) {
         throw new Error(preview.validation.issues.join("; ") || "Trim plan validation failed");
       }
       setReceipt(preview);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : String(previewError));
+      if (!stale()) setError(previewError instanceof Error ? previewError.message : String(previewError));
     } finally {
       setIsBusy(false);
     }
@@ -135,7 +144,7 @@ export function EditPlanTrimDialog({
           {receipt && <section className="draft-review" aria-label="Trim plan review">
             <h3>Review clip trim</h3>
             <p>{item?.name}: {durationLabel(currentDurationFrames)} → {durationLabel(targetDurationFrames)}</p>
-            <p>{receipt.validation.diff?.operations_evaluated ?? receipt.plan.operations.length} validated operation · revision {receipt.plan.baseRevision} · {receipt.provider}</p>
+            <p>{receipt.validation.diff?.operationsEvaluated ?? receipt.plan.operations.length} validated operation · revision {receipt.plan.baseRevision} · {receipt.provider}</p>
             <p className="draft-muted">No project changes are made until Apply. Undo restores the original duration.</p>
             {receipt.plan.assumptions.map((assumption) => <p className="draft-muted" key={assumption}>{assumption}</p>)}
             {receipt.plan.warnings.map((warning) => <p className="draft-warning" key={warning}>{warning}</p>)}

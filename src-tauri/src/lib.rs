@@ -1,4 +1,6 @@
 #![allow(clippy::result_large_err)]
+mod silence_commands;
+use silence_commands::*;
 
 pub mod modules;
 
@@ -87,6 +89,7 @@ pub struct EditorEngine {
     pub jobs: JobManager,
     caption_reports: std::collections::HashMap<String, AutoCaptionReport>,
     visual_scene_reports: std::collections::HashMap<String, VisualSceneAnalysisJobReport>,
+    silence_reports: std::collections::HashMap<String, SilenceJobReport>,
     pub current_file_path: Option<PathBuf>,
     pub persisted_revision: Option<u64>,
     current_unsaved_recovery_path: Option<PathBuf>,
@@ -102,6 +105,7 @@ impl EditorEngine {
             jobs: JobManager::new(4),
             caption_reports: std::collections::HashMap::new(),
             visual_scene_reports: std::collections::HashMap::new(),
+            silence_reports: std::collections::HashMap::new(),
             current_file_path: None,
             persisted_revision: None,
             current_unsaved_recovery_path: None,
@@ -994,8 +998,8 @@ fn project_dry_run(
 }
 
 #[tauri::command]
-fn project_save(
-    app: AppHandle,
+fn project_save<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     path: Option<String>,
 ) -> Result<String, String> {
@@ -1038,8 +1042,8 @@ fn project_save(
 }
 
 #[tauri::command]
-fn project_open(
-    app: AppHandle,
+fn project_open<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Project, String> {
@@ -1108,8 +1112,8 @@ fn project_variant_create(
 }
 
 #[tauri::command]
-fn project_collect_media(
-    app: AppHandle,
+fn project_collect_media<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     destination_directory: String,
     expected_project_id: String,
@@ -1157,7 +1161,7 @@ fn project_compare_current_with_path(
 }
 
 #[tauri::command]
-fn project_check_recovery(app: AppHandle, path: String) -> Result<RecoveryStatus, String> {
+fn project_check_recovery<R: tauri::Runtime>(app: AppHandle<R>, path: String) -> Result<RecoveryStatus, String> {
     let canonical = PathBuf::from(&path);
     require_explicit_file_scope(
         &canonical,
@@ -1169,8 +1173,8 @@ fn project_check_recovery(app: AppHandle, path: String) -> Result<RecoveryStatus
 }
 
 #[tauri::command]
-fn project_save_recovery_snapshot(
-    app: AppHandle,
+fn project_save_recovery_snapshot<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     path: String,
     expected_revision: u64,
@@ -1239,8 +1243,8 @@ fn project_discard_saved_recovery(
 }
 
 #[tauri::command]
-fn project_restore_recovery(
-    app: AppHandle,
+fn project_restore_recovery<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     path: String,
     expected_project_revision: u64,
@@ -1700,8 +1704,8 @@ fn project_export_cancel(state: State<'_, AppState>, job_id: String) -> Result<b
 }
 
 #[tauri::command]
-fn media_import(
-    app: AppHandle,
+fn media_import<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<Asset, String> {
@@ -2020,8 +2024,8 @@ struct CaptionExportReport {
 }
 
 #[tauri::command]
-fn captions_import(
-    app: AppHandle,
+fn captions_import<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<CaptionImportReport, String> {
@@ -2663,6 +2667,10 @@ fn run_auto_caption_job(
             if !entries.iter().any(|entry| entry.timeline_start.is_some()) {
                 return Err("Whisper returned no transcript segments within the selected clip's source range.".to_string());
             }
+            // Cache persistence takes the same editor mutex below. The entries
+            // own their data, so release the validation guard before probing or
+            // re-locking; retaining it deadlocks every uncached analysis.
+            drop(engine);
             if let Some((source_fingerprint, config_fingerprint)) = cache_identity {
                 let latest_fingerprint = FFmpegService::source_fingerprint(Path::new(&target.asset_path))
                     .map_err(|error| format!("Could not recheck transcript source: {error}"))?;
@@ -2920,8 +2928,8 @@ fn commit_generated_captions(
 }
 
 #[tauri::command]
-fn captions_export(
-    app: AppHandle,
+fn captions_export<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     output_path: String,
 ) -> Result<CaptionExportReport, String> {
@@ -4299,6 +4307,10 @@ pub fn run() {
             media_cache_status,
             media_cache_clear,
             media_analyze_audio_levels,
+            media_silence_start,
+            media_silence_status,
+            media_silence_cancel,
+            media_silence_validate,
             media_get_compatible_preview_video,
             preview_sample_at,
             preview_rich_text_overlay,
@@ -4346,6 +4358,9 @@ fn configure_webview2_profile() {
 
 #[cfg(not(target_os = "windows"))]
 fn configure_webview2_profile() {}
+
+#[cfg(test)]
+mod background_caption_history_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4926,6 +4941,51 @@ mod tests {
         assert!(error.contains("invalid-media-import.mp4"));
         assert!(error.contains("unsupported or corrupted"));
         assert!(error.contains("ffprobe"));
+    }
+
+    #[test]
+    fn media_import_mixed_real_probe_classifies_valid_and_corrupt_files() {
+        let dir =
+            std::env::temp_dir().join(format!("tinixcut-mixed-probe-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let wav_path = dir.join("valid.wav");
+        let invalid_path = dir.join("corrupt.mp4");
+        // One tenth of a second of mono 16-bit PCM silence at 8 kHz.
+        let pcm_size: u32 = 1600;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + pcm_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&pcm_size.to_le_bytes());
+        wav.resize(wav.len() + pcm_size as usize, 0);
+        fs::write(&wav_path, wav).unwrap();
+        fs::write(&invalid_path, b"not an MP4 container").unwrap();
+
+        let valid = inspect_media_for_import(
+            "valid.wav",
+            "wav",
+            FFmpegService::probe_file(&wav_path).map_err(|e| e.to_string()),
+        )
+        .expect("valid WAV must be classified");
+        let invalid = inspect_media_for_import(
+            "corrupt.mp4",
+            "mp4",
+            FFmpegService::probe_file(&invalid_path).map_err(|e| e.to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(valid.media_kind, MediaKind::Audio);
+        assert!(valid.duration.is_some());
+        assert!(invalid.contains("corrupt.mp4"));
+        assert!(invalid.contains("unsupported or corrupted"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

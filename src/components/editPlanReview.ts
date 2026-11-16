@@ -1,6 +1,15 @@
 import { OperationEnvelope } from "../types/command";
 import { RationalTime } from "../types/project";
 
+export function formatDraftTime(time: RationalTime): string {
+  const { value, rate } = time;
+  const seconds = value * rate.denominator / rate.numerator;
+  const frames = `${value} frames at ${rate.numerator}/${rate.denominator} fps`;
+  return Number.isFinite(seconds) && rate.numerator > 0 && rate.denominator > 0
+    ? `~${seconds.toFixed(3)} s (${frames})`
+    : frames;
+}
+
 export function countPlannedVideoClips(operations: OperationEnvelope[]): number {
   return operations.filter(({ operation }) =>
     operation.type === "ClipCreate"

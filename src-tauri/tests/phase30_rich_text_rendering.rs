@@ -673,8 +673,10 @@ fn g53_keyframed_square_background_legacy_text_uses_shared_frame_renderer() {
         "keyframed legacy text must not fall back to static drawtext"
     );
 
-    // Static legacy square-background text remains on the established drawtext route.
-    let (mut static_project, _) = project_with_rich_text("Static legacy", "Legacy title", None);
+    // A square background must use the same raster as the preview too: the
+    // drawtext route ignores font weight and has different padding metrics.
+    let (mut static_project, static_item_id) =
+        project_with_rich_text("Static legacy", "Legacy title", None);
     static_project.tracks[0].items[0].text_style = Some(TextStyle {
         background_color: Some("#E02020".to_string()),
         background_opacity: 1.0,
@@ -683,9 +685,38 @@ fn g53_keyframed_square_background_legacy_text_uses_shared_frame_renderer() {
     });
     let static_plan = CompositionPlan::from_project(&static_project).expect("static plan");
     let static_layer = static_plan.visual_layers.first().expect("static layer");
-    assert!(!static_layer.uses_shared_text_overlay());
-    let (filter, _) = static_plan.build_video_filtergraph(&[], 1.0, None);
-    assert!(filter.contains("drawtext=text='Legacy title'"));
+    assert!(static_layer.uses_shared_text_overlay());
+    let preview = preview_overlay_at(&static_project, &static_item_id, RationalTime::zero(rate))
+        .expect("square background preview")
+        .expect("visible preview");
+    let overlay = render_overlay_for_layer(
+        &static_project,
+        static_plan.width,
+        static_plan.height,
+        static_layer,
+        static_layer.opacity,
+    )
+    .expect("square background export")
+    .expect("visible export overlay");
+    assert_eq!(preview.roi, overlay.roi);
+    assert_eq!(preview.roi_png_bytes, overlay.roi_png_bytes);
+    let input = TextOverlayInput {
+        item_id: static_item_id,
+        path: PathBuf::from("square-background.png"),
+        roi: overlay.roi,
+    };
+    let (_, filter) = static_plan.to_ffmpeg_export_args_with_overlays(
+        Path::new("square.mp4"),
+        23,
+        "libx264",
+        None,
+        &[input],
+    );
+    assert!(!filter.contains("drawtext"));
+    assert!(
+        filter.contains("overlay="),
+        "export must consume the shared raster"
+    );
 }
 
 #[test]

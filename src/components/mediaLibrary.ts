@@ -1,4 +1,35 @@
-import { Asset, FrameRate } from "../types/project";
+import { Asset, FrameRate, Project, rationalTimeToFrames } from "../types/project";
+
+export function mediaOccurrences(project: Project, assetId: string) {
+  return project.tracks.flatMap(track => track.items.map(item=>({item,trackName:track.name})))
+    .filter(({item}) => item.asset_id === assetId)
+    .map(({item,trackName}) => ({ itemId: item.item_id, trackName, frame: rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate) }))
+    .sort((a,b)=>a.frame-b.frame || a.itemId.localeCompare(b.itemId));
+}
+
+export function nextMediaOccurrence(project: Project, assetId: string, currentItemId: string | null, direction: 1 | -1 = 1) {
+  const items = mediaOccurrences(project, assetId);
+  const index = items.findIndex(item=>item.itemId===currentItemId);
+  if (!items.length) return null;
+  const target = index < 0 ? (direction === 1 ? 0 : items.length-1) : (index+direction+items.length)%items.length;
+  return { ...items[target], index: target, total: items.length };
+}
+
+export function selectedMediaOccurrence(project: Project, currentItemId: string | null) {
+  const item = project.tracks.flatMap(track=>track.items).find(item=>item.item_id===currentItemId);
+  if (!item?.asset_id) return null;
+  const items=mediaOccurrences(project,item.asset_id);
+  const index=items.findIndex(occurrence=>occurrence.itemId===currentItemId);
+  return {assetId:item.asset_id,index:index+1,total:items.length,trackName:items[index].trackName};
+}
+
+export function mediaUsageCounts(tracks: Project["tracks"]): Record<string, number> {
+  const counts: Record<string, number> = Object.create(null);
+  for (const track of tracks) for (const item of track.items) {
+    if (item.asset_id) counts[item.asset_id] = (counts[item.asset_id] ?? 0) + 1;
+  }
+  return counts;
+}
 
 export type MediaLibraryKindFilter = "all" | Asset["media_kind"];
 export type MediaLibraryStatusFilter = "all" | "online" | "offline";

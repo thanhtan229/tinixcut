@@ -1,3 +1,14 @@
+import { Project, rationalTimeToFrames } from "../types/project";
+
+/** The exclusive end frame shared by seeking and continuous playback. */
+export function timelineEndFrame(project: Project | null): number {
+  if (!project) return 0;
+  const rate = project.settings.frame_rate;
+  return project.tracks.reduce((end, track) => track.items.reduce((trackEnd, item) =>
+    Math.max(trackEnd, rationalTimeToFrames(item.timeline_range.start, rate)
+      + rationalTimeToFrames(item.timeline_range.duration, rate)), end), 0);
+}
+
 export type FrameSeekParseResult =
   | { frame: number; error: null }
   | { frame: null; error: string };

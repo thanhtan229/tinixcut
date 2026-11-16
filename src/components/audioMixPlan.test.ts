@@ -27,6 +27,14 @@ const options = {
 };
 
 describe("reviewed audio mix plan", () => {
+  it("rejects locked music and stale selections while allowing locked voice as read-only reference",()=>{
+    const p=fixture();p.tracks[1].name="Music";p.tracks[1].locked=true;
+    expect(()=>buildAudioMixPlan(p,options)).toThrow("Unlock track Music");
+    p.tracks[1].locked=false;p.tracks[0].locked=true;
+    expect(buildAudioMixPlan(p,options).validation.valid).toBe(true);
+    expect(()=>buildAudioMixPlan(p,{...options,musicItemIds:["missing"]})).toThrow("selected audio clips changed");
+    expect(()=>buildAudioMixPlan(p,{...options,duckDb:-60})).toThrow("Ducking must");
+  });
   it("creates peak-limited normalization and a timeline-relative duck envelope", () => {
     const plan = buildAudioMixPlan(fixture(), options);
     const normalize = plan.plan.operations.find(({ operation }) => operation.type === "ClipVolumeSet");

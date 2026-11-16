@@ -4,10 +4,12 @@ import { Project, TimelineItem } from "../types/project";
 import { CommandEnvelope } from "../types/command";
 import { buildAudioMixPlan } from "./audioMixPlan";
 import { formatGainDb } from "./audioGain";
+import { useReviewContext } from "../hooks/useReviewContext";
 
 interface Props {
   isOpen: boolean;
   project: Project | null;
+  offlineMedia: Record<string, { last_known_path: string; permission_required: boolean }>;
   onClose: () => void;
   onApply: (receipt: EditPlanDraftReceipt) => Promise<void>;
 }
@@ -17,7 +19,7 @@ function startSeconds(item: TimelineItem): number {
   return (range.start.value * range.start.rate.denominator / range.start.rate.numerator);
 }
 
-export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props) {
+export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, onApply }: Props) {
   const [voiceIds, setVoiceIds] = useState<string[]>([]);
   const [musicIds, setMusicIds] = useState<string[]>([]);
   const [normalize, setNormalize] = useState(true);
@@ -28,14 +30,15 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
   const [receipt, setReceipt] = useState<EditPlanDraftReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const context = useReviewContext(JSON.stringify([isOpen, project?.project_id, project?.revision, project?.assets, Object.keys(offlineMedia).sort()]), isOpen, () => setReceipt(null));
   const candidates = useMemo(() => project?.tracks.flatMap((track) => track.items
     .filter((item) => item.kind === "Audio" || (item.kind === "Video" && item.embedded_audio_enabled !== false))
-    .map((item) => ({ item, trackName: track.name }))) ?? [], [project]);
+    .map((item) => ({ item, trackName: track.name, locked: track.locked ?? false }))) ?? [], [project]);
 
   useEffect(() => {
     if (!isOpen || !project) return;
     setVoiceIds(candidates.filter(({ item }) => item.kind === "Video").map(({ item }) => item.item_id));
-    setMusicIds(candidates.filter(({ item }) => item.kind === "Audio").map(({ item }) => item.item_id));
+    setMusicIds(candidates.filter(({ item, locked }) => item.kind === "Audio" && !locked).map(({ item }) => item.item_id));
     setNormalize(true);
     setTargetDbfs(-18);
     setDuckDb(-12);
@@ -49,6 +52,12 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const version = context.current.version;
+    const stale = () => {
+      if (context.current.version === version) return false;
+      if (context.current.isOpen) setError("The project or media changed during analysis. Build the review plan again.");
+      return true;
+    };
     setBusy(true);
     setError(null);
     try {
@@ -57,6 +66,7 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
       if (normalize) {
         for (const assetId of new Set(selectedMusic.map((item) => item.asset_id).filter((id): id is string => Boolean(id)))) {
           levelsByAssetId[assetId] = await editorApi.analyzeAudioLevels(assetId);
+          if (stale()) return;
         }
       }
       const proposal = buildAudioMixPlan(project, {
@@ -77,11 +87,14 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
         operations: proposal.plan.operations.map(({ operationId, operation }) => ({ operation_id: operationId, operation })),
       };
       const diff = await editorApi.dryRun(envelope);
-      if (diff.project_id !== project.project_id || diff.base_revision !== project.revision) throw new Error("The project changed while the audio plan was being checked. Build the review plan again.");
+      if (stale()) return;
+      if (diff.projectId !== project.project_id || diff.baseRevision !== project.revision) throw new Error("The project changed while the audio plan was being checked. Build the review plan again.");
       setReceipt({ ...proposal, validation: { valid: true, issues: [], diff } });
     } catch (planError) {
-      setReceipt(null);
-      setError(planError instanceof Error ? planError.message : String(planError));
+      if (!stale()) {
+        setReceipt(null);
+        setError(planError instanceof Error ? planError.message : String(planError));
+      }
     } finally {
       setBusy(false);
     }
@@ -126,9 +139,9 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
           </fieldset>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Music clips</legend>
-            {candidates.filter(({ item }) => item.kind === "Audio").length === 0 ? <p className="draft-muted">No standalone audio clips are available.</p> : candidates.filter(({ item }) => item.kind === "Audio").map(({ item, trackName }) => (
-              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={musicIds.includes(item.item_id)} onChange={(event) => toggle(setMusicIds, item.item_id, event.target.checked)} />
-                <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s</span></label>
+            {candidates.filter(({ item }) => item.kind === "Audio").length === 0 ? <p className="draft-muted">No standalone audio clips are available.</p> : candidates.filter(({ item }) => item.kind === "Audio").map(({ item, trackName, locked }) => (
+              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={musicIds.includes(item.item_id)} disabled={locked} onChange={(event) => toggle(setMusicIds, item.item_id, event.target.checked)} />
+                <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s{locked ? " · locked track" : ""}</span></label>
             ))}
           </fieldset>
           <label className="draft-media-row"><input type="checkbox" checked={normalize} disabled={busy || !!receipt} onChange={(event) => { setNormalize(event.target.checked); setReceipt(null); }} /> Normalize music from source audio levels</label>
@@ -138,13 +151,14 @@ export function AudioMixDraftDialog({ isOpen, project, onClose, onApply }: Props
           {error && <p className="inline-error" role="alert">{error}</p>}
           {receipt && <div className="draft-preview" role="status"><strong>{normalizedCount} gain edits · {keyframeCount} ducking keyframes</strong>
             <p>Project revision {receipt.plan.baseRevision}; application will fail if the project changes before Apply.</p>
-            <p>Command Service dry-run checked {receipt.validation.diff?.operations_evaluated ?? operations.length} operations without changing the project.</p>
+            <p>Command Service dry-run checked {receipt.validation.diff?.operationsEvaluated ?? operations.length} operations without changing the project.</p>
             {operations.filter(({ operation }) => operation.type === "ClipVolumeSet").map(({ operation }) => operation.type === "ClipVolumeSet" && <p key={operation.payload.item_id}>{candidates.find(({ item }) => item.item_id === operation.payload.item_id)?.item.name ?? operation.payload.item_id}: {formatGainDb(operation.payload.volume)} proposed clip gain</p>)}
             {musicIds.map((itemId) => <p key={`duck-${itemId}`}>{candidates.find(({ item }) => item.item_id === itemId)?.item.name ?? itemId}: {operations.filter(({ operation }) => operation.type === "ClipKeyframeAdd" && operation.payload.item_id === itemId).length} volume keyframes for ducking</p>)}
             {receipt.plan.assumptions.map((assumption) => <p className="draft-muted" key={assumption}>{assumption}</p>)}
             {receipt.plan.warnings.map((warning) => <p className="draft-muted" key={warning}>{warning}</p>)}
           </div>}
           <div className="modal-dialog-actions">
+            {receipt && <button className="btn-action" type="button" disabled={busy} onClick={()=>{setReceipt(null);setError(null);}}>Change settings</button>}
             {!receipt ? <button className="btn-primary" type="submit" disabled={busy}>{busy ? "Analyzing…" : "Build review plan"}</button> : <button className="btn-primary" type="button" onClick={() => void apply()} disabled={busy}>{busy ? "Applying…" : "Apply reviewed mix"}</button>}
             <button className="btn-action" type="button" onClick={onClose} disabled={busy}>Cancel</button>
           </div>

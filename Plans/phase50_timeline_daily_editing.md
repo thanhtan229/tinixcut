@@ -1,5 +1,46 @@
 ﻿# Phase 50 — Timeline editing for daily use
 
+## Product increment — timeline navigation (2026-11-16)
+
+**State:** IMPLEMENTED after Owner approval. G50 remains OPEN for its separate qualification criteria. Extended native/picker test infrastructure remains deferred.
+
+
+**Implementation / verification:** Fit all and Fit selection use actual project-frame ranges and measured viewport width, including locked clips and reduced timebases. A shared navigation hook owns zoom/scroll/fit mode and exposes the same zoom methods to App shortcuts, toolbar buttons and the logarithmic slider. Fit modes recompute on resize/range changes; manual zoom or scroll exits fit. Visible playhead or viewport center anchors zoom. Ruler ticks are frame-rate-aware and generated only for the visible range plus overscan; toolbar wraps at narrow sizes. No persisted fields, commands, native boundaries, renderer or dependencies changed.
+
+Targeted geometry/shortcut run passed 36 tests; complete frontend run passed **1,044 tests / 2 skipped** (161 files passed, one skipped). Typecheck and production frontend build passed with the existing chunk-size advisory. `node scripts/qualification/background/headless-timeline.mjs` passed in headless Chromium using the real Timeline component and shortcut hook: 30-minute/300-clip fit at 360/720/1280 widths, 10-minute/100-clip fit, late multi-track/locked selection and resize, keyboard/slider anchor, manual resize, typing suppression, stale selection, reduced timebase, one-frame/empty cases, unchanged project/selection and zero mutation callbacks/page errors. No OS input, sound, native dialog, app runtime or installer was used. Evidence: `artifacts/background/timeline-navigation-latest.json`, archived report and `ten-minute-fit.png` beside it. This is frontend integration evidence, not installed/native or whole-G50 acceptance. Existing installed candidate remains unchanged and does not include this feature; no new installer was requested or built.
+
+**User outcome:** move between a complete edit overview and detailed work on selected clips without repeatedly scrolling/pressing zoom buttons. Applicable to manual edits and reviewing AI-created drafts.
+
+**Source evidence:** Timeline.tsx exposes a 1–10 pixels/frame slider and +/- controls; App.tsx clamps the same range. Content width has a 1200 px floor and an artificial 300-frame tail; tick intervals/time labels assume 30 fps. No fit-all/fit-selection action was found. Caption-wide style and media/caption search already exist elsewhere and are not proposed again.
+
+### Scope and implementation sequence
+
+1. Define view-range calculations in a small frontend helper using existing frame conversion/selection utilities. Fit all spans actual timeline items, excluding the artificial tail and an out-of-range playhead; fit selection spans the surviving selected clip IDs across tracks, including locked clips because this is navigation. Fixed screen-space padding accounts for headers/minimum clip hit width. Empty project returns a stable default view; empty selection disables fit selection. Clamp single-frame fits to a sensible maximum zoom.
+2. Wire Fit all / Fit selection into the timeline toolbar and use actual container width (excluding the sticky track header). Allow zoom below the current 1 pixel/frame minimum as required by the content range. Use one zoom path for slider, buttons and existing keyboard zoom. When manually zooming, preserve the visible playhead's screen position; if it is outside the viewport, anchor the visible viewport center. Manual zoom exits fit mode; resizing recomputes only an active fit mode. Do not invent shortcut bindings before checking existing remapping/focus rules.
+3. Make ruler spacing depend on project frame rate and visible scale; keep labels legible and generate a bounded set of ticks for the visible range plus a small buffer. This is ruler rendering, not a broad clip/track virtualization refactor. Keep ruler, clips, markers and playhead on the same coordinate conversion.
+4. Verify through focused geometry/React interaction tests and typecheck/frontend build. If needed, use the existing isolated CDP path with asset-free fixtures to inspect actual clip bounds and toolbar actions. No native picker work, sound playback, new installer or full gate matrix is required just to validate this navigation increment.
+
+### Acceptance criteria
+
+- A 60–120 s edit and the existing 10-minute/100-clip and 30-minute/300-clip ranges can be fitted into the available horizontal viewport with readable ruler labels; reusing fixture dimensions does not claim a new performance qualification.
+- Fit selection shows all selected clips with padding; no selection, stale IDs, locked tracks, a one-frame clip and empty projects are handled explicitly.
+- Repeated zoom in/out keeps the chosen anchor stable within one CSS pixel after clamping where feasible, without negative scroll positions, NaN values or runaway content width.
+- Resizing an active fit view keeps the intended range visible; manual viewing is not unexpectedly re-fitted. Time labels derive from actual project rate (tests include 25/30/60 fps and a fractional rate without expanding release support claims).
+- Navigation does not change project revision, history, item ranges, selection, saved content or export semantics; typing in an input does not trigger timeline shortcuts.
+- Narrow and wide viewport tests verify visible clip bounds and bounded tick density. Focused regressions, typecheck/build and whitespace checks pass. Existing unrelated failures are reported separately.
+
+**Non-goals:** domain/schema/API changes; new edit commands; audio/video backend changes; minimap; waveform/clip virtualization; workspace redesign; automatic follow-scroll during playback; further native test automation; closing G50 from this feature alone.
+
+**Likely touch points:** src/components/Timeline.tsx, the existing zoom callbacks in src/App.tsx, existing selection/frame utilities and a focused frontend helper/test. New dependencies are not expected.
+
+
+**Transition UI CDP follow-up, 2026-11-15:** fixed click selection order: clearing the clip selection previously also cleared the newly selected transition. Isolated real WebView now opens Inspector, edits duration 10→12, rejects excessive duration without revision change, passes Undo/Redo, removes CrossDissolve and creates DipToBlack. Final save/reopen retains the transition. Qualification build and seven background steps pass; G50 remains open for remaining native/installed acceptance. Evidence: `artifacts/background/cdp-controls.json`.
+
+
+**Pointer CDP follow-up, 2026-11-15:** pointer move, multi-select drag, trim handle and scoped persistence passed on disposable text clips in an isolated real WebView. Transition UI and broader native/installed scenarios remain open. Evidence: `artifacts/background/cdp-pointer.json`.
+
+**CDP evidence, 2026-11-15:** isolated real WebView keyboard slip/roll, multi-select group move, Undo/Redo and save/reopen passed on a 60-second ten-clip fixture. CommandService cross dissolve and export/full decode passed; pointer gestures and transition UI remain open. See `artifacts/background/cdp-workflow.json`.
+
 **Status:** Implementation and automated checks complete. Native 12-clip/60-second workflow, clipboard append/Duplicate, Undo/Redo, close-gap/history, save/reopen/export, keyboard trim/Undo and group nudge pass. Roll now preserves exact subframe source timing when split clips use a reduced source rate; code-level regression passes. Native positive slip/roll with source handles, pointer multi-select/drag and transition interaction remain open for final native qualification.
 **Updated:** 2026-11-04  
 **Plan:** [Product completion, Phases 48–57](plan_product_completion_phases48_57.md)
@@ -232,3 +273,8 @@ The runtime displayed the exact recovery conflict `Recovery save failed: Project
 ### G50 export after save/reopen — 2026-11-12
 
 - Rendering the saved `g50_workflow.tinix` (rev 27) gives a 2580-frame, 86.000 s H.264/AAC file that decodes fully and equals the timeline end. Spot frames at timeline 1400 match source frame 10820 (mean luma diff 0.4) and not offsets of +150 frames (24.0); the synthetic source repeats over short offsets, so only coarse source-range errors are excluded. Pointer drag and a 60–120 s, ≥10-clip full-length edit remain: **G50 stays OPEN**.
+
+
+### Native pointer move — 2026-11-15
+
+On the disposable `p59 mix` session, selected the Red clip (start 0, duration 100 frames) and dragged it 90 pixels along its track. The UI committed Move Clip at revision 18 with start 30 and duration 100. Undo restored start 0 at revision 19; Redo restored start 30 at revision 20. Recovery was saved, while the canonical project was not saved. This verifies one single-clip pointer drag, not multi-selection drag or the full-length G50 workflow.

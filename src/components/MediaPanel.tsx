@@ -4,6 +4,9 @@ import { filterAndSortMediaAssets, MediaLibraryKindFilter, MediaLibrarySort, Med
 import { AudioLevelReport } from "../services/editorApi";
 
 interface MediaPanelProps {
+  locatedOccurrence?: {assetId:string;index:number;total:number;trackName:string} | null;
+  onLocateAsset?: (asset: Asset, direction: 1 | -1) => void;
+  usageCounts?: Record<string, number>;
   assets: Asset[];
   onAddSampleAsset: () => void;
   onAddAssetToTimeline?: (asset: Asset) => void;
@@ -17,10 +20,14 @@ interface MediaPanelProps {
   onCancelImport?: () => void;
   onRelinkMultiple?: () => void;
   onCollectMedia?: () => void;
+  onSuggestSilenceCuts?: (asset: Asset) => void;
   onAnalyzeAudioLevels?: (asset: Asset) => Promise<AudioLevelReport>;
 }
 
 export const MediaPanel: React.FC<MediaPanelProps> = ({
+  locatedOccurrence,
+  onLocateAsset,
+  usageCounts,
   assets,
   onAddSampleAsset,
   onAddAssetToTimeline,
@@ -35,8 +42,10 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
   onRelinkMultiple,
   onCollectMedia,
   onAnalyzeAudioLevels,
+  onSuggestSilenceCuts,
 }) => {
   const [query, setQuery] = useState("");
+  const [usageFilter, setUsageFilter] = useState("all");
   const [kindFilter, setKindFilter] = useState<MediaLibraryKindFilter>("all");
   const [statusFilter, setStatusFilter] = useState<MediaLibraryStatusFilter>("all");
   const [sort, setSort] = useState<MediaLibrarySort>("name");
@@ -44,8 +53,8 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
   const [audioAnalysisBusy, setAudioAnalysisBusy] = useState<string | null>(null);
   const [audioAnalysisError, setAudioAnalysisError] = useState<Record<string, string>>({});
   const visibleAssets = useMemo(
-    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort),
-    [assets, offlineMedia, query, kindFilter, statusFilter, sort],
+    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort).filter(asset => !usageCounts || usageFilter === "all" || (usageFilter === "used" ? (usageCounts[asset.asset_id] ?? 0) > 0 : !usageCounts[asset.asset_id])),
+    [assets, offlineMedia, query, kindFilter, statusFilter, sort, usageCounts, usageFilter],
   );
 
   return (
@@ -78,6 +87,9 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
             placeholder="Search media…"
           />
           <div className="media-library-filter-row">
+            {usageCounts && <select aria-label="Filter media usage" value={usageFilter} onChange={event=>setUsageFilter(event.target.value)}>
+              <option value="all">All usage</option><option value="used">Used</option><option value="unused">Unused</option>
+            </select>}
             <select aria-label="Filter media type" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as MediaLibraryKindFilter)}>
               <option value="all">All types</option>
               <option value="Video">Video</option>
@@ -138,6 +150,12 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
                 <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-main)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {a.media_kind === "Audio" ? "♫" : a.media_kind === "Image" ? "▧" : "▶"} {a.name}
                 </div>
+                {usageCounts && <span style={{fontSize:11,color:"var(--text-muted)"}}>{usageCounts[a.asset_id] ? `Used in ${usageCounts[a.asset_id]} timeline clip${usageCounts[a.asset_id] === 1 ? "" : "s"}` : "Unused in timeline"}</span>}
+                {onLocateAsset && !!usageCounts?.[a.asset_id] && <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                  <button type="button" className="btn-action" title="Select the previous clip using this source, wrapping to the last" onClick={()=>onLocateAsset(a,-1)}>Previous use</button>
+                  <button type="button" className="btn-action" title="Select the next clip using this source, wrapping to the first" onClick={()=>onLocateAsset(a,1)}>Locate on timeline</button>
+                </div>}
+                {locatedOccurrence?.assetId===a.asset_id && <span role="status" style={{fontSize:11,color:"var(--text-muted)",overflowWrap:"anywhere"}}>Clip {locatedOccurrence.index}/{locatedOccurrence.total} · {locatedOccurrence.trackName}</span>}
                 {unavailableMedia && (
                   <div role="status" style={{ color: "var(--text-warning, #f59e0b)", fontSize: "10px", overflowWrap: "anywhere" }}>
                     {unavailableMedia.permission_required ? "Media access required" : "Media offline"} · Last path: {unavailableMedia.last_known_path}
@@ -197,6 +215,7 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
                       Overwrite
                     </button>
                   )}
+                  {!unavailableMedia && a.media_kind !== "Image" && onSuggestSilenceCuts && <button className="btn-action" onClick={() => onSuggestSilenceCuts(a)}>Silence cuts…</button>}
                   {!unavailableMedia && a.media_kind === "Video" && onAnalyzeVisualScenes && (
                     <button
                       className="btn-action"

@@ -298,3 +298,7 @@ The native UI edited a separate-ID disposable project while a second stdio MCP p
 ### G54 evidence refinement — 2026-11-05
 
 A fresh native UIA run on a unique-ID copy now visually verifies two decoded timeline states: frame 1 (two layers; 17.9 ms overlay) and frame 360 (different scene at 12 seconds). Frame 0 showed an empty interval; a readback-confirmed seek to frame 1800 failed to leave frame 360 within 3 seconds. This supersedes the broad “timeline preview remains offline” statement for this copy, but does not close G54: the prior controlled 25/30 seek run has p95 2556.53 ms and exact decoded-frame/drop/resource coverage is incomplete. Canonical/source hashes stayed unchanged. Full sample detail: `artifacts/phase54/phase54_native_uia_retest_20261105.json`.
+
+### Export outcome in session
+
+Show one dismissible terminal result for the most recent export with output path, captured preset/range and success/cancel/failure details. Reject stale job status updates by job identity; keep this transient and single-job, without persistent queue/history semantics.

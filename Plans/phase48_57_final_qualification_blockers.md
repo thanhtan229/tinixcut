@@ -1,7 +1,63 @@
 # Phase 48–57 final qualification blockers
 
-**Updated:** 2026-11-05
+**Updated:** 2026-11-15
 **Status:** Implementation and automated evidence are substantial; the plan is **not fully closed** because multiple human/native/release acceptance gates remain unverified. Keep these gates open; do not convert missing evidence into PASS.
+
+## Current reconciliation — 2026-11-15
+
+This register is the current acceptance audit. It supersedes the older checkpoints below; source criteria remain in `plan_product_completion_phases48_57.md` sections 4–9. All G48–G51/G53 remain OPEN. A fixture PASS does not imply the whole gate passed. The earlier full ten-case run remains supporting evidence; current targeted history/caption/media runs retain separate hashes and function/cleanup results. Exact installed CLI/MCP acceptance is bound to candidate `20261115-143745740` by installed payload SHA-256 in `installed-acceptance-latest.json`. Earlier installed binaries do not qualify this candidate.
+
+### G48 — settings, history and recovery
+
+| Criterion | Evidence already present | Exact remaining evidence / next check |
+|---|---|---|
+| Settings survive restart and a changed WebView profile | `cdp-recovery.json`: UI setting survives same-profile process restart. Settings round-trip/corrupt-file tests in Phase 48. | Explicit change to a fresh WebView profile while retaining the same app-settings identity; verify the installed candidate reads the same setting. No claim from changing only environment APPDATA. |
+| Corrupt settings/recovery can be handled without project loss | Native corrupt settings/recovery preservation, stale revision/fingerprint and MockRuntime scope tests. Saved recovery UI edit/autosave plus native restore/UI Save in `cdp-saved-recovery.json`. | Saved-project chooser and corrupt-settings/recovery UI handling on an exact candidate, preserving pre-existing recovery bytes. |
+| Apply→Undo→Redo→Undo→new edit, monotonic revision, save/reopen/recovery | `cdp-history-branch.json`: qualification saved/unsaved branch replacement, strictly increasing revisions, Redo cleared, recovery snapshot and save/reopen; existing restore tests remain supporting. | Exact installed history/recovery chooser sequence remains unqualified; do not treat a written snapshot as restored-chooser evidence. |
+| Retry/stale operations and old profile/recovery preservation | Command idempotency/CAS tests; recovery stale fingerprint and source byte checks. Original user data untouched by qualification. | Bind required independent QA/review and installed run to the candidate hash; document the existing migration exclusions. |
+
+### G49 — media library, relink and collect
+
+| Criterion | Evidence already present | Exact remaining evidence / next check |
+|---|---|---|
+| Folder/mixed video-audio-image import, same-name/error results, cancellation | Native mixed probe rejection, mocked App partial import UI; older native batch observations. | Current-candidate real folder/file picker, duplicate-name entries, partial error and cancel-after-current-file UI; no IPC substitute for chooser interaction. |
+| Frame-correct source In/Out without changing existing clips | Real WebView WAV 0.1–0.5 s insertion and native saved range; earlier video Source Viewer observations. | Current-candidate video frame-step/scrub boundary and insertion source-range check; waveform/metadata/filter behavior where required. |
+| Multiple relinks with review, failure rollback, history | `cdp-media.json`: wrong-kind/short/missing single relink rejects atomically; scoped valid relink, UI offline/online and Undo/Redo. | Multi-asset mapping review/partial invalid mapping/cancel on real UI; native picker remains unqualified. |
+| Collected project opens when former source is inaccessible; source hashes preserved | `cdp-media.json`: former linked source made inaccessible **after** collection; collected native/WebView reopen/Source Viewer and exact installed CLI inspect/render/full decode pass, copied/source hashes match. | This scoped independence case is satisfied. Native collect chooser/cancellation and broader installed UI remain separate. |
+| Cancel/capacity errors never leave project pointing at partial copies | Space preflight and atomic staging/rollback implementation; collision/offline/transaction tests. | Locked capacity-error fault scenario and required cancellation scope. Collection has no active-copy cancel job/API; file-chooser cancel or import cancellation must not be reported as mid-copy cancellation. Treat this as an implementation/acceptance gap if active-copy cancel is required. |
+
+### G50 — integrated daily editing
+
+| Criterion | Evidence already present | Exact remaining evidence / next check |
+|---|---|---|
+| One 60–120 s, ≥10-clip native workflow using source In/Out, insert, trim, ripple, move, gap-close, clipboard | `cdp-workflow.json`: 60 s/10 clips, slip/roll/group move/history/save/reopen/export/decode; `cdp-pointer.json`: pointer move/group/trim. Older native workflow covers additional operations. | One current-candidate combined sequence including insert/ripple/gap/clipboard; match source ranges and positions before/after save/export. Older hashes are supporting evidence only. |
+| Group edits one history entry, valid selection, locked/missing handles/transition/overlap feedback | Native command/history tests; caption/history/transition UI; pointer tests. | Current-candidate integrated negative controls and selection after deletion/Undo; verify rejection leaves project/transient selection coherent. |
+
+### G51 — audio semantics and output
+
+| Criterion | Evidence already present | Exact remaining evidence / next check |
+|---|---|---|
+| Video voice + stereo music, mute/solo/fades/crossfades/automation/speed | Current Web Audio output ±6 dB PCM/native export within ±0.5 dB; multi-source/solo/mute/node lifecycle, fade and 60 s playback. Native mix/ducking/gain/composition regressions. | One current-candidate combined stereo fixture for fade/crossfade/automation/speed and real App detach/link. Per-track meters still take per-item maxima; stereo/transition bus measurement is not qualified. |
+| Export full decode, count/layout/peak/loudness/envelope within locked tolerances | Native tests and Phase 51 locked export measurements; current range exports/graph RMS comparison and full decode. | Exact installed-candidate matrix against existing ±0.5 dB peak/±0.5 LU/±1 dB envelope and sample/layout criteria. Keep aligned offline reference separate from device capture. |
+| Detach/link does not double sound; correct playback/clock | Native link/detach/composition tests, output graph has one audible edge; pause/seek/resume/clock observations. | Real App linked-pair interactions and controlled output attribution as required. Physical A/V latency is not inferred from DOM time; calibrated hardware is not silently elevated into a new mandatory gate. |
+
+### G53 — caption and transcript workflows
+
+| Criterion | Evidence already present | Exact remaining evidence / next check |
+|---|---|---|
+| Vietnamese/English edit/split/merge/reorder/history/save/reopen | `cdp-captions.json`: Vietnamese multiline edit, move into empty range, split/merge/history/readback; real English JFK transcript. | Exact installed MCP recognition→command correction/reopen now preserves another confirmed caption. Installed text-preview/export smoke now passes on the replacement candidate after the rectangular-background fix; installed caption editing/history/picker workflow remains open. Empty-range reorder does not prove a simultaneous swap of occupied ranges. |
+| SRT/WebVTT text/timing within one quantized frame | Scoped native round trip with exact fixture times, UI imported rows and Undo; no native dialog replacement. | Current installed native caption open/save chooser where required; additional fps/offset criteria only where the plan explicitly requires them. |
+| Transcript source ranges; cancel analysis/preview no mutation | Real Whisper uncached/repeat analysis, UI cancel/no track change, rough-cut/history/save-reopen. Deadlock at cache save fixed. | Selected first real segment endpoints now match installed recognition after frame quantization, with matching source/model/CLI hashes; Source Viewer Cancel preserves tracks. This fixture case is satisfied; other transcript selections and installed GUI remain unqualified. |
+
+### Candidate and other gates
+
+Current installed candidate is `20261116-014428949`, payload SHA-256 `bd2873881c14c51022d48fac5733e92823177a6b2a0deb5eee75bb1814973941`; previous candidate `20261115-143745740` and its original failed comparison are retained unchanged. The replacement fixes square-background text export renderer selection. Exact installed native/React health, three actual text-preview screenshots versus decoded CLI export (MAE 2.161/2.316/2.320 <3/255), silent Play/Pause and graceful cleanup pass. Exact replacement CLI/MCP acceptance passes separately. Reports: `artifacts/background/installed-preview-followup.json` and `artifacts/candidates/20261116-014428949/`.
+
+These are asset-free text/transport checks with recorded CDP/medium-token runtime conditions, not whole installed UI qualification. Direct video import was rejected by release file-scope enforcement; native-picker-granted video decode/source seek and caption/persistence/history workflows remain open. No scope/security-policy expansion was used. Input desktop stayed Default, runtime mute was verified, and no live test WebViews remained. Next establish a safe private-desktop native-picker grant route before claiming video/picker acceptance.
+
+G52 remains closed only for the approved paused Exact-frame scope; G54/G56 retain their recorded passing scope. G55 still requires additional approved projects and an independent reviewer; G57 cross-version upgrade requires an authentic earlier installer. Nothing in this audit changes those decisions.
+
+## Historical supporting evidence (superseded where conflicting)
 
 ## Confirmed automated evidence
 

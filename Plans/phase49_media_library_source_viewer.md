@@ -1,8 +1,22 @@
 # Phase 49 — Media library and source viewer
 
+**Installed follow-up, 2026-11-15:** `cdp-media.json` now moves the former linked temporary source aside after collection, then verifies collected-only native reopen/online WebView Source Viewer and exact installed-candidate CLI inspect/render/full decode. Source/manifest hashes match; the former path is absent during validation and restored in finally. Installed MCP separately passes offline rejection/relink/export. Native pickers, batch cancel and installed media UI remain OPEN.
+
+**Current full-suite checkpoint, 2026-11-15:** ten CDP cases pass both function and cleanup on the rebuilt candidate, including the new G53/G49 workflows; ten background steps, 258 frontend tests (2 skipped), three focused native transcript tests and qualification build/typecheck pass. Archived run: `2026-11-15T14-16-51.815Z-932da35e-c8a8-446e-852e-b55afe86d059`. Input desktop remains Default; no native mouse/keyboard injection. Current evidence supersedes older broad statements that these WebView cases were untested; native picker/batch-cancel and installed boundaries remain open.
+
+**Extended isolated WebView qualification, 2026-11-15:** a generated owned WAV is moved to reproduce offline status. Native relink rejects wrong-kind, too-short and missing files without changing project/revision; a valid replacement clears the WebView offline indicator and allows Source Viewer. UI Undo/Redo alternates offline/online state; save/reopen retains the relink. Scoped native collect preserves the source project file and media bytes, its manifest includes the copied SHA-256, collected bytes match, and the reopened collected project is online in the WebView with Source Viewer available. Evidence: `artifacts/background/cdp-media.json`. Native pickers/batch cancel and broader installed workflows remain OPEN; direct native relink/collect is not a picker-UI qualification. Async offline refresh must be awaited independently of command revision.
+
 **Status:** Implementation and automated G49 checks complete; native qualification partially passed for exact-row import, Source Viewer playback/Cancel, and 0–15 s insertion with Undo/Redo. Batch import/cancel, relink, collect, and save/reopen remain open.  
 **Updated:** 2026-11-04  
 **Plan:** [Product completion, Phases 48–57](plan_product_completion_phases48_57.md)
+
+**Background probe, 2026-11-15:** real ffprobe and the import classification helper accepted a generated PCM WAV and rejected a corrupt MP4 with a clear error. This did not invoke the Tauri media-import command, scope enforcement, asset commit, batch UI or cancellation; G49 remains open.
+
+**Command-level assessment, 2026-11-15:** `media_import` requires the desktop Tauri `AppHandle` for asset scope. A separate Tauri MockRuntime investigation failed before its test harness started with Windows `STATUS_ENTRYPOINT_NOT_FOUND`, so there is no new command-level import or asset-commit evidence. No production import refactor was made solely to bypass this limitation.
+
+The MockRuntime loader failure was subsequently resolved with a v6 Common Controls manifest on a temporary test executable. The `media_import` desktop-runtime `AppHandle` boundary still needs a suitable test path; no command-level import or asset-commit pass is claimed.
+
+**Mock IPC continuation, 2026-11-15:** `media_import` now accepts the runtime type generically, preserving existing scope and mutation logic. The MockRuntime IPC test grants scope to a generated WAV and a corrupt MP4, rejects an unscoped WAV and corrupt file with no mutation, imports one audio asset, then checks Undo/Redo and revisions. This is not real WebView, native-dialog, installed-app or mixed-batch qualification; G49 remains open.
 
 ## Implemented in this checkpoint
 
@@ -65,3 +79,18 @@ G49 remains **OPEN** for these items. Native observations below use Windows UI A
 - Created a separate-ID disposable variant via MCP from the saved G53 fixture, then used the native Collect project media control and selected the exact new output folder. TinixCut reported one collected media item and opened the collected project with Core Healthy.
 - SHA-256 of the collected MP4 equals the manifest and the original source (`ef2400d263622da266d0a378b59ba0290ed7eb6475edae46e239d8f110b66a5e`); the source project hash also remained unchanged. Native Open then reopened the exact collected `.tinix` file and reported the correct project name and Core Healthy.
 - This covers one media item and reopen at the original collected location. Batch import/cancel, bulk relink, moving the package and broader save/reopen remain open; absolute collected paths require relink after moving. Evidence: `artifacts/phase49/phase49_native_collect_evidence_20261105.json`.
+
+
+### Mixed batch native import — 2026-11-15
+
+On the disposable `p59 mix` session, selected four files in `artifacts/phase49/g49_batch_20261115`: a valid MP4, WAV and PNG plus a deliberately corrupt MP4. Native import reported `Imported 3 of 4` and explicitly identified `bad.mp4` as unsupported/corrupt. The library displayed the three valid files, including separate `red.mp4` and `music.wav` rows with the same names as existing media. Recovery reached revision 17; the canonical project was not saved. This verifies one mixed batch and duplicate names across different paths, not cancellation, bulk relink or all G49 cases.
+
+### Media usage visibility
+
+Derive per-asset timeline occurrence counts from current canonical tracks, keyed by asset_id. Show counts and All/Used/Unused filter alongside existing filters. This is transient read-only presentation and introduces no project schema or mutation path.
+
+### Locate media occurrences
+
+Used sources expose Locate on timeline. Repeated activation cycles through occurrences in timeline order, wrapping after the last, and selects/seeks/scrolls with playback paused. All navigation is transient and does not create project commands or history entries.
+
+Media occurrence navigation supports Previous use as well as forward Locate. Both wrap; an unmatched selection starts at last/first respectively, with Clip N/total and current track context.

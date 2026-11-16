@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useImperativeHandle } from "react";
 import { waveformPathD } from "./waveformPath";
 import type { CutTransitionKind } from "../types/project";
 import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, ProjectMarker, rationalTimeToFrames, TimelineItem } from "../types/project";
@@ -8,6 +8,10 @@ import { buildSnapTargets, calculateSnap, SnapCandidate } from "../utils/timelin
 import { dbToLinearGain, formatGainDb, linearGainToDb, MAX_AUDIO_GAIN_DB, MIN_AUDIO_GAIN_DB } from "./audioGain";
 import { peakMeterPercent } from "./audioMeter";
 import { adjacentRollItems, timelineArrowDelta, TimelineClipEdge, trimRangeByKeyboard } from "./timelineKeyboard";
+
+import { useTimelineNavigation, TimelineNavigationHandle } from "../hooks/useTimelineNavigation";
+import { TIMELINE_HEADER_WIDTH, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, timelineViewRange, timelineRulerTicks, adjacentMarkerFrame } from "./timelineNavigation";
+export type { TimelineNavigationHandle } from "../hooks/useTimelineNavigation";
 
 interface TimelineProps {
   project: Project | null;
@@ -59,13 +63,10 @@ interface TimelineProps {
   onAddMarker?: (label: string, positionFrame: number) => void;
   onRenameMarker?: (markerId: string, label: string) => void;
   onDeleteMarker?: (markerId: string) => void;
-  zoom?: number;
-  onZoomIn?: () => void;
-  onZoomOut?: () => void;
-  onSetZoom?: (zoom: number) => void;
+  navigationRef?: React.Ref<TimelineNavigationHandle>;
 }
 
-const HEADER_WIDTH = 160; // Fixed width for track header column and ruler origin in pixels
+const HEADER_WIDTH = TIMELINE_HEADER_WIDTH; // Fixed width for track header column and ruler origin in pixels
 const RULER_HEIGHT = 28; // Height of the time ruler in pixels
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -108,14 +109,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   onAddMarker,
   onRenameMarker,
   onDeleteMarker,
-  zoom: externalZoom,
-  onZoomIn,
-  onZoomOut,
-  onSetZoom,
+  navigationRef,
 }) => {
-  const [internalZoom, setInternalZoom] = useState<number>(3); // pixels per frame
-  const zoom = externalZoom !== undefined ? externalZoom : internalZoom;
-  const setZoom = onSetZoom || setInternalZoom;
 
   const effectiveSelectedItemIds = React.useMemo(() => {
     if (selectedItemIds) return selectedItemIds;
@@ -156,6 +151,16 @@ export const Timeline: React.FC<TimelineProps> = ({
   } | null>(null);
 
   const tracksContainerRef = useRef<HTMLDivElement>(null);
+  const allViewRange = React.useMemo(() => timelineViewRange(project), [project]);
+  const selectedViewRange = React.useMemo(() => timelineViewRange(project, effectiveSelectedItemIds), [project, effectiveSelectedItemIds]);
+  const inOutViewRange = markIn != null && markOut != null && markIn >= 0 && markOut > markIn ? {start:markIn,end:markOut} : null;
+  const navigation = useTimelineNavigation(tracksContainerRef, allViewRange, selectedViewRange, playheadFrame, project?.project_id, inOutViewRange);
+  const { zoom } = navigation;
+  const rate = project?.settings.frame_rate ?? { numerator: 30, denominator: 1 };
+  const startFrameOf = (item: TimelineItem) => rationalTimeToFrames(item.timeline_range.start, rate);
+  const durationFramesOf = (item: TimelineItem) => rationalTimeToFrames(item.timeline_range.duration, rate);
+  useImperativeHandle(navigationRef, () => ({ zoomIn: navigation.zoomIn, zoomOut: navigation.zoomOut, locateFrame: navigation.locateFrame }));
+
 
   // Load disposable waveform cache for referenced media assets
   useEffect(() => {
@@ -225,65 +230,23 @@ export const Timeline: React.FC<TimelineProps> = ({
 
   const canSplit =
     selectedItem &&
-    playheadFrame > selectedItem.timeline_range.start.value &&
-    playheadFrame < selectedItem.timeline_range.start.value + selectedItem.timeline_range.duration.value;
+    playheadFrame > startFrameOf(selectedItem) &&
+    playheadFrame < startFrameOf(selectedItem) + durationFramesOf(selectedItem);
 
   const canFreeze =
     Boolean(onFreezeFrame) &&
     selectedItem?.kind === "Video" &&
     !selectedItem.reverse &&
-    playheadFrame >= selectedItem.timeline_range.start.value &&
-    playheadFrame < selectedItem.timeline_range.start.value + selectedItem.timeline_range.duration.value;
+    playheadFrame >= startFrameOf(selectedItem) &&
+    playheadFrame < startFrameOf(selectedItem) + durationFramesOf(selectedItem);
 
-  // Calculate maximum frame across all tracks to determine total timeline width
-  let maxFrame = 300; // minimum 10 seconds at 30fps
-  if (project) {
-    for (const track of project.tracks) {
-      for (const item of track.items) {
-        const endF = item.timeline_range.start.value + item.timeline_range.duration.value;
-        if (endF > maxFrame) {
-          maxFrame = endF;
-        }
-      }
-    }
-  }
-  if (playheadFrame > maxFrame) {
-    maxFrame = playheadFrame;
-  }
-  const totalFrames = maxFrame + 300; // extra space to the right
-  const timelineContentWidth = Math.max(1200, HEADER_WIDTH + totalFrames * zoom);
+  const tailFrames = Math.ceil(10 * rate.numerator / rate.denominator);
+  const maxFrame = Math.max(allViewRange?.end ?? 0, navigation.mode === "all" ? 0 : playheadFrame);
+  const totalFrames = Math.max(tailFrames, maxFrame + tailFrames);
+  const timelineContentWidth = Math.max(navigation.width, navigation.scrollLeft + navigation.width,
+    HEADER_WIDTH + totalFrames * zoom + 24);
+  const ticks = timelineRulerTicks(rate, zoom, navigation.scrollLeft, navigation.width, totalFrames);
 
-  // Determine tick steps adaptively based on current zoom level
-  let majorStep = 30; // 1 second at 30fps
-  let minorStep = 10;
-  if (zoom < 1.5) {
-    majorStep = 90; // 3 seconds
-    minorStep = 30;
-  } else if (zoom < 2.5) {
-    majorStep = 60; // 2 seconds
-    minorStep = 15;
-  } else if (zoom >= 6) {
-    majorStep = 30; // 1 second
-    minorStep = 5;
-  }
-
-  // Generate ticks for the ruler
-  const ticks = [];
-  for (let f = 0; f <= totalFrames; f += minorStep) {
-    const isMajor = f % majorStep === 0;
-    const x = HEADER_WIDTH + f * zoom;
-    let label = null;
-    if (isMajor) {
-      const sec = Math.floor(f / 30);
-      const m = Math.floor(sec / 60);
-      const s = sec % 60;
-      const timeStr = `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-      label = zoom >= 2.5 ? `${timeStr} (${f}f)` : timeStr;
-    }
-    ticks.push({ f, x, isMajor, label });
-  }
-
-  // Calculate playhead frame from pointer position
   const seekFromPointerEvent = (e: React.PointerEvent | React.MouseEvent) => {
     if (!tracksContainerRef.current) return;
     const rect = tracksContainerRef.current.getBoundingClientRect();
@@ -350,8 +313,8 @@ export const Timeline: React.FC<TimelineProps> = ({
       itemId: item.item_id,
       mode: e.altKey && item.asset_id && item.kind !== "Text" ? "slip" : "move",
       initialPointerX: e.clientX,
-      initialStartFrame: item.timeline_range.start.value,
-      initialDurationFrames: item.timeline_range.duration.value,
+      initialStartFrame: startFrameOf(item),
+      initialDurationFrames: durationFramesOf(item),
       currentDeltaFrames: 0,
       isMulti: e.altKey && item.asset_id && item.kind !== "Text" ? false : isMulti,
     });
@@ -405,8 +368,8 @@ export const Timeline: React.FC<TimelineProps> = ({
       itemId: item.item_id,
       mode,
       initialPointerX: e.clientX,
-      initialStartFrame: item.timeline_range.start.value,
-      initialDurationFrames: item.timeline_range.duration.value,
+      initialStartFrame: startFrameOf(item),
+      initialDurationFrames: durationFramesOf(item),
       currentDeltaFrames: 0,
       isMulti: false,
     });
@@ -492,7 +455,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       initialOffset: kf.offset.value,
       currentOffset: kf.offset.value,
       initialPointerX: e.clientX,
-      maxDuration: item.timeline_range.duration.value,
+      maxDuration: durationFramesOf(item),
     });
   };
 
@@ -509,8 +472,8 @@ export const Timeline: React.FC<TimelineProps> = ({
           for (const item of track.items) {
             if (!effectiveSelectedItemIds.has(item.item_id)) {
               unselectedClipEdges.push({
-                start: item.timeline_range.start.value,
-                end: item.timeline_range.start.value + item.timeline_range.duration.value,
+                start: startFrameOf(item),
+                end: startFrameOf(item) + durationFramesOf(item),
                 itemId: item.item_id,
               });
             }
@@ -684,8 +647,8 @@ export const Timeline: React.FC<TimelineProps> = ({
       style={{ userSelect: "none" }}
     >
       {/* Timeline Toolbar */}
-      <div className="timeline-toolbar">
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+      <div className="timeline-toolbar" style={{ flexWrap: "wrap", gap: 8, height: "auto", minHeight: 32, padding: "4px 12px", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
           <button
             className="btn-action"
             disabled={!canSplit}
@@ -726,6 +689,10 @@ export const Timeline: React.FC<TimelineProps> = ({
           >
             ◆ Marker
           </button>
+          {([-1,1] as const).map(direction=>{
+            const frame=adjacentMarkerFrame(project,playheadFrame,direction);
+            return <button key={direction} type="button" className="btn-action" disabled={frame===null} title={direction===-1?"Go to previous marker":"Go to next marker"} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Marker":"Marker ▶"}</button>;
+          })}
           <button
             className="btn-action"
             disabled={effectiveSelectedItemIds.size === 0}
@@ -741,7 +708,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
           <button
             className="btn-action"
             style={{
@@ -756,29 +723,35 @@ export const Timeline: React.FC<TimelineProps> = ({
           >
             🧲 Snap {snapEnabled ? "ON" : "OFF"}
           </button>
+          <button className="btn-action" onClick={navigation.fitAll} aria-pressed={navigation.mode === "all"} title="Show the complete edit">Fit all</button>
+          <button className="btn-action" onClick={navigation.fitSelection} disabled={!selectedViewRange} aria-pressed={navigation.mode === "selection"} title="Show selected clips across tracks">Fit selection</button>
+          <button className="btn-action" onClick={navigation.fitInOut} disabled={!inOutViewRange} aria-pressed={navigation.mode === "inout"} title="Show the marked In/Out range">Fit In/Out</button>
+          {([['In',markIn],['Out',markOut]] as const).map(([label,frame])=><button key={label} type="button" className="btn-action" disabled={frame==null} title={`Move playhead to ${label} point`} onClick={()=>{if(frame!=null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>Go to {label}</button>)}
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Zoom</span>
           <button
             className="btn-action"
             style={{ padding: "2px 8px", fontSize: "12px" }}
-            onClick={() => (onZoomOut ? onZoomOut() : setZoom(Math.max(1, zoom - 0.5)))}
+            onClick={navigation.zoomOut}
             title="Zoom Out (-)"
           >
             -
           </button>
           <input
             type="range"
-            min="1"
-            max="10"
-            step="0.5"
-            value={zoom}
-            onChange={(e) => setZoom(parseFloat(e.target.value))}
+            min={Math.log(MIN_TIMELINE_ZOOM)}
+            max={Math.log(MAX_TIMELINE_ZOOM)}
+            step="any"
+            value={Math.log(zoom)}
+            aria-label="Timeline zoom"
+            aria-valuetext={`${(zoom / 3 * 100).toLocaleString(undefined, { maximumSignificantDigits: 3 })}%`}
+            onChange={(e) => navigation.setZoom(Math.exp(Number(e.target.value)))}
             style={{ width: "70px", cursor: "pointer" }}
             title="Timeline Zoom level (= / -)"
           />
           <button
             className="btn-action"
             style={{ padding: "2px 8px", fontSize: "12px" }}
-            onClick={() => (onZoomIn ? onZoomIn() : setZoom(Math.min(10, zoom + 0.5)))}
+            onClick={navigation.zoomIn}
             title="Zoom In (+)"
           >
             +
@@ -792,6 +765,8 @@ export const Timeline: React.FC<TimelineProps> = ({
       {/* Timeline Content: Scrollable Ruler and Track Rows */}
       <div
         ref={tracksContainerRef}
+        className="timeline-scroll-viewport"
+        onScroll={(e) => navigation.onScroll(e.currentTarget.scrollLeft)}
         onClick={handleTracksAreaClick}
         style={{
           flex: 1,
@@ -1082,7 +1057,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     min={MIN_AUDIO_GAIN_DB}
                     max={MAX_AUDIO_GAIN_DB}
                     step="1"
-                    value={linearGainToDb(track.volume ?? 1)}
+                    value={Math.round(linearGainToDb(track.volume ?? 1))}
                     onPointerDown={(event) => event.stopPropagation()}
                     onChange={(event) => onSetTrackVolume?.(track.track_id, dbToLinearGain(Number(event.target.value)))}
                     style={{ minWidth: 0, width: "100%", height: "12px" }}
@@ -1188,23 +1163,23 @@ export const Timeline: React.FC<TimelineProps> = ({
                 const isDraggingThis = transientDrag?.itemId === item.item_id;
                 const isGroupMoving = transientDrag?.mode === "move" && transientDrag.isMulti && isSelected;
 
-                let startF = item.timeline_range.start.value;
-                let durF = item.timeline_range.duration.value;
+                let startF = startFrameOf(item);
+                let durF = durationFramesOf(item);
 
                 // Apply transient geometry offsets without committing to backend
                 if (transientDrag) {
                   if (transientDrag.mode === "move") {
                     if (isGroupMoving) {
-                      startF = Math.max(0, item.timeline_range.start.value + transientDrag.currentDeltaFrames);
+                      startF = Math.max(0, startFrameOf(item) + transientDrag.currentDeltaFrames);
                     } else if (isDraggingThis) {
                       startF = Math.max(0, transientDrag.initialStartFrame + transientDrag.currentDeltaFrames);
                     }
                   } else if (transientDrag.mode === "roll" && (item.item_id === transientDrag.rollLeftItemId || item.item_id === transientDrag.rollRightItemId)) {
                     if (item.item_id === transientDrag.rollLeftItemId) {
-                      durF = Math.max(1, item.timeline_range.duration.value + transientDrag.currentDeltaFrames);
+                      durF = Math.max(1, durationFramesOf(item) + transientDrag.currentDeltaFrames);
                     } else {
-                      startF = item.timeline_range.start.value + transientDrag.currentDeltaFrames;
-                      durF = Math.max(1, item.timeline_range.duration.value - transientDrag.currentDeltaFrames);
+                      startF = startFrameOf(item) + transientDrag.currentDeltaFrames;
+                      durF = Math.max(1, durationFramesOf(item) - transientDrag.currentDeltaFrames);
                     }
                   } else if (isDraggingThis) {
                     if (transientDrag.mode === "trim-left") {
@@ -1402,7 +1377,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                               onPointerDown={(e) => handleKfPointerDown(e, item, kf)}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onPlayheadChange(item.timeline_range.start.value + kf.offset.value);
+                                onPlayheadChange(startFrameOf(item) + kf.offset.value);
                               }}
                               style={{
                                 position: "absolute",
@@ -1473,8 +1448,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                     key={trans.transition_id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelectTransition?.(trans.transition_id);
                       onSelectItem(null);
+                      onSelectTransition?.(trans.transition_id);
                     }}
                     style={{
                       position: "absolute",
@@ -1580,7 +1555,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     project.assets,
                     project.settings.frame_rate
                   );
-                  const cutF = item.timeline_range.start.value + item.timeline_range.duration.value;
+                  const cutF = startFrameOf(item) + durationFramesOf(item);
                   return (
                     <button
                       key={`audio-crossfade-${item.item_id}-${nextItem.item_id}`}
@@ -1627,7 +1602,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                   if (idx >= track.items.length - 1) return null;
                   const nextItem = track.items[idx + 1];
                   if (!isRangeAdjacent(item.timeline_range, nextItem.timeline_range)) return null;
-                  const cutF = item.timeline_range.start.value + item.timeline_range.duration.value;
+                  const cutF = startFrameOf(item) + durationFramesOf(item);
                   const hasTrans = track.transitions?.some(
                     (t) => t.left_item_id === item.item_id && t.right_item_id === nextItem.item_id
                   );

@@ -1,8 +1,55 @@
 # Phase 53 — Captions, transcript and text-based editing
 
+**Controlled silence matrix — 2026-11-16:** 72 real-detector runs over four derived variants of the previously approved JFK speech fixture (clean, −16.5 dB speech, seeded synthetic noise, synthetic music), with an inserted known 5.0–6.5 s pause. Defaults −40 dBFS/600 ms/150 ms remove 1.20 s of the inserted pause on clean, 1.50 s plus 2.05 s outside it on quiet, and detect no pause on noise/music. Outside the inserted pause is NOT automatically speech; no word labels exist. Do not infer false-speech-cut rates. No default change is justified. `artifacts/background/silence-controlled/manifest.json`, `summary.json`, `matrix.log` retain hashes/settings/results. Existing JFK was previously approved for local testing, but its upstream license was not independently verified here; this single derived speaker plus synthetic noise/music is not a representative licensed multi-speaker corpus. Further licensing/annotated real speech remains open. No OS input/playback.
+
+
+**Real-speech preliminary audit, 2026-11-16:** the already-approved 11 s whisper.cpp JFK WAV produced zero proposed cuts at −50/−40/−30 dBFS (600 ms/150 ms). Existing Whisper reference is one coarse 0–10.5 s segment, not human-verified word/silence labels. False cuts/missed pauses are therefore unmeasured. No default tuning justified. Representative permission-cleared quiet speech, noise and music with verified timing are still needed. Raw evidence: `artifacts/background/silence-real-audit.log`; optional local test `cargo test --manifest-path src-tauri/Cargo.toml --test silence_real_audit -- --ignored --nocapture`.
+
+
+## Audio-derived silence suggestions — implemented, 2026-11-16
+
+
+**Delivered:** Media Library → **Silence cuts…** opens an independent audio-review dialog; Whisper/transcript/model setup is not required. Defaults: −40 dBFS, minimum 600 ms, retain 150 ms at each edge. The entire source is analyzed, not the current trimmed/speed-adjusted clip. First stream only; mono is explicitly duplicated without attenuation, stereo is tested including anti-phase input, and wider layouts are rejected. Timestamp-aware resampling preserves audio offsets/gaps on the media clock. These are low-amplitude candidates and may include quiet speech; this is not VAD or a speech-quality claim.
+
+Media service decodes through the existing app-owned FFmpeg resolver into bounded streaming PCM. Probe is capped at 10 seconds, decode at 120 seconds, source at 30 minutes, candidates at 2,000 and retained session reports at 16. Existing engine JobManager limits work (one active silence job), cancellation completes after stopping/reaping the owned subprocess, and progress derives from decoded samples. No source edits, playback, disk PCM cache or persisted project fields are introduced. UI permits deselecting intervals; proposed cut boundaries round inward to the project frame grid, retaining boundary audio. Apply revalidates source metadata fingerprint, scope, project/revision and selected indices, then uses the existing rough-cut builder/Command Service to create one new track at the playhead. It does not auto-mute or remove original tracks; the UI warns about possible overlap during later playback.
+
+**Verification:** four real native decode tests pass (stereo anti-phase/quiet pause, mono amplitude, audio in MP4 including delayed audio, missing/no-audio/corrupt input, all/none silence, cancellation after decode progress). Focused native/MockRuntime run passes 8 tests, including scope rejection, read-only analysis/source bytes, stale source/revision rejection, preserved original track/clip, one-transaction Apply→Undo→Redo→save/reopen and bounded job retention. This is MockRuntime IPC, not a real native picker/UI claim. Headless Chromium runs the actual MediaPanel/React dialog with real native-derived intervals and mocked IPC lifecycle; review/deselect, settings invalidation, stale project, cancel, empty/all-removal/error guards, repeated status-error handling and command output pass. Screenshot reviewed; no audio/video playback elements are created. Frontend suite, typecheck and production frontend/native debug builds pass; focused rustfmt and whitespace checks pass. No native app was launched/restarted, installer built or installed candidate changed.
+
+**Evidence:** `artifacts/background/silence-analysis-native.json`, `silence-decode-tests.log`, `silence-focused-native.log`, `silence-review-latest.json` (archive/report/screenshot linked by directory), `silence-native-build.log`, `silence-frontend-tests.log`. Natural speech/noise/music editorial quality and full 30-minute workload performance have not been qualified; upper bounds are safeguards, not throughput claims. G53 and other native/release gates remain OPEN.
+
+Implement one Media Library audio/video source at a time (first audio stream, mono/stereo, maximum 30 minutes). Decode 16 kHz PCM and classify conservative 10 ms windows by maximum absolute channel amplitude, avoiding stereo phase cancellation. Below-threshold audio is a candidate, not a speech detector. Expose threshold dBFS, minimum silence and retained edge padding; low speech/music/noise require review. Use the existing JobManager/resolver with progress, cancellation, timeout and bounded reports/ranges; no audio device output, dependency or persisted schema change. Analysis never mutates projects and is not cached in v1.
+
+Show candidate intervals and removed/remaining duration; allow deselecting cuts. Apply complements the chosen intervals into a dedicated new rough-cut track through the existing command builder/Command Service, one Undo step, preserving the source and original clips. Keep full source semantics explicit (not clip gain/speed/fades). Reject stale project/revision/source identity and changed analysis settings; keep native file scopes. Analysis errors/cancel/all-silent/no-candidate cases are explicit. UI and regression tests plus native synthetic PCM/decode and history/persistence checks run without native input or audible playback. Installed/picker qualification remains deferred.
+
+
+**Installed GUI regression fix, 2026-11-16:** candidate `20261116-014428949` fixes static rectangular-background text export taking drawtext while the GUI used the shared raster. Both renderer selection and legacy overlay conversion now include zero-radius visible backgrounds. Regression compares raster bytes/ROI and export overlay use; Phase 30 14 passed/1 ignored, Phase 32 20 passed/1 ignored. Old installed comparison MAE 12.386 failed; new actual GUI screenshots at frames 0/30/75 versus decoded installed export pass the unchanged <3/255 criterion (2.161/2.316/2.320). Native/React health and silent transport/cleanup pass. This is asset-free text preview only; video decode, native save/open, picker and full caption/history acceptance remain OPEN. Evidence: `artifacts/background/installed-preview-followup.json`; candidate per-run screenshots/reports are retained.
+
+
+**Installed follow-up, 2026-11-15:** exact installed MCP real Whisper recognition and command correction/reopen preserve another confirmed caption. The qualification WebView compares the selected first real segment source endpoints with that independent transcript after frame quantization, using matching source/model/CLI hashes; Source Viewer Cancel preserves project tracks. Caption UI edits/history/subtitle scope still uses qualification, with installed GUI/pickers OPEN. `installed-acceptance-latest.json` and `cdp-captions.json` retain evidence.
+
+**Current full-suite checkpoint, 2026-11-15:** ten CDP cases pass both function and cleanup on the rebuilt candidate, including the new G53/G49 workflows; ten background steps, 258 frontend tests (2 skipped), three focused native transcript tests and qualification build/typecheck pass. Archived run: `2026-11-15T14-16-51.815Z-932da35e-c8a8-446e-852e-b55afe86d059`. Input desktop remains Default; no native mouse/keyboard injection. Current evidence supersedes older broad statements that these WebView cases were untested; native picker/batch-cancel and installed boundaries remain open.
+
+**Extended isolated WebView qualification, 2026-11-15:** real UI multiline edit, chronological reorder by moving a caption into an empty range, split/merge, Undo/Redo and save/reopen row readback pass. Scoped native SRT/WebVTT exports/imports preserve Vietnamese multiline text and exact fixture timing; UI shows imported rows and Undo removes them. Native subtitle file dialogs remain unqualified. Simultaneous swapping of occupied caption ranges is not covered by this reorder case.
+
+**Reproduced/fixed transcript deadlock:** real local Whisper finished but uncached analysis held the editor mutex while trying to lock it again to save transcript cache, blocking all IPC. Releasing the validation guard once source entries own their data resolves the deadlock; the real UI analysis/cancel, analysis/repeat cache identity, transcript-selected rough cut, Undo/Redo and native save/reopen now pass on the JFK fixture. This is actual Whisper, not an injected transcript. Source/model/CLI hashes and qualification-settings restoration are recorded in `artifacts/background/cdp-captions.json`; the default CDP suite includes the case and watchdog. Remaining native picker/installed/other gate-specific acceptance remains OPEN.
+
+**Real WebView CDP evidence, 2026-11-15:** qualification app on a separate desktop passed UI merge, Undo/Redo, duration edit from 60 to 75 frames and split at frame 30 (30/45-frame pieces), plus scoped native-command save/reopen. The fixture was created through Command Service; screenshot inspection confirmed Vietnamese caption text in preview. Input desktop remained Default; test used no native mouse/keyboard injection. Native dialogs, playback and installed workflows remain separate; G53 remains open.
+
 **Status:** IMPLEMENTED WITH DEFERRED QUALIFICATION — caption editing, source transcript analysis/search across project assets, source-range rough cuts, and transcript-gap pause suggestions are implemented. A preview raster-path candidate addresses the reproduced legacy square-background caption mismatch and passes automated tests; updated-runtime native frame-60 confirmation, dirty-draft cancel and expanded subtitle qualification remain open.
 **Updated:** 2026-11-05  
 **Plan:** [Product completion, Phases 48–57](plan_product_completion_phases48_57.md)
+
+**Headless evidence, 2026-11-15:** Chromium exercised Caption Editor selection and merge guards for text/timing drafts, reversed selection, gaps and locked tracks. The UI-generated merge operations were applied through CLI and MCP to disposable project copies, with matching saved tracks, merged text and duration. This component harness does not exercise the complete App/Tauri IPC path, undo/redo, playback, export or native/installed UI; G53 remains open. Run `pnpm run test:caption:headless` after preparing the native binary and Playwright browser as described in `DEVELOPMENT_WORKFLOW.md`.
+
+**App follow-up, 2026-11-15:** headless App with mocked Tauri IPC exercises the merge UI and command envelope, using the native CLI for the successful transaction and CLI stdio for reopen; a simulated command rejection leaves the project unchanged and is displayed. This does not establish the actual Tauri IPC or caption Undo/Redo path. G53 remains open; run `pnpm run test:background` for this and related checks.
+
+**Native history follow-up, 2026-11-15:** a CommandService transaction with the three merge operations is recorded as one HistoryManager entry, then Undo/Redo and atomic save/reopen preserve the expected caption states. The test records the history entry directly and does not exercise Tauri `project_execute_command`, `project_undo` or `project_redo` integration; G53 remains open.
+
+**Mock IPC attempt, 2026-11-15:** the Tauri MockRuntime build succeeded, but its Windows test executable exited before running tests with `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139), including with System32 first in PATH. The experimental feature and test were removed; cause unknown. No IPC integration pass is claimed.
+
+**Mock IPC resolution, 2026-11-15:** loader tracing found that Common Controls 5.82 lacked `TaskDialogIndirect`; embedding the v6 manifest in a temporary executable copy allowed the test to run. The opt-in mock-runtime IPC test passed `project_execute_command`, `project_undo`, `project_redo` and project reads with revisions 1/2/3. This is not a real WebView or installed-app test; G53 remains open. See `DEVELOPMENT_WORKFLOW.md` for the runner.
+
+**Mock IPC continuation, 2026-11-15:** the test also rejects an invalid transaction without changing the revision/history and verifies save/reopen after redo through the scoped Tauri commands. This is mock-runtime evidence; G53 remains open for remaining native qualification.
 
 ## Existing capabilities retained
 
@@ -32,7 +79,7 @@
 - Native SRT import and Caption Editor display were verified on the disposable UI project: the app reported `Imported 1 caption(s) into a new track`, showed `Phase 53 caption smoke` in the caption list, and opened the cue with 00:00:00:00 start and 2.00 s duration. Closing the editor left the cue visible and unchanged.
 - Historical first edit probe (superseded below): the WebView accessibility subtree collapsed and rendered black before Apply. The input handler was fixed to copy `event.currentTarget.value` synchronously before scheduling the React updater.
 - Native edit, cancel-with-dirty-draft, timing edit, Undo/Redo for captions, save/reopen and export remain for the final blocker pass. Computer Use was unavailable; this evidence uses Windows UI Automation and direct screenshots only.
-- True audio-amplitude silence detection is not implemented; current pause cuts are transcript-gap estimates and must remain labeled as such.
+- Audio-amplitude silence suggestions are now implemented separately as documented above; existing transcript pause cuts are still transcript-gap estimates and must remain labeled as such.
 
 ## Verification
 
@@ -161,3 +208,34 @@ Loaded the exact saved disposable revision 36 fixture and sampled its compositio
 
 - Native **Export captions** wrote `artifacts/phase53/g53_20261112/captions.srt` (`00:00:01,000 → 00:00:06,000`, text `G52 Hội An – kiểm tra`: frame 30 / 150-frame duration, diacritics intact). Native **Import captions** of that file created a new track with a caption at start 30, duration 150 (exact frame match); Undo removed it.
 - Frontend 184/184 and Rust caption/SRT/VTT unit tests (9) pass. Native caption split/merge/reorder, WebVTT, transcript-derived ranges and analysis cancel were not re-run: **G53 stays OPEN**.
+
+
+### Native caption draft and timing follow-up — 2026-11-14
+
+On current workspace commit `a019520523f992826c76d901eace20abd1177842`, the disposable Phase 59 project copy received a new 150-frame text clip. In Caption editor, typing `Xin chào — test` enabled Apply/Discard; Discard cleared the draft and left revision 4 unchanged. Editing text to `Xin chào` and duration to 120 frames, then Apply, committed one transaction at revision 5; the editor showed 0.00–4.00 s and 120 frames. Closing and Undo restored the 150-frame text clip at revision 6. The copy's last canonical save was revision 3; later edits were in memory and recovery. This covers draft discard and one timing/text undo case, not split/merge, WebVTT, transcript or the full G53 gate.
+
+The same unsaved copy split the 150-frame caption at playhead frame 60 in one transaction (revision 7); the editor showed 0–2 s and 2–5 s. Merge was attempted but its button stayed disabled; the cause was not established, so merge remains unqualified.
+
+### Merge follow-up — 2026-11-15
+
+On the existing unsaved split fixture, the screenshot showed only the first checkbox selected before the retry. A further click on the second checkbox did not establish both selections or enable Merge; the following accessibility action returned `Accessibility state unavailable for window 2431886`. Source inspection shows Merge requires exactly two selected adjacent captions and clean drafts; the recovery snapshot confirms the ranges are adjacent. The input/selection result remains unverified, so this is not established as a product defect and G53 remains open.
+
+
+### Caption merge correction and native verification — 2026-11-15
+
+The earlier disabled Merge state was explained by both split captions being empty, which the editor deliberately rejects. With both adjacent captions selected and nonempty (`Xin chào`, `Việt Nam`), native Merge failed atomically: the trim extended the left caption before the right caption was removed, violating overlap validation. `buildCaptionMergeOperations` now deletes the right item before extending the left, while retaining the single Command Service transaction. The focused frontend suite passed 7/7 and production frontend build passed (existing chunk-size advisory).
+
+After restarting the workspace-owned `pnpm tauri dev` process, Vite served the changed operation order and TinixCut reported Core Healthy. Restored the disposable `mix-check.tcproj` recovery revision 8; native Merge committed at revision 10, producing one 150-frame caption. Undo revision 11 restored adjacent 60/90-frame captions; Redo revision 12 restored the merged caption. Save and native reopen retained one 150-frame caption; the saved file contains `Xin chào\nViệt Nam` at revision 12. The restart interrupted only this disposable test session; its recovery was retained and restored. G53 remains OPEN for the other acceptance cases.
+
+
+### WebVTT native round trip — 2026-11-15
+
+From the saved disposable merged-caption project, native Export captions selected WebVTT and wrote `artifacts/phase53/g53_20261115_roundtrip.vtt`. The UTF-8 file contained `WEBVTT`, a 00:00:00.000–00:00:05.000 cue and both Vietnamese text lines. Native Import captions created one caption on a new track at frame 0 for 150 frames, displaying the text; Undo removed the imported track. The canonical project was not saved after this import. This is one WebVTT round trip; broader G53 transcript and caption workflow qualification remains open.
+
+### Source-time silence review interaction
+
+Provide Locate for each candidate, an independently movable source-frame marker and a cut/keep map computed from the same frame-aligned ranges as Apply. Navigation preserves selection and does not mutate the project or start playback. The review marker uses source time, distinct from the edited timeline. Further native-picker acceptance is deferred by Owner; prioritize focused behavior checks for product changes.
+
+### Caption track review scope
+
+Caption Editor supports a track-id filter and Replace in track for unlocked captions within that scope. All tracks preserves Replace all behavior; search only filters visible rows. Switching scope retains edits and clears merge selection. Apply covers pending edits across tracks, clearly disclosed in the dialog.

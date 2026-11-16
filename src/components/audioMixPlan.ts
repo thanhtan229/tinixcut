@@ -104,6 +104,10 @@ export function buildAudioMixPlan(project: Project, options: AudioMixPlanOptions
   if (voiceItems.some((item) => !item) || musicItems.some((item) => !item)) {
     throw new Error("The selected audio clips changed. Refresh the mixer plan and review it again.");
   }
+  for (const id of options.musicItemIds) {
+    const track=project.tracks.find(candidate=>candidate.items.some(item=>item.item_id===id));
+    if (track?.locked) throw new Error(`Unlock track ${track.name} before editing its music clips.`);
+  }
   if (options.normalizeTargetDbfs !== null && (!Number.isFinite(options.normalizeTargetDbfs) || options.normalizeTargetDbfs > 0 || options.normalizeTargetDbfs < -60)) {
     throw new Error("Normalization target must be between −60 and 0 dBFS.");
   }

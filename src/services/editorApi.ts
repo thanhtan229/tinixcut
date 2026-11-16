@@ -1,3 +1,4 @@
+import type { SilenceConfig, SilenceJobReport } from "../components/silenceCuts";
 import { invoke } from "@tauri-apps/api/core";
 import { HealthStatus } from "../types/health";
 import { Asset, ClipLut, Project } from "../types/project";
@@ -348,6 +349,10 @@ export interface CurrentProjectSession {
 }
 
 export const editorApi = {
+  startSilenceAnalysis: (assetId: string, config: SilenceConfig) => invoke<SilenceJobReport>("media_silence_start", { assetId, config }),
+  silenceAnalysisStatus: (jobId: string) => invoke<SilenceJobReport>("media_silence_status", { jobId }),
+  cancelSilenceAnalysis: (jobId: string) => invoke<void>("media_silence_cancel", { jobId }),
+  validateSilenceAnalysis: (jobId: string) => invoke<SilenceJobReport>("media_silence_validate", { jobId }),
   getAppSettings: () => invoke<AppSettings>("app_settings_get"),
   describeLut: (path: string) => invoke<ClipLut>("lut_describe", { path }),
   projectChapters: () => invoke<ChapterReport>("project_chapters"),

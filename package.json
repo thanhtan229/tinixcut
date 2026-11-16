@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:caption:headless": "node scripts/qualification/background/headless-caption.mjs",
+    "test:background": "node scripts/qualification/background/run-background.mjs",
+    "test:cdp": "node scripts/qualification/background/run-cdp.mjs",
     "test:all": "vitest run && cargo test --manifest-path src-tauri/Cargo.toml",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",

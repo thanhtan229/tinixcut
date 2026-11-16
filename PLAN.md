@@ -3,7 +3,7 @@
 ## 1. Plan Metadata
 
 **Project:** Automation-First CapCut-like Desktop Video Editor  
-**Plan status:** PHASES 0–25 IMPLEMENTED; PHASE 26 QUALIFICATION OPEN; PHASES 27–36 IMPLEMENTED WITH DEFERRED QUALIFICATION
+**Plan status:** Implementation recorded through Phase 59 and subsequent fixes; qualification remains open within the scopes in PROJECT_STATUS.md. Latest product increments: timeline navigation and reviewed audio-derived silence cuts implemented (2026-11-16); extended native qualification deferred by Owner.
 **Plan date:** 2026-10-03  
 **Inputs:** `RESEARCH.md`, `ARCHITECTURE.md`  
 **Primary target:** Windows 10/11 desktop first  
@@ -1860,3 +1860,21 @@ See Plans/plan_editor_mcp_ai_roadmap.md for Phases 37–47, dependencies and acc
 The current editor/MCP/AI continuation roadmap is [Phase 37–47](Plans/plan_editor_mcp_ai_roadmap.md); Phase 47 acceptance is in [its phase plan](Plans/phase47_webview_profile_and_recovery_consistency.md).
 
 The next ten phases are defined in [Product completion — Phases 48–57](Plans/plan_product_completion_phases48_57.md). Phase-specific execution notes: [Phase 52](Plans/phase52_visual_canvas_keyframes.md), [Phase 53](Plans/phase53_caption_transcript_editor.md), [Phase 55](Plans/phase55_content_duration_edit_plans.md), and [Phase 56](Plans/phase56_mcp_edit_plan_duration_parity.md). Phases 48–53 automated implementation is complete with documented limits/native gates deferred; Phase 54 has validated synthetic workload fixtures and cache management but still lacks G54 UI/resource measurements; Phase 55 is in progress with reviewed source-range editing and exact/advisory duration scheduling implemented; Phase 56 now includes matching MCP duration semantics and a no-clobber workflow manifest, while resume checkpoints/retry/batch behavior remains open.
+
+
+## Product-priority review — 2026-11-16
+
+Owner direction: prioritize user-facing improvements and proportionate regression checks; defer expansion of native/picker qualification infrastructure. Existing gates remain open until their actual criteria are met. This is a priority change, not release acceptance or a waiver of data-safety requirements.
+
+Source/roadmap reconciliation:
+
+| Area | Actual state and user value | Recommended action |
+|---|---|---|
+| Core editor, media, captions and audio (48–53) | Most planned operations already exist; many open rows concern qualification, not missing features. Search/filter/batch import, caption search/replace and track-wide text styling already exist. | Maintain focused regressions and fix reproducible user-workflow blockers; do not duplicate implemented features. |
+| Timeline navigation (50 follow-up) | Source has +/- and a 1–10 pixels/frame slider, no fit-all/fit-selection action; ruler labels assume 30 fps and fixed frame steps. Long projects require substantial horizontal navigation. | **Implemented after approval:** fit all, fit selection, anchored zoom and adaptive ruler. Source tests/headless React integration/typecheck/build pass; installed/native qualification remains separate. Detailed scope/results in phase50_timeline_daily_editing.md. |
+| Transcript-based editing (53 follow-up) | Rough-cut selection and pause-cut drafts exist; pauses are explicitly estimated from transcript gaps. Audio-amplitude silence suggestions are now implemented separately; see the Phase 53 follow-up. | Implemented after Owner approval: separate audio-derived silence suggestions with review/cancel and new-track Apply. Synthetic decode, MockRuntime history/persistence and headless UI evidence pass; natural-speech quality and native qualification remain separate. Do not equate low amplitude with absence of speech. |
+| AI drafting (55–56) | Brief/duration planning and MCP parity are implemented within their recorded scope; G55 still needs additional approved real briefs/projects and independent review. | Gather user-representative inputs before expanding planner features or building a new evaluation framework. |
+| Advanced capabilities (58–59) | LUT/chroma/scopes, chapters/audio sync, loudness/ducking, speed/reverse and transport have implementations. | Improve concrete workflow friction before adding another effect or rebuilding existing capability. |
+| Release/picker/upgrade evidence | Installed health and scoped text preview pass on the retained candidate; video/pickers and remaining gate-specific rows are open. | Keep evidence/limits visible; schedule broader qualification at a release checkpoint. |
+
+The recommendation assumes the next milestone is making everyday video editing more convenient, as defined in the product-completion plan; there is no user telemetry or timed usability study establishing frequency or time savings. Timeline work is proposed because it benefits manual and AI-assisted edits without introducing new media semantics. The Owner subsequently approved the timeline scope; implementation and proportionate frontend checks are now complete. Extended native qualification remains deferred.

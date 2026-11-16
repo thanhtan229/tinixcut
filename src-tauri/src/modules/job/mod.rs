@@ -15,6 +15,7 @@ pub enum JobKind {
     Waveform,
     Transcription,
     VisualAnalysis,
+    SilenceAnalysis,
     Export,
 }
 
@@ -45,6 +46,19 @@ pub struct JobManager {
 }
 
 impl JobManager {
+    pub fn forget_terminal(&mut self, id: &str) -> bool {
+        if self.jobs.get(id).is_some_and(|j| {
+            matches!(
+                j.status,
+                JobStatus::Completed | JobStatus::Failed(_) | JobStatus::Cancelled
+            )
+        }) {
+            self.jobs.remove(id);
+            true
+        } else {
+            false
+        }
+    }
     pub fn new(max_concurrency: usize) -> Self {
         Self {
             jobs: HashMap::new(),

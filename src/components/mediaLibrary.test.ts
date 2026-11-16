@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { Asset } from "../types/project";
-import { filterAndSortMediaAssets, sourceRangeSecondsToFrames } from "./mediaLibrary";
+import { Asset, Project } from "../types/project";
+import { filterAndSortMediaAssets, sourceRangeSecondsToFrames, mediaUsageCounts, nextMediaOccurrence, selectedMediaOccurrence } from "./mediaLibrary";
+
+describe("mediaUsageCounts", () => {
+  it("counts occurrences across tracks by identity and recomputes after history changes", () => {
+    const tracks = [{items:[{asset_id:"a"},{asset_id:"a"},{asset_id:null}]},{items:[{asset_id:"b"},{asset_id:"a"}]}] as Project["tracks"];
+    expect({...mediaUsageCounts(tracks)}).toEqual({a:3,b:1});
+    const prior = tracks.slice(0,1);
+    expect({...mediaUsageCounts(prior)}).toEqual({a:2});
+    expect({...mediaUsageCounts(tracks)}).toEqual({a:3,b:1});
+    expect({...mediaUsageCounts([])}).toEqual({});
+  });
+});
 
 const assets: Asset[] = [
   { asset_id: "video-z", name: "Zebra.mp4", path: "z", media_kind: "Video", file_size: 900 },
@@ -29,5 +40,29 @@ describe("filterAndSortMediaAssets", () => {
     expect(sourceRangeSecondsToFrames(1.25, 3.5, { numerator: 30, denominator: 1 })).toEqual({ start: 38, duration: 67 });
     expect(sourceRangeSecondsToFrames(2, 2, { numerator: 30, denominator: 1 })).toBeNull();
     expect(sourceRangeSecondsToFrames(Number.NaN, 3, { numerator: 30, denominator: 1 })).toBeNull();
+  });
+});
+
+
+describe("nextMediaOccurrence",()=>{
+  it("orders by timeline time, skips other sources, wraps and leaves project unchanged",()=>{
+    const rate={numerator:30,denominator:1};
+    const project={settings:{frame_rate:rate},tracks:[{items:[{item_id:"late",asset_id:"a",timeline_range:{start:{value:90,rate}}},{item_id:"other",asset_id:"b",timeline_range:{start:{value:0,rate}}}]},{items:[{item_id:"early",asset_id:"a",timeline_range:{start:{value:10,rate}}}]}]} as Project;
+    project.tracks[0].name="Voice"; project.tracks[1].name="B-roll";
+    const before=JSON.stringify(project);
+    expect(selectedMediaOccurrence(project,"late")).toEqual({assetId:"a",index:2,total:2,trackName:"Voice"});
+    expect(selectedMediaOccurrence(project,"deleted")).toBeNull();
+    expect(nextMediaOccurrence(project,"a",null)).toEqual({itemId:"early",trackName:"B-roll",frame:10,index:0,total:2});
+    expect(nextMediaOccurrence(project,"a","early")?.itemId).toBe("late");
+    expect(nextMediaOccurrence(project,"a","late")?.itemId).toBe("early");
+    expect(nextMediaOccurrence(project,"missing",null)).toBeNull();
+    expect(nextMediaOccurrence(project,"a","deleted")?.itemId).toBe("early");
+    expect(nextMediaOccurrence(project,"a","early",-1)?.itemId).toBe("late");
+    expect(nextMediaOccurrence(project,"a","late",-1)?.itemId).toBe("early");
+    expect(nextMediaOccurrence(project,"a",null,-1)?.itemId).toBe("late");
+    expect(nextMediaOccurrence(project,"a","deleted",-1)?.itemId).toBe("late");
+    expect(nextMediaOccurrence(project,"b","other",-1)?.itemId).toBe("other");
+    expect(nextMediaOccurrence(project,"missing",null,-1)).toBeNull();
+    expect(JSON.stringify(project)).toBe(before);
   });
 });

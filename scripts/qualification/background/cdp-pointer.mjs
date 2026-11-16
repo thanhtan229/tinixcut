@@ -1,0 +1,38 @@
+import { chromium } from 'playwright';
+import { writeFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const browser=await chromium.connectOverCDP('http://127.0.0.1:9444',{timeout:10000});
+const report={scope:'CDP pointer events in isolated real WebView',steps:[]};
+const timer=setTimeout(()=>process.exit(124),60000);
+try {
+ const page=browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri|localhost/.test(p.url()));
+ const invoke=(command,args={})=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});
+ const get=()=>invoke('project_get_current');const p=await get();
+ const t=value=>({value,rate:{numerator:30,denominator:1}});
+ const operations=[{operation_id:'ptr_track',operation:{type:'TrackCreate',payload:{track_id:'ptr',name:'Pointer',kind:'Video'}}},...[0,1].map(n=>({operation_id:`ptr_${n}`,operation:{type:'ClipCreate',payload:{track_id:'ptr',item_id:`ptr_${n}`,name:`Pointer ${n}`,kind:'Text',timeline_start:t(60+n*120),duration:t(60)}}}))];
+ await invoke('project_execute_command',{envelope:{schema_version:p.schema_version,project_id:p.project_id,base_revision:p.revision,transaction_id:'ptr_seed',operations}});
+ await invoke('project_save',{path:process.env.TINIXCUT_CDP_PROJECT});await page.reload();
+ const clip=n=>page.getByRole('group',{name:new RegExp(`^Pointer ${n}, Text clip`)});
+ const poll=async predicate=>{for(let i=0;i<60;i++){const p=await get();if(predicate(p))return p;await new Promise(r=>setTimeout(r,100));}throw new Error('Pointer edit not committed');};
+ const drag=async(locator,delta)=>{const b=await locator.boundingBox();assert.ok(b);await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2+delta,b.y+b.height/2,{steps:10});await page.mouse.up();};
+ const initial=await get();const box=await clip(0).boundingBox();const px=box.width/60;
+ await drag(clip(0),30*px);
+ const moved=await poll(p=>p.revision>initial.revision);
+ assert.ok(moved.tracks[0].items[0].timeline_range.start.value>60);
+ report.steps.push('Pointer single clip move');
+ await page.getByRole('button',{name:/Undo/}).first().click();await poll(p=>p.tracks[0].items[0].timeline_range.start.value===60);
+ await clip(0).click();await clip(1).click({modifiers:['Control']});
+ const beforeGroup=await get();await drag(clip(0),20*px);
+ const group=await poll(p=>p.revision>beforeGroup.revision);
+ const delta=group.tracks[0].items[0].timeline_range.start.value-60;
+ assert.ok(delta>0);assert.equal(group.tracks[0].items[1].timeline_range.start.value-180,delta);
+ report.steps.push('Pointer multi-select group move');
+ const handle=page.getByLabel('Trim end of Pointer 0',{exact:true});
+ const beforeTrim=await get();await drag(handle,10*px);
+ const trimmed=await poll(p=>p.revision>beforeTrim.revision);
+ assert.ok(trimmed.tracks[0].items[0].timeline_range.duration.value>60);
+ report.steps.push('Pointer trim handle');
+ await invoke('project_save',{path:process.env.TINIXCUT_CDP_PROJECT});
+ const reopened=await invoke('project_open',{path:process.env.TINIXCUT_CDP_PROJECT});assert.deepEqual(reopened.tracks,trimmed.tracks);
+ report.status='passed';console.log('PASS: isolated WebView pointer move/group/trim and command persistence');
+}catch(error){report.status='failed';report.error=String(error);throw error;}finally{clearTimeout(timer);writeFileSync('artifacts/background/cdp-pointer.json',JSON.stringify(report,null,2));await browser.close();}

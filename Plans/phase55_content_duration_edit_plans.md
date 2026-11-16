@@ -147,3 +147,6 @@ Verification rerun in the isolated Phase 55 Cargo target: visual-scene unit test
 ### Runtime IPC provenance correction — 2026-11-05
 
 The earlier note that native WebView logged `invoke` errors is superseded. The errors were captured from a standalone Paseo browser tab without Tauri internals, as proven by `artifacts/phase54/phase54_invoke_warning_provenance_20261105.json`. A direct capture of the current workspace TinixCut shows Core Healthy. This does not alter G55's external review/sample gate or its remaining native workflow evidence.
+### Source ordering in draft setup
+
+Selected video sources can be reordered before preview; unavailable or removed sources are removed from selection. Deterministic planner preserves supplied order, while the optional local AI may propose a different order that requires review.

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { OperationEnvelope } from "../types/command";
-import { countPlannedVideoClips, getOrderedClipIds } from "./editPlanReview";
+import { countPlannedVideoClips, formatDraftTime, getOrderedClipIds } from "./editPlanReview";
+
+describe("formatDraftTime", () => {
+  it("shows rounded seconds alongside exact frame time for integer and fractional rates", () => {
+    expect(formatDraftTime({ value: 150, rate: { numerator: 30, denominator: 1 } })).toBe("~5.000 s (150 frames at 30/1 fps)");
+    expect(formatDraftTime({ value: 30, rate: { numerator: 30000, denominator: 1001 } })).toBe("~1.001 s (30 frames at 30000/1001 fps)");
+    expect(formatDraftTime({ value: 0, rate: { numerator: 0, denominator: 1 } })).toBe("0 frames at 0/1 fps");
+  });
+});
 
 describe("countPlannedVideoClips", () => {
   it("counts only sourced video clips, excluding audio and subtitle items", () => {

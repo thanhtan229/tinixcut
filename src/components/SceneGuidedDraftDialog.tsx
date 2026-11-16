@@ -4,10 +4,12 @@ import { OperationEnvelope } from "../types/command";
 import { Project } from "../types/project";
 import { countPlannedVideoClips } from "./editPlanReview";
 import { applySceneRangeInputs, initialSceneRangeInputs, SceneRangeInputs } from "./sceneRangeDraft";
+import { useReviewContext } from "../hooks/useReviewContext";
 
 interface Props {
   report: VisualSceneAnalysisReport | null;
   project: Project | null;
+  offlineMedia: Record<string, { last_known_path: string; permission_required: boolean }>;
   onClose: () => void;
   onApply: (receipt: EditPlanDraftReceipt) => Promise<void>;
 }
@@ -26,7 +28,7 @@ function canvasDimensions(preset: SceneCanvasPreset): string {
   }
 }
 
-export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Props) {
+export function SceneGuidedDraftDialog({ report, project, offlineMedia, onClose, onApply }: Props) {
   const [goal, setGoal] = useState("");
   const [selectedSceneIds, setSelectedSceneIds] = useState<string[]>([]);
   const [receipt, setReceipt] = useState<EditPlanDraftReceipt | null>(null);
@@ -46,6 +48,13 @@ export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Pr
   const [targetCanvas, setTargetCanvas] = useState<SceneCanvasPreset | "">("");
   const [openingTitle, setOpeningTitle] = useState("");
   const [titleTemplate, setTitleTemplate] = useState<SceneTitleTemplate | "">("");
+  const context = useReviewContext(JSON.stringify([report, project?.project_id, project?.revision, project?.assets, Object.keys(offlineMedia).sort()]), !!report && !!project, () => { setReceipt(null); setSuggestion(null); });
+
+  const staleRequest = (version: number) => {
+    if (context.current.version === version) return false;
+    if (context.current.isOpen) setError("Dự án hoặc media đã thay đổi. Hãy tạo lại preview hoặc đề xuất.");
+    return true;
+  };
 
   useEffect(() => {
     if (!report) return;
@@ -89,6 +98,7 @@ export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Pr
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const version = context.current.version;
     setBusy(true);
     setError(null);
     setReceipt(null);
@@ -110,16 +120,18 @@ export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Pr
       const frameRate = project.settings.frame_rate;
       const targetFrames = targetSeconds === null ? null : Math.round(targetSeconds * frameRate.numerator / frameRate.denominator);
       const next = await editorApi.previewSceneGuidedEditPlan(goal, rangedReport, selectedSceneIds, targetFrames, durationMode === "exact", mustKeepSceneIds, mustOmitSceneIds, targetCanvas || null, openingTitle.trim() || null, titleTemplate || null, allowedAssetIds);
+      if (staleRequest(version)) return;
       if (!next.validation.valid) throw new Error(next.validation.issues.join("; ") || "Scene draft validation failed");
       setReceipt(next);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : String(previewError));
+      if (!staleRequest(version)) setError(previewError instanceof Error ? previewError.message : String(previewError));
     } finally {
       setBusy(false);
     }
   };
 
   const suggest = async () => {
+    const version = context.current.version;
     setBusy(true);
     setError(null);
     setReceipt(null);
@@ -131,10 +143,11 @@ export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Pr
       }
       const rangedReport = applySceneRangeInputs(report, selectedSceneIds, rangeInputs);
       const result = await editorApi.suggestVisualSceneSelection(goal, rangedReport, seconds, localModel, mustKeepSceneIds, mustOmitSceneIds, allowedAssetIds, captionIntent.trim() || null, audioIntent.trim() || null, suggestOpeningTitle);
+      if (staleRequest(version)) return;
       setSelectedSceneIds(result.orderedSceneIds);
       setSuggestion(result);
     } catch (suggestionError) {
-      setError(suggestionError instanceof Error ? suggestionError.message : String(suggestionError));
+      if (!staleRequest(version)) setError(suggestionError instanceof Error ? suggestionError.message : String(suggestionError));
     } finally {
       setBusy(false);
     }
@@ -349,7 +362,7 @@ export function SceneGuidedDraftDialog({ report, project, onClose, onApply }: Pr
           {error && <p className="form-message form-message-error" role="alert">{error}</p>}
           {receipt && <section className="draft-review" aria-label="Xem lại draft từ cảnh">
             <h3>Xem lại thay đổi</h3>
-            <p>{countPlannedVideoClips(operations)} clip video · {receipt.validation.diff?.operations_evaluated ?? operations.length} thao tác đã xác thực · project rev {receipt.plan.baseRevision}</p>
+            <p>{countPlannedVideoClips(operations)} clip video · {receipt.validation.diff?.operationsEvaluated ?? operations.length} thao tác đã xác thực · project rev {receipt.plan.baseRevision}</p>
             <p className="draft-muted">Provider: {receipt.provider}. Project chưa thay đổi.</p>
             {targetCanvas && <p>Canvas draft: {canvasDimensions(targetCanvas)} — thay đổi kích thước nằm trong cùng edit plan và chỉ áp dụng khi nhấn Apply.</p>}
             <h4>Giả định</h4>

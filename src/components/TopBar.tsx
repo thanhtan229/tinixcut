@@ -1,4 +1,5 @@
 import React from "react";
+import type { ExportResult } from "./exportResult";
 import { EXPORT_PRESET_OPTIONS, ExportPreset, LOUDNESS_PRESET_OPTIONS } from "../types/export";
 import { HealthStatus } from "../types/health";
 import { Project } from "../types/project";
@@ -13,6 +14,8 @@ interface TopBarProps {
   onExportProject: () => void;
   onCancelExport: () => void;
   exportJob: { progress: number; cancelling: boolean } | null;
+  exportResult?: ExportResult | null;
+  onDismissExportResult?: () => void;
   onImportCaptions: () => void;
   onExportCaptions: () => void;
   onOpenCaptionEditor: () => void;
@@ -62,6 +65,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onExportProject,
   onCancelExport,
   exportJob,
+  exportResult,
+  onDismissExportResult,
   onImportCaptions,
   onExportCaptions,
   onOpenCaptionEditor,
@@ -299,6 +304,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           </div>
         )}
+        {exportResult && <div role="status" className="export-job-status">
+          <strong>Export {exportResult.status}</strong>
+          <div title={exportResult.outputPath} style={{overflowWrap:"anywhere"}}>{exportResult.outputPath}</div>
+          <div>{EXPORT_PRESET_OPTIONS.find(option=>option.value===exportResult.preset)?.label ?? exportResult.preset} · {exportResult.range ? `Frames ${exportResult.range.start_frame}–${exportResult.range.end_frame} (end exclusive)` : "Full timeline"}</div>
+          {exportResult.status === "failed" && <div>{exportResult.error || "Unknown export failure"}</div>}
+          <button type="button" className="btn-action" onClick={onDismissExportResult}>Dismiss export result</button>
+        </div>}
         <button className="btn-action" onClick={onUndo} title="Undo committed edit">
           ↩ Undo
         </button>

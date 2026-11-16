@@ -1,3 +1,8 @@
+import { mediaUsageCounts, nextMediaOccurrence, selectedMediaOccurrence } from "./components/mediaLibrary";
+import { SilenceCutDialog } from "./components/SilenceCutDialog";
+import { terminalExportResult, type ActiveExport, type ExportResult } from "./components/exportResult";
+import { adjacentMarkerFrame } from "./components/timelineNavigation";
+import { buildSilenceCutOperations, type SilenceJobReport } from "./components/silenceCuts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { HealthStatus } from "./types/health";
@@ -49,7 +54,7 @@ import {
   createTemplateLayerUpdateOp,
 } from "./utils/templateHelpers";
 import { PreviewCanvas } from "./components/PreviewCanvas";
-import { Timeline } from "./components/Timeline";
+import { Timeline, TimelineNavigationHandle } from "./components/Timeline";
 import { Inspector } from "./components/Inspector";
 import {
   clearSelection,
@@ -165,16 +170,13 @@ export function App() {
   const [shuttle, setShuttle] = useState<ShuttleState>(SHUTTLE_IDLE);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackTrackPeaks, setPlaybackTrackPeaks] = useState<Record<string, number>>({});
-  const [zoom, setZoom] = useState<number>(3);
+  const timelineNavigationRef = useRef<TimelineNavigationHandle>(null);
   const [statusMsg, setStatusMsg] = useState<string>("Ready");
   const [exportPreset, setExportPreset] = useState<ExportPreset>("balanced");
   const [loudnessPreset, setLoudnessPreset] = useState<string>("off");
-  const [activeExport, setActiveExport] = useState<{
-    jobId: string;
-    outputPath: string;
-    progress: number;
-    cancelling: boolean;
-  } | null>(null);
+  const [activeExport, setActiveExport] = useState<ActiveExport | null>(null);
+  const activeExportRef = useRef<ActiveExport | null>(null);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [isAutoCaptionOpen, setIsAutoCaptionOpen] = useState(false);
   const [isMediaCacheOpen, setIsMediaCacheOpen] = useState(false);
   const [previewProxyMode, setPreviewProxyMode] = useState<"off" | "auto">("off");
@@ -190,6 +192,8 @@ export function App() {
   const [autoCaptionReport, setAutoCaptionReport] = useState<Awaited<ReturnType<typeof editorApi.startAutoCaptions>> | null>(null);
   const [autoCaptionReportSource, setAutoCaptionReportSource] = useState<TranscriptSourceContext | null>(null);
   const [visualSceneAsset, setVisualSceneAsset] = useState<Asset | null>(null);
+  const usageCounts = useMemo(()=>mediaUsageCounts(project?.tracks ?? []),[project?.tracks]);
+  const [silenceAsset, setSilenceAsset] = useState<Asset | null>(null);
   const [sourceViewerAsset, setSourceViewerAsset] = useState<Asset | null>(null);
   const [sourceViewerSeekSeconds, setSourceViewerSeekSeconds] = useState(0);
   const [mediaImportProgress, setMediaImportProgress] = useState<string | null>(null);
@@ -442,9 +446,16 @@ export function App() {
       try {
         const report: ProjectExportJobStatus = await editorApi.getProjectExportStatus(activeExport.jobId);
         if (cancelled) return;
+        if (activeExportRef.current?.jobId !== activeExport.jobId) return;
+        if (report.jobId !== activeExport.jobId) {
+          timer = window.setTimeout(() => void poll(), 400);
+          return;
+        }
         setActiveExport((current) => current?.jobId === report.jobId
           ? { ...current, progress: report.progress }
           : current);
+        const terminal = terminalExportResult(activeExportRef.current, report);
+        if (terminal) { activeExportRef.current=null; setExportResult(terminal); }
         if (report.status === "completed") {
           setStatusMsg(`Export complete: ${activeExport.outputPath}`);
           setActiveExport(null);
@@ -461,7 +472,7 @@ export function App() {
           return;
         }
       } catch (error) {
-        if (!cancelled) setStatusMsg(`Export status check failed: ${error}`);
+        if (!cancelled && activeExportRef.current?.jobId === activeExport.jobId) setStatusMsg(`Export status check failed: ${error}`);
       }
       if (!cancelled) timer = window.setTimeout(() => void poll(), 400);
     };
@@ -872,7 +883,10 @@ export function App() {
         `Preflight passed: ${preflight.sourceCount} source(s), ${preflight.width}×${preflight.height}, ${preflight.durationSecs.toFixed(1)}s; ${diskSpace} currently free.${replacement} Rendering ${preset?.label ?? "Balanced"} snapshot...`
       );
       const receipt = await editorApi.startProjectExport(chosen, exportPreset, loudnessTarget, exportRange);
-      setActiveExport({ jobId: receipt.jobId, outputPath: receipt.outputPath, progress: 0, cancelling: false });
+      const started: ActiveExport = { jobId: receipt.jobId, outputPath: receipt.outputPath, progress: 0, cancelling: false, preset: exportPreset, range: exportRange };
+      activeExportRef.current=started;
+      setExportResult(null);
+      setActiveExport(started);
       setStatusMsg("Export started. Progress and cancellation are available in the toolbar.");
     } catch (err) {
       setStatusMsg(`Export error: ${err}`);
@@ -881,7 +895,7 @@ export function App() {
 
   const handleCancelExport = async () => {
     if (!activeExport || activeExport.cancelling) return;
-    setActiveExport((current) => current ? { ...current, cancelling: true } : current);
+    setActiveExport((current) => current?.jobId === activeExport.jobId ? { ...current, cancelling: true } : current);
     try {
       const accepted = await editorApi.cancelProjectExport(activeExport.jobId);
       if (!accepted) {
@@ -893,7 +907,7 @@ export function App() {
       setActiveExport((current) => current?.jobId === activeExport.jobId
         ? { ...current, cancelling: false }
         : current);
-      setStatusMsg(`Could not cancel export: ${error}`);
+      if (activeExportRef.current?.jobId === activeExport.jobId) setStatusMsg(`Could not cancel export: ${error}`);
     }
   };
 
@@ -1055,6 +1069,17 @@ export function App() {
     const operations = [...textOperations, ...timingOperations];
     if (operations.length === 0) return;
     await executeCommandEnvelope(operations, `Update ${textDrafts.length} caption text(s) and ${timingOperations.length} timing(s)`);
+  };
+
+  const handleBuildSilenceCut = async (report: SilenceJobReport, selected: Set<number>) => {
+    const verified = await editorApi.validateSilenceAnalysis(report.jobId);
+    if (!verified.analysis) throw new Error("Analyze source audio first");
+    await executeCommandEnvelope(current => {
+      if (current.project_id !== verified.projectId || current.revision !== verified.revision) throw new Error("Project changed; analyze again");
+      const asset = current.assets.find(a => a.asset_id === verified.assetId && a.path === verified.sourcePath);
+      if (!asset) throw new Error("Source changed; analyze again");
+      return buildSilenceCutOperations(asset, verified.analysis!, selected, current.settings.frame_rate, playheadFrame);
+    }, "Create audio-derived silence rough cut");
   };
 
   const handleBuildTranscriptCut = async (assetId: string, ranges: TranscriptCutRange[]) => {
@@ -2977,8 +3002,14 @@ export function App() {
       handleTrimClip(itemId, newStart, newDuration);
     },
     onTrimTailToPlayhead: handleTrimTailToPlayhead,
-    onZoomIn: () => setZoom((z) => Math.min(10, z + 0.5)),
-    onZoomOut: () => setZoom((z) => Math.max(1, z - 0.5)),
+    onZoomIn: () => timelineNavigationRef.current?.zoomIn(),
+    onZoomOut: () => timelineNavigationRef.current?.zoomOut(),
+    onMarkerNavigation: direction => {
+      const frame=adjacentMarkerFrame(project,playheadFrame,direction);
+      if (frame===null) return;
+      setPlayheadFrame(frame);
+      timelineNavigationRef.current?.locateFrame(frame);
+    },
     onToggleSnapping: () => setSnapEnabled((s) => !s),
     shortcuts: shortcutMap,
     onShuttle: handleShuttleKey,
@@ -3062,6 +3093,8 @@ export function App() {
         onExportProject={handleExportProject}
         onCancelExport={handleCancelExport}
         exportJob={activeExport}
+        exportResult={exportResult}
+        onDismissExportResult={()=>setExportResult(null)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onAddTrack={handleAddTrack}
@@ -3159,6 +3192,18 @@ export function App() {
             {activeLeftTab === "media" ? (
               <MediaPanel
                 assets={project?.assets ?? []}
+                usageCounts={usageCounts}
+                locatedOccurrence={project ? selectedMediaOccurrence(project,selection.primarySelectedItemId) : null}
+                onLocateAsset={(asset,direction)=>{
+                  if (!project) return;
+                  const occurrence=nextMediaOccurrence(project,asset.asset_id,selection.primarySelectedItemId,direction);
+                  if (!occurrence) return;
+                  setIsPlaying(false);
+                  setShuttle(SHUTTLE_IDLE);
+                  setSelection(selectSingle(occurrence.itemId));
+                  setPlayheadFrame(occurrence.frame);
+                  timelineNavigationRef.current?.locateFrame(occurrence.frame);
+                }}
                 offlineMedia={offlineMedia}
                 onAddSampleAsset={handleImportMedia}
                 onAddAssetToTimeline={handleAddAssetToTimeline}
@@ -3166,6 +3211,7 @@ export function App() {
                 onOverwriteAssetAtPlayhead={handleOverwriteAssetAtPlayhead}
                 onRelinkAsset={handleRelinkAsset}
                 onAnalyzeVisualScenes={setVisualSceneAsset}
+                onSuggestSilenceCuts={setSilenceAsset}
                 onAnalyzeAudioLevels={(asset) => editorApi.analyzeAudioLevels(asset.asset_id)}
                 onViewAsset={setSourceViewerAsset}
                 importProgress={mediaImportProgress}
@@ -3257,10 +3303,7 @@ export function App() {
             onAddMarker={handleAddMarker}
             onRenameMarker={handleRenameMarker}
             onDeleteMarker={handleDeleteMarker}
-            zoom={zoom}
-            onZoomIn={() => setZoom((z) => Math.min(10, z + 0.5))}
-            onZoomOut={() => setZoom((z) => Math.max(1, z - 0.5))}
-            onSetZoom={setZoom}
+            navigationRef={timelineNavigationRef}
           />
         </section>
 
@@ -3431,6 +3474,7 @@ export function App() {
         </div>
       )}
 
+      {silenceAsset && project && <SilenceCutDialog key={`${project.project_id}:${silenceAsset.asset_id}`} asset={project.assets.find(a => a.asset_id === silenceAsset.asset_id) ?? silenceAsset} projectId={project.project_id} revision={project.revision} rate={project.settings.frame_rate} onClose={() => setSilenceAsset(null)} onApply={handleBuildSilenceCut} onLocate={(asset,seconds)=>{setSourceViewerSeekSeconds(seconds);setSourceViewerAsset(asset);}} />}
       <AutoCaptionDialog
         isOpen={isAutoCaptionOpen}
         selectedClipName={selectedItem?.name ?? null}
@@ -3527,6 +3571,7 @@ export function App() {
       <SceneGuidedDraftDialog
         report={sceneDraftReport}
         project={project}
+        offlineMedia={offlineMedia}
         onClose={() => setSceneDraftReport(null)}
         onApply={handleApplyEditPlanDraft}
       />
@@ -3542,6 +3587,7 @@ export function App() {
       <AudioMixDraftDialog
         isOpen={isAudioMixDraftOpen}
         project={project}
+        offlineMedia={offlineMedia}
         onClose={() => setIsAudioMixDraftOpen(false)}
         onApply={handleApplyEditPlanDraft}
       />

@@ -1,6 +1,7 @@
+import { PreviewAudioOutput } from "./previewAudioOutput";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Crop, Project, TimelineItem, Transform, rationalTimeToFrames } from "../types/project";
+import { Crop, Project, TimelineItem, Transform } from "../types/project";
 import { PreviewFrameState, PreviewSampledLayer, BenchmarkReport, ParitySuiteReport } from "../types/preview";
 import { editorApi, ParityFrame } from "../services/editorApi";
 import {
@@ -16,8 +17,8 @@ import {
   shouldRecoverStalledSeek,
   shouldSeekPreviewAudio,
 } from "./previewVideoSync";
-import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur } from "./frameSeek";
-import { getPlaybackMeterElement, hasAudioCaptureTrack, peakDbfs, peakMeterPercent, playbackMeterStatus, playbackMeterValueText } from "./audioMeter";
+import { parseFrameSeekInput, resolveFrameSeekInputValue, shouldCommitFrameSeekOnBlur, timelineEndFrame } from "./frameSeek";
+import { getPlaybackMeterElement, peakDbfs, peakMeterPercent, playbackMeterStatus, playbackMeterValueText } from "./audioMeter";
 import { formatPreviewPlaybackFailure } from "./previewPlaybackErrors";
 import { currentVideoPreviewFailure, hasPendingCompatiblePreview, previewMediaFailurePresentation, VideoPreviewFailure } from "./previewMediaFailure";
 import { colorFilterId, svgColorMatrixValues, visualColorMatrix } from "./colorAdjustments";
@@ -116,14 +117,6 @@ function videoSyncDiagnosticsEnabled(): boolean {
   } catch {
     return false;
   }
-}
-
-interface AudioMeterTap {
-  analyser: AnalyserNode;
-  samples: Float32Array<ArrayBuffer>;
-  source: MediaStreamAudioSourceNode;
-  silentGain: GainNode;
-  stream: MediaStream;
 }
 
 interface PreviewVideoLayerProps {
@@ -545,9 +538,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const [playbackPeakDbfs, setPlaybackPeakDbfs] = useState<number | null>(null);
   const [audioMeterStatus, setAudioMeterStatus] = useState<"idle" | "available" | "unsupported">("idle");
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioMeterTapsRef = useRef(new Map<string, AudioMeterTap>());
-  const lastMeterCaptureAttemptRef = useRef(new Map<string, number>());
-  const unsupportedMeterSourcesRef = useRef(new Set<string>());
+  const audioOutputRef = useRef<PreviewAudioOutput | null>(null);
   const activeAudioRef = useRef(sampledState?.active_audio ?? []);
   activeAudioRef.current = sampledState?.active_audio ?? [];
   const activeAudioMeterKey = (sampledState?.active_audio ?? []).map((audio) => audio.item_id).join("|");
@@ -564,15 +555,25 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     }
     return audioContextRef.current;
   }, []);
+  const setPreviewOutputGain = useCallback((element: HTMLMediaElement, gain: number) => {
+    const context = audioContextRef.current;
+    if (!context) { element.volume = Math.max(0, Math.min(1, gain)); element.muted = gain <= 0; return; }
+    try {
+      const output = audioOutputRef.current ?? new PreviewAudioOutput(context);
+      audioOutputRef.current = output;
+      output.setGain(element, gain);
+    } catch (error) {
+      element.pause();
+      setAudioPlaybackError(`Preview audio output failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, []);
   const unlockAudioPlayback = useCallback(() => {
     ensureAudioMeterContext();
-    for (const element of Object.values(audioRefs.current)) {
-      if (!element) continue;
-      void element.play().then(() => setAudioPlaybackError(null)).catch((error: unknown) => {
-        setAudioPlaybackError(formatPreviewPlaybackFailure("audio", error));
-      });
+    audioOutputRef.current?.silence();
+    for (const element of [...Object.values(audioRefs.current), ...Object.values(videoRefs.current)]) {
+      if (element) setPreviewOutputGain(element, 0);
     }
-  }, [ensureAudioMeterContext]);
+  }, [ensureAudioMeterContext, setPreviewOutputGain]);
   useEffect(() => {
     onRegisterAudioUnlock?.(unlockAudioPlayback);
     return () => onRegisterAudioUnlock?.(() => {});
@@ -683,17 +684,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   const canvasTransformDragRef = useRef<CanvasTransformDrag | null>(null);
   const canvasCropDragRef = useRef<CanvasCropDrag | null>(null);
 
-  const maxTimelineFrame = project
-    ? project.tracks.reduce((projectMax, track) => {
-        const trackMax = track.items.reduce((max, item) => {
-          const rate = project.settings.frame_rate;
-          const startFrame = rationalTimeToFrames(item.timeline_range.start, rate);
-          const durationFrames = rationalTimeToFrames(item.timeline_range.duration, rate);
-          return Math.max(max, startFrame + durationFrames);
-        }, projectMax);
-        return Math.max(projectMax, trackMax);
-      }, 0)
-    : 0;
+  const maxTimelineFrame = timelineEndFrame(project ?? null);
 
   const commitFrameSeek = (inputValue = frameSeekInputRef.current?.value) => {
     const value = resolveFrameSeekInputValue(inputValue, frameSeekDraft, playheadFrame);
@@ -886,17 +877,6 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       : 30;
     const frameDurationMs = 1000 / fps;
 
-    // Calculate maximum timeline duration
-    let maxDurationFrames = 300;
-    if (project) {
-      for (const track of project.tracks) {
-        for (const item of track.items) {
-          const endF = item.timeline_range.start.value + item.timeline_range.duration.value;
-          if (endF > maxDurationFrames) maxDurationFrames = endF;
-        }
-      }
-    }
-
     const step = (now: number) => {
       const elapsed = now - lastTimestamp;
       if (elapsed >= frameDurationMs) {
@@ -904,7 +884,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         lastTimestamp = now - (elapsed % frameDurationMs);
 
         const nextFrame = playheadFrameRef.current + framesToAdvance;
-        if (nextFrame >= maxDurationFrames) {
+        if (nextFrame >= maxTimelineFrame) {
           if (externalIsPlaying !== undefined && onTogglePlayRef.current) {
             onTogglePlayRef.current();
           } else {
@@ -925,7 +905,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     isPlaying,
     project?.settings.frame_rate.numerator,
     project?.settings.frame_rate.denominator,
-    project?.tracks,
+    maxTimelineFrame,
     externalIsPlaying,
   ]);
 
@@ -1295,9 +1275,8 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           syncVideoToLatestTarget(layer.item_id, v);
           const audio = sampledState.active_audio.find((sample) => sample.item_id === layer.item_id);
           // The reversed file has no audio track; the forward original must not play under it.
-          const gain = audio && !reversedItem ? Math.max(0, Math.min(1, audio.effective_volume)) : 0;
-          v.volume = gain;
-          v.muted = gain === 0;
+          const gain = audio && !reversedItem ? Math.max(0, audio.effective_volume) : 0;
+          setPreviewOutputGain(v, gain);
           if (isPlaying && v.paused) {
             v.play()
               .then(() => setVideoPlaybackError(null))
@@ -1310,14 +1289,14 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         }
       }
     }
-  }, [sampledState, isPlaying, syncVideoToLatestTarget]);
+  }, [sampledState, isPlaying, syncVideoToLatestTarget, setPreviewOutputGain]);
 
   useEffect(() => {
     const activeIds = new Set((sampledState?.active_audio ?? []).map((audio) => audio.item_id));
     for (const [itemId, element] of Object.entries(audioRefs.current)) {
       const audio = sampledState?.active_audio.find((sample) => sample.item_id === itemId);
       if (!element || !audio || !activeIds.has(itemId) || !audio.asset_path) {
-        if (element && !element.paused) element.pause();
+        if (element) { element.pause(); setPreviewOutputGain(element, 0); }
         continue;
       }
       const sourceSeconds =
@@ -1328,11 +1307,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       }
       element.playbackRate = audio.playback_rate;
       element.preservesPitch = true;
-      const gain = Math.max(0, Math.min(1, audio.effective_volume));
-      // Native media output is reliable in WebView2 for local asset URLs. Routing an
-      // <audio> through createMediaElementSource can silently disconnect its output.
-      element.volume = gain;
-      element.muted = gain === 0;
+      setPreviewOutputGain(element, Math.max(0, audio.effective_volume));
       if (isPlaying && element.paused) {
         element.play().catch((error: unknown) => {
           setAudioPlaybackError(error instanceof Error ? error.message : "Audio media could not be played.");
@@ -1341,22 +1316,18 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         element.pause();
       }
     }
-  }, [sampledState, isPlaying]);
+  }, [sampledState, isPlaying, setPreviewOutputGain]);
+
+  useEffect(() => {
+    const retained = new Set<HTMLMediaElement>([...Object.values(audioRefs.current), ...Object.values(videoRefs.current)].filter((element): element is HTMLMediaElement => element !== null));
+    audioOutputRef.current?.retain(retained);
+  }, [sampledState]);
 
   useEffect(() => {
     if (!isPlaying || !activeAudioMeterKey) {
       setPlaybackPeakDbfs(null);
       setAudioMeterStatus("idle");
       onPlaybackTrackPeaksChange?.(null);
-      for (const tap of audioMeterTapsRef.current.values()) {
-        tap.source.disconnect();
-        tap.analyser.disconnect();
-        tap.silentGain.disconnect();
-        tap.stream.getTracks().forEach((track) => track.stop());
-      }
-      audioMeterTapsRef.current.clear();
-      lastMeterCaptureAttemptRef.current.clear();
-      unsupportedMeterSourcesRef.current.clear();
       return;
     }
     const context = audioContextRef.current;
@@ -1365,6 +1336,9 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
       return;
     }
 
+    const output = audioOutputRef.current;
+    if (!output) { setAudioMeterStatus("unsupported"); return; }
+    const bus = output.bus;
     let animationFrame = 0;
     let lastPublish = 0;
     let hasUnsupportedSource = false;
@@ -1375,20 +1349,8 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         return;
       }
       const activeAudio = activeAudioRef.current;
-      const activeIds = new Set(activeAudio.map((audio) => audio.item_id));
-      for (const [itemId, tap] of audioMeterTapsRef.current) {
-        if (!activeIds.has(itemId)) {
-          tap.source.disconnect();
-          tap.analyser.disconnect();
-          tap.silentGain.disconnect();
-          tap.stream.getTracks().forEach((track) => track.stop());
-          audioMeterTapsRef.current.delete(itemId);
-          lastMeterCaptureAttemptRef.current.delete(itemId);
-          unsupportedMeterSourcesRef.current.delete(itemId);
-        }
-      }
-
-      let peak = -60;
+      const retained = new Set<HTMLMediaElement>([...Object.values(audioRefs.current), ...Object.values(videoRefs.current)].filter((element): element is HTMLMediaElement => element !== null));
+      output.retain(retained);
       let tapCount = 0;
       const trackPeaks: Record<string, number> = {};
       const trackByItemId = new Map(
@@ -1400,63 +1362,17 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           hasUnsupportedSource = true;
           continue;
         }
-        let tap = audioMeterTapsRef.current.get(audio.item_id);
-        if (!tap) {
-          const lastAttempt = lastMeterCaptureAttemptRef.current.get(audio.item_id) ?? 0;
-          if (now - lastAttempt < 500) {
-            hasUnsupportedSource ||= unsupportedMeterSourcesRef.current.has(audio.item_id);
-            continue;
-          }
-          lastMeterCaptureAttemptRef.current.set(audio.item_id, now);
-          const media = element as HTMLMediaElement & {
-            captureStream?: () => MediaStream;
-            mozCaptureStream?: () => MediaStream;
-          };
-          const capture = media.captureStream ?? media.mozCaptureStream;
-          if (!capture) {
-            hasUnsupportedSource = true;
-            unsupportedMeterSourcesRef.current.add(audio.item_id);
-            continue;
-          }
-          try {
-            const stream = capture.call(media);
-            if (!hasAudioCaptureTrack(stream)) {
-              hasUnsupportedSource = true;
-              unsupportedMeterSourcesRef.current.add(audio.item_id);
-              stream.getTracks().forEach((track) => track.stop());
-              continue;
-            }
-            unsupportedMeterSourcesRef.current.delete(audio.item_id);
-            const source = context.createMediaStreamSource(stream);
-            const analyser = context.createAnalyser();
-            analyser.fftSize = 1024;
-            const silentGain = context.createGain();
-            silentGain.gain.value = 0;
-            source.connect(analyser);
-            analyser.connect(silentGain);
-            silentGain.connect(context.destination);
-            tap = {
-              analyser,
-              samples: new Float32Array(new ArrayBuffer(analyser.fftSize)),
-              source,
-              silentGain,
-              stream,
-            };
-            audioMeterTapsRef.current.set(audio.item_id, tap);
-          } catch {
-            hasUnsupportedSource = true;
-            unsupportedMeterSourcesRef.current.add(audio.item_id);
-            continue;
-          }
-        }
+        const tap = output.outputs.get(element);
+        if (!tap) { hasUnsupportedSource = true; continue; }
         tap.analyser.getFloatTimeDomainData(tap.samples);
-        peak = Math.max(peak, peakDbfs(tap.samples));
+        const elementPeak = peakDbfs(tap.samples);
         const trackId = trackByItemId.get(audio.item_id);
-        if (trackId) trackPeaks[trackId] = Math.max(trackPeaks[trackId] ?? -60, peakDbfs(tap.samples));
+        if (trackId) trackPeaks[trackId] = Math.max(trackPeaks[trackId] ?? -60, elementPeak);
         tapCount += 1;
       }
       if (now - lastPublish >= 50) {
-        setPlaybackPeakDbfs(tapCount > 0 ? peak : null);
+        bus.analyser.getFloatTimeDomainData(bus.samples);
+        setPlaybackPeakDbfs(tapCount > 0 ? peakDbfs(bus.samples) : null);
         setAudioMeterStatus(playbackMeterStatus(tapCount, hasUnsupportedSource));
         onPlaybackTrackPeaksChange?.(tapCount > 0 ? trackPeaks : null);
         lastPublish = now;
@@ -1470,13 +1386,8 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
   useEffect(
     () => () => {
       Object.values(audioRefs.current).forEach((element) => element?.pause());
-      for (const tap of audioMeterTapsRef.current.values()) {
-        tap.source.disconnect();
-        tap.analyser.disconnect();
-        tap.silentGain.disconnect();
-        tap.stream.getTracks().forEach((track) => track.stop());
-      }
-      audioMeterTapsRef.current.clear();
+      audioOutputRef.current?.dispose();
+      audioOutputRef.current = null;
       void audioContextRef.current?.close();
     },
     []
@@ -2127,7 +2038,7 @@ export const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           color: "var(--text-muted)",
           fontSize: "10px",
         }}
-        title={audioMeterStatus === "unsupported" ? "Live peak meter is unavailable in this WebView" : "Live sample peak of preview audio"}
+        title={audioMeterStatus === "unsupported" ? "Live peak meter is unavailable in this WebView" : "Summed preview output sample peak; hardware output is not measured"}
       >
         <span style={{ flex: "0 0 70px" }}>Peak</span>
         <div style={{ flex: 1, height: "8px", overflow: "hidden", background: "var(--bg-tertiary)", borderRadius: "4px" }}>
