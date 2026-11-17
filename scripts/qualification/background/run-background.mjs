@@ -7,7 +7,7 @@ const binary = process.env.TINIXCUT_TEST_BINARY ?? resolve("src-tauri/target/deb
 if (!existsSync(binary)) throw new Error(`Native CLI missing: ${binary}. Run cargo build --manifest-path src-tauri/Cargo.toml first.`);
 const steps = [
   ["CDP continuation and report guards", process.execPath, ["--test", "scripts/qualification/background/cdp-report-policy.node-test.mjs"]],
-  ["Caption component + CLI/MCP", process.execPath, ["scripts/qualification/background/headless-caption.mjs"]],
+  ["Caption component + CLI command paths", process.execPath, ["scripts/qualification/background/headless-caption.mjs"]],
   ["App mocked IPC + native save/reopen", process.execPath, ["scripts/qualification/background/headless-app.mjs"]],
   ["Draft delayed response guards", process.execPath, ["scripts/qualification/background/headless-draft-stale.mjs"]],
   ["Planner delayed response guards", process.execPath, ["scripts/qualification/background/headless-planner-stale.mjs"]],
@@ -19,7 +19,7 @@ const steps = [
   ["Native corrupt recovery", "cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml", "--lib", "corrupt_recovery_is_reported_without_blocking_saved_project_or_changing_file"]],
   ["Tauri mock IPC scope and history", "powershell.exe", ["-NoProfile", "-File", "scripts/qualification/background/run-mock-ipc.ps1"]],
 ];
-const report = { startedAt: new Date().toISOString(), revision: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).stdout?.trim(), dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", windowsHide: true }).stdout?.trim()), fixtureSha256: createHash("sha256").update(readFileSync("scripts/qualification/background/caption-merge.tcproj")).digest("hex"), scope: "Headless, CLI/MCP and MockRuntime; native UI gates remain open", steps: [] };
+const report = { startedAt: new Date().toISOString(), revision: spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).stdout?.trim(), dirty: Boolean(spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", windowsHide: true }).stdout?.trim()), fixtureSha256: createHash("sha256").update(readFileSync("scripts/qualification/background/caption-merge.tcproj")).digest("hex"), scope: "Headless CLI and MockRuntime; native UI gates remain open", steps: [] };
 mkdirSync("artifacts/background", { recursive: true });
 try {
 for (const [label, program, args] of steps) {

@@ -2,7 +2,7 @@
 //!
 //! Provides the canonical typed declarative template-draft schema, validation,
 //! normalization, shared-compositor preview, atomic apply transactions, and
-//! catalog persistence for external CLI/MCP coding agents.
+//! catalog persistence for external CLI automation clients.
 //!
 //! Architecture Invariants:
 //! - Automation/agent is a client of the editor, NOT mouse/keyboard simulation and NOT a second reducer.
@@ -2331,7 +2331,7 @@ impl AgentTemplateService {
     }
 
     /// Validate a raw JSON Value directly before typed deserialization.
-    /// This is the primary boundary entry point for MCP, JSONL, CLI, and Tauri.
+    /// This is the primary boundary entry point for JSONL, CLI, and Tauri.
     pub fn validate_raw_draft(
         val: &serde_json::Value,
         catalog: Option<&TemplateCatalog>,

@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
-import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
 import { chromium } from "playwright";
 import { build } from "vite";
 
@@ -17,35 +15,12 @@ let server;
 let browser;
 let completed = 0;
 
-async function applyMcp(projectPath, envelope) {
-  const child = spawn(binary, ["mcp"], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-  const lines = createInterface({ input: child.stdout });
-  const responses = lines[Symbol.asyncIterator]();
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", chunk => { stderr += chunk; });
-  try {
-    const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
-      _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} },
-      name: "tinixcut_apply", arguments: { projectPath, envelope },
-    } };
-    child.stdin.write(JSON.stringify(request) + "\n");
-    let timer;
-    const next = await Promise.race([
-      responses.next(),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`MCP timeout: ${stderr}`)), 30000); }),
-    ]).finally(() => clearTimeout(timer));
-    assert.equal(next.done, false, `MCP exited before responding: ${stderr}`);
-    const response = JSON.parse(next.value);
-    assert.equal(response.id, 1);
-    assert.equal(response.result?.isError, false, JSON.stringify(response));
-    assert.equal(response.result.structuredContent.newRevision, fixture.revision + 1);
-  } finally {
-    const exited = child.exitCode !== null ? Promise.resolve() : once(child, "exit");
-    child.kill();
-    lines.close();
-    await exited;
-  }
+function applyCliCall(projectPath, envelope) {
+  const response = JSON.parse(execFileSync(binary, ["call", "apply", "-"], {
+    input: JSON.stringify({ projectPath, envelope }), encoding: "utf8", timeout: 30000, windowsHide: true,
+  }));
+  assert.equal(response.result?.isError, false, JSON.stringify(response));
+  assert.equal(response.result.structuredContent.newRevision, fixture.revision + 1);
 }
 
 try {
@@ -68,21 +43,21 @@ try {
     assert.equal(completed, 0, "The merge must be submitted only once");
     assert.deepEqual(operations.map(item => item.operation.type), ["ClipTextSet", "ClipDelete", "ClipTrim"]);
     const cliPath = join(dir, "cli.tcproj");
-    const mcpPath = join(dir, "mcp.tcproj");
+    const apiPath = join(dir, "api.tcproj");
     const envelopePath = join(dir, "envelope.json");
     writeFileSync(cliPath, JSON.stringify(fixture));
-    writeFileSync(mcpPath, JSON.stringify(fixture));
+    writeFileSync(apiPath, JSON.stringify(fixture));
     const envelope = { schema_version: fixture.schema_version, project_id: fixture.project_id, base_revision: fixture.revision,
       client_id: "headless-caption", client_epoch: 1, sequence_number: 1, dry_run: false,
       transaction_id: "tx_headless_caption_merge", operations };
     writeFileSync(envelopePath, JSON.stringify(envelope));
     execFileSync(binary, ["apply", cliPath, envelopePath], { encoding: "utf8", timeout: 30000, windowsHide: true });
-    await applyMcp(mcpPath, envelope);
+    applyCliCall(apiPath, envelope);
     const cli = JSON.parse(readFileSync(cliPath, "utf8"));
-    const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+    const api = JSON.parse(readFileSync(apiPath, "utf8"));
     assert.equal(cli.revision, fixture.revision + 1);
-    assert.equal(mcp.revision, cli.revision);
-    assert.deepEqual(mcp.tracks, cli.tracks);
+    assert.equal(api.revision, cli.revision);
+    assert.deepEqual(api.tracks, cli.tracks);
     assert.equal(cli.tracks[0].items.length, 1);
     assert.equal(cli.tracks[0].items[0].text_content, "Xin chao\nViet Nam");
     assert.equal(cli.tracks[0].items[0].timeline_range.duration.value, 60);
@@ -92,7 +67,7 @@ try {
   let scopedDrafts=null;
   let multiCommandCaptured=false;
   await context.exposeFunction('captureCaptionDrafts',(text,timing)=>{scopedDrafts={text,timing};});
-  await context.exposeFunction('captureCaptionCommand',value=>{writeFileSync('artifacts/background/caption-multi-ui-command.json',JSON.stringify(value,null,2));multiCommandCaptured=true;});
+  await context.exposeFunction('captureCaptionCommand',value=>{mkdirSync('artifacts/background',{recursive:true});writeFileSync('artifacts/background/caption-multi-ui-command.json',JSON.stringify(value,null,2));multiCommandCaptured=true;});
   const page = await context.newPage();
   const url = `http://127.0.0.1:${address.port}/scripts/qualification/background/headless-caption.html`;
   await page.goto(url+'?scenario=long-valid');
@@ -363,7 +338,7 @@ try {
   assert.equal(await left.isDisabled(), true, "Locked captions must not be selectable");
   assert.equal(await merge.isDisabled(), true);
   assert.equal(completed, 1);
-  console.log("PASS: headless selection, dirty-draft, gap and locked-track guards; merge and CLI/MCP saved-result parity");
+  console.log("PASS: headless selection, dirty-draft, gap and locked-track guards; CLI command/JSON-call saved-result parity");
 } finally {
   if (browser) await browser.close();
   if (server?.listening) await new Promise(resolveClose => server.close(resolveClose));

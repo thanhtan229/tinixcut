@@ -57,7 +57,7 @@ fn stale_snapshot_in_another_process_cannot_replace_the_newer_project() {
 
     let mut newer_project = original;
     newer_project.revision = 1;
-    newer_project.name = "MCP update".to_string();
+    newer_project.name = "External update".to_string();
     save_project_atomic_if_revision(&newer_project, &project_path, Some(0))
         .expect("write the newer revision");
 
@@ -76,6 +76,6 @@ fn stale_snapshot_in_another_process_cannot_replace_the_newer_project() {
 
     let saved = load_project(&project_path).expect("load resulting project");
     assert_eq!(saved.revision, 1);
-    assert_eq!(saved.name, "MCP update");
+    assert_eq!(saved.name, "External update");
     fs::remove_dir_all(dir).expect("remove test directory");
 }

@@ -19,25 +19,20 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         let subcmd = &args[1];
-        if subcmd == "mcp" {
-            // MCP runs strictly over stdin/stdout; redirect panic hook to stderr
-            std::panic::set_hook(Box::new(|panic_info| {
-                eprintln!("TinixCut MCP Panic: {panic_info}");
-            }));
-
+        if matches!(subcmd.as_str(), "commands" | "call" | "api-session") {
+            #[cfg(windows)]
+            attach_console();
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to initialize tokio runtime for MCP server");
-            rt.block_on(async {
-                if let Err(e) = tinixcut_lib::modules::automation::mcp::run_mcp_server().await {
-                    eprintln!("TinixCut MCP Server error: {e}");
-                    std::process::exit(1);
-                }
-            });
-            std::process::exit(0);
+                .expect("CLI runtime");
+            if let Err(error) = rt.block_on(tinixcut_lib::modules::automation::cli::run(&args[1..]))
+            {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            return;
         }
-
         if subcmd == "inspect"
             || subcmd == "diff"
             || subcmd == "apply"

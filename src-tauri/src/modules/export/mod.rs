@@ -27,7 +27,7 @@ use crate::modules::media::loudness::{self, LoudnessOutcome, LoudnessTarget};
 use crate::modules::media::resolver::MediaBinaryResolver;
 use crate::modules::media::text_overlay;
 use crate::modules::media::text_renderer_poc::RgbaBuffer;
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

@@ -21,7 +21,7 @@ Build a desktop video editor with a workflow broadly comparable to a focused sub
 
 The most important architectural property is:
 
-> Manual editing, keyboard shortcuts, future scripting, CLI, MCP, and AI automation must mutate the same editable project through the same authoritative command service.
+> Manual editing, keyboard shortcuts, CLI, and AI automation must mutate the same editable project through the same authoritative command service.
 
 Automation must produce normal editable timeline state. It must not be a parallel rendering pipeline, a second reducer, or UI mouse/keyboard simulation.
 
@@ -31,7 +31,7 @@ Automation must produce normal editable timeline state. It must not be a paralle
 
 ### 3.1 The editable project is the source of truth
 
-The canonical project model is owned by the application. It is not React state, a browser object graph, an FFmpeg filter graph, a Remotion composition, an MCP payload, or an AI-generated document.
+The canonical project model is owned by the application. It is not React state, a browser object graph, an FFmpeg filter graph, a Remotion composition, a transport payload, or an AI-generated document.
 
 ### 3.2 One mutation path
 
@@ -39,7 +39,7 @@ All authoritative project edits pass through the Command Service.
 
 ```text
 UI gesture / shortcut ─────┐
-CLI / MCP / Agent ─────────┼──> Command Service ──> Project Domain Model
+CLI / Agent ───────────────┼──> Command Service ──> Project Domain Model
 Future scripting ──────────┘
 ```
 
@@ -114,7 +114,7 @@ Advanced masks, tracking, speed curves, compositing modes, effects marketplace, 
 ### 4.4 Automation scope
 
 - Local automation first.
-- CLI/MCP may be added after the Command Service stabilizes.
+- Native CLI automation uses the shared Command Service after it stabilizes.
 - Built-in AI/provider selection is not part of the core architecture.
 - Cloud automation is out of v1.
 
@@ -159,7 +159,7 @@ Advanced masks, tracking, speed curves, compositing modes, effects marketplace, 
        future local adapters
               │
       ┌───────▼────────┐
-      │ CLI / MCP / AI │
+      │ CLI / AI       │
       └────────────────┘
 ```
 
@@ -261,7 +261,7 @@ Owns:
 - schema version
 - project revision
 
-Must have no dependency on React, Tauri UI state, MCP, provider SDKs, or FFmpeg command syntax.
+Must have no dependency on React, Tauri UI state, external transport SDKs, provider SDKs, or FFmpeg command syntax.
 
 ### 7.2 Command Service
 
@@ -376,8 +376,8 @@ Automation adapters are external transports only, operating strictly as clients 
 
 - **Initial transport**: CLI-first (`tinixcut inspect`, `diff`, `apply`, `render`).
 - **Machine session**: Long-lived JSONL stdio session (`tinixcut session` / `--stdio`), maintaining in-memory `CommandService` and `JobManager` to eliminate repeated process startup and project re-parsing overhead.
-- **Protocol streams**: Standard output (`stdout`) is strictly reserved for machine-readable protocol frames (JSONL or MCP); standard error (`stderr`) is reserved exclusively for diagnostic and logging output.
-- **MCP**: Model Context Protocol (MCP) server support is governed by ADR-005; MCP serves as a thin local stdio transport adapter (`tinixcut mcp`, primary protocol `2026-07-28`, Tools-only) over the identical underlying `CommandService`, `JobManager`, and persistence APIs. Remote HTTP/OAuth is deferred.
+- **Protocol streams**: Standard output (`stdout`) is strictly reserved for JSONL responses; standard error (`stderr`) is reserved exclusively for diagnostic and logging output.
+- **MCP (retired 2026-11-17)**: ADR-005 records the former local stdio adapter. Its operations are now available through the native CLI; no MCP server, SDK, or MCP entrypoint remains in the current implementation.
 
 They may:
 
@@ -678,7 +678,7 @@ successful apply
 - **Collision rejection**: Submitting an existing `operationId` with a different semantic payload fingerprint is rejected explicitly with `IdempotencyCollision` (`IDEMPOTENCY_COLLISION`).
 - **Atomic transaction isolation**: A failed transaction persists no entries to the command ledger, ensuring all-or-nothing ledger integrity.
 - **Dry-run isolation**: Dry-run validations do not append to or alter the command ledger.
-- **Transport reuse**: Future automation transports (such as MCP) inherit these exact durable idempotency guarantees via the shared `CommandService`.
+- **Transport reuse**: Future automation clients inherit these exact durable idempotency guarantees via the shared `CommandService`.
 
 ### 9.5 Dry-run / diff
 
@@ -1160,10 +1160,11 @@ successful apply
 
 ### 18.2 Transport and Session Model
 
+> Historical transport details below describe the former MCP adapter. It was retired on 2026-11-17 after its operation surface moved to the native CLI.
+
 ```text
 Manual UI
 CLI / JSONL
-MCP stdio
       │
       ▼
 existing application/automation service seam
@@ -1173,8 +1174,8 @@ CommandService / JobManager / Persistence
 
 - **Initial transport: CLI-first**. A standalone CLI entrypoint exposes headless commands (`inspect`, `diff`, `apply`, `render`) for one-shot execution without UI dependencies.
 - **Machine session: long-lived JSONL stdio (Phase 10)**. Automation supports a long-lived interactive session (`tinixcut session` / `--stdio`) communicating via line-delimited JSON (JSONL). The session maintains in-memory `CommandService` and `JobManager` instances, avoiding the overhead of re-spawning processes and re-parsing `.tcproj` files for sequential edits.
-- **Protocol streams**: Standard output (`stdout`) is strictly reserved for protocol frames (JSONL responses or MCP JSON-RPC frames). Standard error (`stderr`) is strictly reserved for diagnostic logs, warnings, and error traces.
-- **MCP local stdio adapter (Phase 15, ADR-005 — Implemented)**:
+- **Protocol streams**: Standard output (`stdout`) is strictly reserved for JSONL responses. Standard error (`stderr`) is strictly reserved for diagnostic logs, warnings, and error traces.
+- **Former MCP local stdio adapter (Phase 15, ADR-005 — retired 2026-11-17)**:
   - **Implemented Automation Transport**: The MCP local stdio adapter is implemented; `tinixcut mcp` is a supported headless automation entrypoint before GUI startup.
   - **Transport Only**: MCP is strictly an external transport adapter; it introduces no second reducer, no second command registry, no second persistence format, and no project mutation bypass.
   - **Primary Protocol**: MCP `2026-07-28` is the primary protocol target with modern stateless lifecycle (no `initialize` / `notifications/initialized`, stateless protocol core, discovery via `server/discover`, and SDK-only `2025-11-25` fallback).
@@ -1618,10 +1619,15 @@ Implementation convenience alone is not sufficient reason to bypass an architect
 **Jobs:** bounded local Job Manager.  
 **Preview:** backend abstraction; final choice gated by POC.  
 **Export:** normalized composition plan → deterministic backend, initially FFmpeg-centered.  
-**Automation:** CLI-first long-lived JSONL stdio and local stdio MCP adapter (ADR-005) over shared Command Service/Job Manager; durable project-owned idempotency surviving save/reopen with bounded retention horizon and SHA-256 fingerprint baseline (ADR-001); remote MCP/HTTP deferred.  
-**Security:** least privilege; no raw shell/file authority from UI or agent.  
+**Automation:** Native CLI with long-lived JSONL stdio over shared Command Service/Job Manager; durable project-owned idempotency surviving save/reopen with bounded retention horizon and SHA-256 fingerprint baseline (ADR-001).
+**Security:** least privilege; no raw shell/file authority from UI or agent.
 **Scaling:** local-first; no Redis/microservices until a real distributed requirement exists.
 
 ### 15.6 Exact frame (parity frame), 2026-11-14
 
 `modules/composition/parity_frame.rs` renders one frame of the live project through the export compiler: the `CompositionPlan` is rebased to a one-frame window at the playhead and compiled by the same filtergraph builder and keyframe-automation schedule as the export (inputs seeked, canvas pts offset). The command `preview_parity_frame(frame, width)` returns a disposable PNG, cached by project id, revision, frame and width (8 entries); nothing is persisted and no renderer state enters the project (guardrails 8 and 16). The preview shows it, when the user turns **Exact frame** on and the playhead is still, above the browser-drawn pictures and below text. It is not a second compositor: it is the export graph for one frame. Unsupported frames (inside a cut transition, reversed clips, missing media, text below a video layer) keep the live preview. Overlay position commands of the export now fire on the overlay's main input, and video overlays composite in 4:4:4 so odd pixel positions are kept (G52 Step 2, `Plans/plan_g52_preview_export_parity.md`).
+
+
+### CLI automation transport (2026-11-17)
+
+`automation::operations::AutomationOperations` owns shared headless operations, write serialization, job/worker capacity and confirmation state. The CLI invokes these operations directly. The original CLI and stateful session remain compatible. `api-session` uses explicit project paths, concurrent request IDs, a 64-request admission limit and per-request cancellation. Shared operations use transport-independent request, result and error types and schemars directly.

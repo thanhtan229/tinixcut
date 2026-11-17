@@ -990,7 +990,7 @@ Decision: **CLI-first** with **long-lived machine-readable stdio session**; **MC
 
 - **Initial transport: CLI-first**. A standalone CLI entrypoint exposes headless inspection, diffing, execution, and rendering without UI dependencies.
 - **Session model: long-lived machine-readable stdio**. Beyond one-shot subcommands, automation supports a long-lived interactive session over stdio (line-delimited JSON on stdin/stdout, reserving stderr strictly for diagnostic logs) to maintain an active in-memory `CommandService` / `JobManager` and avoid repeated process-spawn/file-reload overhead.
-- **MCP deferred**. Model Context Protocol (MCP) server support is deferred to a future integration phase; when implemented, MCP will serve as a thin transport adapter over the identical underlying Command Service / Job Manager APIs.
+- **MCP retirement supersedes this historical plan text (2026-11-17).** The former MCP adapter was retired after CLI migration; the CLI remains the automation transport over the same Command Service / Job Manager APIs.
 - **Architecture Invariant**: Automation must strictly reuse the existing `CommandService`, `JobManager`, and `save_project_atomic` persistence path without introducing a second project reducer or parallel mutation path.
 
 
@@ -1279,7 +1279,7 @@ Accepted by ChatGPT and ratified by user post-implementation (`Duyệt Phase 14`
 
 ---
 
-# Phase 15 — MCP Automation Adapter
+# Phase 15 — MCP Automation Adapter (historical; retired 2026-11-17)
 
 ## Status: COMPLETE
 
@@ -1878,3 +1878,14 @@ Source/roadmap reconciliation:
 | Release/picker/upgrade evidence | Installed health and scoped text preview pass on the retained candidate; video/pickers and remaining gate-specific rows are open. | Keep evidence/limits visible; schedule broader qualification at a release checkpoint. |
 
 The recommendation assumes the next milestone is making everyday video editing more convenient, as defined in the product-completion plan; there is no user telemetry or timed usability study establishing frequency or time savings. Timeline work is proposed because it benefits manual and AI-assisted edits without introducing new media semantics. The Owner subsequently approved the timeline scope; implementation and proportionate frontend checks are now complete. Extended native qualification remains deferred.
+
+
+## CLI parity and MCP retirement (Owner requested 2026-11-17)
+
+**Status: COMPLETE (2026-11-17).**
+
+1. Expose the full automation operation registry through native CLI schema discovery, JSON calls and a persistent session with cancellation. Share typed operation implementations and persistence guards; preserve legacy CLI/session behavior. **Complete.**
+2. Qualify operation inventory/schemas, successful operations, structured errors, durable retry/stale guards, export lifecycle and request cancellation. **Complete for the CLI automated acceptance scope; local Gemma vision/scene-selection also passed while LM Studio was available.**
+3. Remove the MCP transport, entrypoint and SDK; migrate tests/docs. Shared operations now use transport-independent request, result and error types. **Complete.**
+
+The automated CLI qualification covers all 36 registered operations and the CLI workflow suite. Hardware execution on native Intel QSV and AMD AMF devices remains unqualified because those devices were unavailable; no MCP dependency or adapter remains in the shipped source.

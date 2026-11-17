@@ -7,7 +7,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tinixcut_lib::modules::automation::mcp::TinixCutMcpServer;
+use tinixcut_lib::modules::automation::operations::{
+    AutomationOperations, OperationContext, OperationError,
+};
 use tinixcut_lib::modules::command::{
     CommandEnvelope, CommandOperation, CommandReceipt, OperationEnvelope,
 };
@@ -17,7 +19,6 @@ use tinixcut_lib::modules::domain::{
     CURRENT_SCHEMA_VERSION,
 };
 use tinixcut_lib::modules::persistence::{load_project, save_project_atomic};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -32,37 +33,6 @@ fn test_dir(name: &str) -> PathBuf {
     }
     fs::create_dir_all(&dir).expect("Failed to create test directory");
     dir
-}
-
-fn stdio_call_tool(
-    stdin: &mut ChildStdin,
-    reader: &mut BufReader<ChildStdout>,
-    id: u64,
-    name: &str,
-    arguments: serde_json::Value,
-) -> serde_json::Value {
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            },
-            "name": name,
-            "arguments": arguments
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(response["id"], id, "MCP response ID must match: {response}");
-    response
 }
 
 fn create_sample_project(dir: &Path, name: &str) -> (PathBuf, Project) {
@@ -161,351 +131,30 @@ fn create_sample_project_with_media(
     (path, project, media_path)
 }
 
-struct DuplexMcpClient {
-    reader: TokioBufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
-    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+struct OperationsHarness {
+    operations: AutomationOperations,
 }
 
-impl DuplexMcpClient {
-    async fn new(server: TinixCutMcpServer) -> Self {
-        let (client_io, server_io) = tokio::io::duplex(131072);
-        tokio::spawn(async move {
-            if let Ok(running) = rmcp::serve_server(server, server_io).await {
-                let _ = running.waiting().await;
-            }
-        });
-        let (read_half, write_half) = tokio::io::split(client_io);
-        Self {
-            reader: TokioBufReader::new(read_half),
-            writer: write_half,
+impl OperationsHarness {
+    async fn new(operations: AutomationOperations) -> Self {
+        Self { operations }
+    }
+
+    async fn execute(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        match self
+            .operations
+            .execute(name, arguments, OperationContext::default())
+            .await
+        {
+            Ok(result) => serde_json::json!({"result": serde_json::to_value(result).unwrap()}),
+            Err(OperationError::InvalidParams(message)) => serde_json::json!({"result":{"isError":true,"content":[{"type":"text","text":format!("failed to deserialize parameters: {message}")}]}}),
+            Err(OperationError::Internal(message)) => serde_json::json!({"error": {"code": -32603, "message": message}}),
         }
     }
-
-    async fn send_request(
-        &mut self,
-        method: &str,
-        mut params: serde_json::Value,
-    ) -> serde_json::Value {
-        let id = next_id();
-        // Inject modern 2026-07-28 metadata into params if not present
-        if let Some(map) = params.as_object_mut() {
-            if !map.contains_key("_meta") {
-                map.insert(
-                    "_meta".to_string(),
-                    serde_json::json!({
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "test-client",
-                            "version": "1.0.0"
-                        }
-                    }),
-                );
-            }
-        }
-
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-
-        let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
-        self.writer.write_all(req_str.as_bytes()).await.unwrap();
-        self.writer.flush().await.unwrap();
-
-        let mut line = String::new();
-        self.reader.read_line(&mut line).await.unwrap();
-        serde_json::from_str(&line).expect("Expected valid JSON-RPC response")
-    }
-
-    async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
-        let params = serde_json::json!({
-            "name": name,
-            "arguments": arguments,
-        });
-        self.send_request("tools/call", params).await
-    }
-}
-
-// ===========================================================================
-// P15-AC-01 through P15-AC-08: Transport, Discovery, Lifecycle, & Schemas
-// ===========================================================================
-
-#[tokio::test]
-async fn test_p15_ac03_modern_protocol_lifecycle() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-
-    // 1. Call server/discover
-    let disc_res = client
-        .send_request("server/discover", serde_json::json!({}))
-        .await;
-    assert_eq!(disc_res["jsonrpc"], "2.0");
-    assert!(
-        disc_res.get("result").is_some(),
-        "server/discover must succeed: {:?}",
-        disc_res
-    );
-    let disc_result = &disc_res["result"];
-    // Verify response advertises 2026-07-28
-    let versions = disc_result["supportedVersions"]
-        .as_array()
-        .expect("supportedVersions array");
-    assert!(
-        versions.iter().any(|v| v.as_str() == Some("2026-07-28")),
-        "Must advertise 2026-07-28 in supportedVersions: {:?}",
-        versions
-    );
-    // Verify server identity/metadata
-    assert!(disc_result["serverInfo"].is_object() || disc_result["capabilities"].is_object());
-    // Verify tools support
-    assert!(
-        disc_result["capabilities"]["tools"].is_object(),
-        "Must advertise tools capability"
-    );
-
-    // 2. Direct tools/list call with 2026-07-28 _meta without any initialize handshake
-    let res = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    assert_eq!(res["jsonrpc"], "2.0");
-    assert!(
-        res.get("result").is_some(),
-        "Must succeed without initialize"
-    );
-    let tools = res["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 36);
 }
 
 #[tokio::test]
-async fn test_p15_ac04_legacy_compatibility_smoke() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-
-    // Legacy initialize handshake for 2025-11-25
-    let init_req = serde_json::json!({
-        "_meta": {},
-        "protocolVersion": "2025-11-25",
-        "capabilities": {},
-        "clientInfo": { "name": "legacy-agent", "version": "1.0.0" }
-    });
-    let res = client.send_request("initialize", init_req).await;
-    assert_eq!(res["jsonrpc"], "2.0");
-    assert!(
-        res.get("result").is_some(),
-        "Legacy initialize must be accepted"
-    );
-    assert_eq!(res["result"]["protocolVersion"], "2025-11-25");
-}
-
-#[tokio::test]
-async fn test_p15_ac05_ac06_ac07_current_tools_and_no_extraneous_primitives() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-
-    let res = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    let tools = res["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 36, "Must expose exactly 36 tools");
-
-    let mut tool_names: Vec<String> = tools
-        .iter()
-        .map(|t| t["name"].as_str().unwrap().to_string())
-        .collect();
-    tool_names.sort();
-
-    let expected_tools = vec![
-        "tinixcut_apply".to_string(),
-        "tinixcut_audio_align".to_string(),
-        "tinixcut_capabilities".to_string(),
-        "tinixcut_dry_run".to_string(),
-        "tinixcut_edit_plan_canvas".to_string(),
-        "tinixcut_edit_plan_draft".to_string(),
-        "tinixcut_edit_plan_reorder".to_string(),
-        "tinixcut_edit_plan_scene_draft".to_string(),
-        "tinixcut_edit_plan_scene_selection_suggest".to_string(),
-        "tinixcut_edit_plan_text_replace".to_string(),
-        "tinixcut_edit_plan_trim".to_string(),
-        "tinixcut_edit_plan_validate".to_string(),
-        "tinixcut_edit_plan_volume".to_string(),
-        "tinixcut_export_cancel".to_string(),
-        "tinixcut_export_preflight".to_string(),
-        "tinixcut_export_start".to_string(),
-        "tinixcut_export_status".to_string(),
-        "tinixcut_frame_scopes".to_string(),
-        "tinixcut_inspect".to_string(),
-        "tinixcut_lut_probe".to_string(),
-        "tinixcut_media_probe".to_string(),
-        "tinixcut_media_scene_candidates".to_string(),
-        "tinixcut_media_transcript".to_string(),
-        "tinixcut_media_visual_scenes".to_string(),
-        "tinixcut_project_chapters".to_string(),
-        "tinixcut_project_compare".to_string(),
-        "tinixcut_project_create".to_string(),
-        "tinixcut_project_variant".to_string(),
-        "tinixcut_save".to_string(),
-        "tinixcut_template_apply".to_string(),
-        "tinixcut_template_preview".to_string(),
-        "tinixcut_template_save".to_string(),
-        "tinixcut_template_validate".to_string(),
-        "tinixcut_workflow_manifest_checkpoint".to_string(),
-        "tinixcut_workflow_manifest_create".to_string(),
-        "tinixcut_workflow_manifest_validate".to_string(),
-    ];
-    assert_eq!(tool_names, expected_tools);
-
-    // Verify all tools have non-empty descriptions
-    for tool in tools {
-        let desc = tool["description"].as_str().unwrap();
-        assert!(!desc.trim().is_empty());
-    }
-
-    // Verify zero extraneous primitives (Resources, Prompts, etc.)
-    let res_resources = client
-        .send_request("resources/list", serde_json::json!({}))
-        .await;
-    assert!(
-        res_resources.get("error").is_some()
-            || res_resources["result"]["resources"]
-                .as_array()
-                .map_or(false, |a| a.is_empty()),
-        "Resources must not be exposed"
-    );
-
-    let res_prompts = client
-        .send_request("prompts/list", serde_json::json!({}))
-        .await;
-    assert!(
-        res_prompts.get("error").is_some()
-            || res_prompts["result"]["prompts"]
-                .as_array()
-                .map_or(false, |a| a.is_empty()),
-        "Prompts must not be exposed"
-    );
-}
-
-#[tokio::test]
-async fn test_p15_ac08_json_schema_2020_12_and_camel_case() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-
-    let res = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    let tools = res["result"]["tools"].as_array().unwrap();
-
-    for tool in tools {
-        let in_schema = &tool["inputSchema"];
-        let out_schema = &tool["outputSchema"];
-
-        assert_eq!(
-            in_schema["$schema"], "https://json-schema.org/draft/2020-12/schema",
-            "Tool {} input schema must be JSON Schema 2020-12",
-            tool["name"]
-        );
-        assert_eq!(
-            out_schema["$schema"], "https://json-schema.org/draft/2020-12/schema",
-            "Tool {} output schema must be JSON Schema 2020-12",
-            tool["name"]
-        );
-
-        // Verify camelCase properties in properties map
-        if let Some(props) = in_schema.get("properties").and_then(|p| p.as_object()) {
-            for key in props.keys() {
-                assert!(
-                    !key.contains('_'),
-                    "Input schema property '{}' in tool {} must be camelCase",
-                    key,
-                    tool["name"]
-                );
-            }
-        }
-    }
-
-    let plan_tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "tinixcut_edit_plan_validate")
-        .expect("versioned edit plan validator is discoverable");
-    assert_eq!(
-        plan_tool["inputSchema"]["properties"]["plan"]["properties"]["schemaVersion"]["const"],
-        1
-    );
-    assert_eq!(
-        plan_tool["inputSchema"]["properties"]["plan"]["properties"]["operations"]["minItems"],
-        1
-    );
-
-    let scene_draft_tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "tinixcut_edit_plan_scene_draft")
-        .expect("scene draft planner is discoverable");
-    let input_schema = &scene_draft_tool["inputSchema"];
-    for (property, expected) in [
-        (
-            "targetCanvas",
-            serde_json::json!([
-                "landscape_16x9",
-                "portrait_9x16",
-                "square_1x1",
-                "portrait_4x5"
-            ]),
-        ),
-        (
-            "titleTemplate",
-            serde_json::json!([
-                "clean_lower_third",
-                "bold_headline",
-                "center_pop",
-                "subtitle_card",
-                "quote_card",
-                "call_to_action"
-            ]),
-        ),
-    ] {
-        let reference = input_schema["properties"][property]["anyOf"][0]["$ref"]
-            .as_str()
-            .expect("optional enum must refer to its schema definition");
-        let definition_name = reference.rsplit('/').next().unwrap();
-        assert_eq!(
-            input_schema["$defs"][definition_name]["enum"], expected,
-            "schema enum mismatch for {property}"
-        );
-    }
-    assert!(scene_draft_tool["inputSchema"]["properties"]
-        .get("openingTitle")
-        .is_some());
-    assert!(scene_draft_tool["inputSchema"]["properties"]
-        .get("allowedAssetIds")
-        .is_some());
-    let scene_suggest_tool = tools
-        .iter()
-        .find(|tool| tool["name"] == "tinixcut_edit_plan_scene_selection_suggest")
-        .expect("scene suggestion tool is discoverable");
-    assert!(scene_suggest_tool["inputSchema"]["properties"]
-        .get("captionIntent")
-        .is_some());
-    assert!(scene_suggest_tool["inputSchema"]["properties"]
-        .get("audioIntent")
-        .is_some());
-    assert!(scene_suggest_tool["inputSchema"]["properties"]
-        .get("suggestOpeningTitle")
-        .is_some());
-    assert!(scene_suggest_tool["inputSchema"]["properties"]
-        .get("transcriptEvidence")
-        .is_some());
-    assert!(scene_suggest_tool["outputSchema"]["properties"]
-        .get("openingTitleSuggestion")
-        .is_some());
-    assert!(scene_suggest_tool["outputSchema"]["properties"]
-        .get("transcriptEvidenceSources")
-        .is_some());
-}
-
-#[tokio::test]
-async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
+async fn test_p40_operations_scene_candidates_are_read_only_and_cached() {
     let dir = test_dir("scene_candidates");
     let fixture = dir.join("three_scenes.mp4");
     let mut ffmpeg = tinixcut_lib::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
@@ -542,25 +191,25 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
         .expect("generate scene fixture");
     assert!(status.success());
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
     let project_path = dir.join("untouched.tinix");
     let created = client
-        .call_tool(
+        .execute(
             "tinixcut_project_create",
             serde_json::json!({ "projectPath": project_path.to_str().unwrap(), "name": "Read-only analysis check" }),
         )
         .await;
     assert_eq!(created["result"]["isError"], false);
     let before = client
-        .call_tool(
+        .execute(
             "tinixcut_inspect",
             serde_json::json!({ "projectPath": project_path.to_str().unwrap() }),
         )
         .await;
     let args = serde_json::json!({ "mediaPath": fixture.to_str().unwrap(), "threshold": 0.3 });
     let first = client
-        .call_tool("tinixcut_media_scene_candidates", args.clone())
+        .execute("tinixcut_media_scene_candidates", args.clone())
         .await;
     assert_eq!(
         first["result"]["isError"], false,
@@ -585,14 +234,14 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
             .is_some_and(|time| (1_950_000..=2_050_000).contains(&time))
     }));
     let second = client
-        .call_tool("tinixcut_media_scene_candidates", args)
+        .execute("tinixcut_media_scene_candidates", args)
         .await;
     assert_eq!(
         first["result"]["structuredContent"],
         second["result"]["structuredContent"]
     );
     let limited = client
-        .call_tool(
+        .execute(
             "tinixcut_media_scene_candidates",
             serde_json::json!({ "mediaPath": fixture.to_str().unwrap(), "threshold": 0.3, "maxCandidates": 1 }),
         )
@@ -601,7 +250,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
     assert_eq!(limited_report["candidates"].as_array().unwrap().len(), 1);
     assert_eq!(limited_report["truncated"], true);
     let offline = client
-        .call_tool(
+        .execute(
             "tinixcut_media_scene_candidates",
             serde_json::json!({ "mediaPath": dir.join("missing.mp4").to_str().unwrap() }),
         )
@@ -611,7 +260,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
         "MEDIA_SCENE_ANALYSIS_INVALID"
     );
     let duration_cap = client
-        .call_tool(
+        .execute(
             "tinixcut_media_scene_candidates",
             serde_json::json!({ "mediaPath": fixture.to_str().unwrap(), "maxDurationSeconds": 1801 }),
         )
@@ -624,7 +273,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
     let whisper_cli = dir.join("whisper-cli.exe");
     fs::write(&whisper_cli, b"test executable placeholder").unwrap();
     let missing_model = client
-        .call_tool(
+        .execute(
             "tinixcut_media_transcript",
             serde_json::json!({
                 "mediaPath": fixture.to_str().unwrap(),
@@ -639,7 +288,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
         "WHISPER_MODEL_MISSING"
     );
     let offline_transcript = client
-        .call_tool(
+        .execute(
             "tinixcut_media_transcript",
             serde_json::json!({
                 "mediaPath": dir.join("missing-audio.wav").to_str().unwrap(),
@@ -653,7 +302,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
         "MEDIA_TRANSCRIPT_INVALID"
     );
     let after = client
-        .call_tool(
+        .execute(
             "tinixcut_inspect",
             serde_json::json!({ "projectPath": project_path.to_str().unwrap() }),
         )
@@ -667,7 +316,7 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
         after["result"]["structuredContent"]
     );
 
-    let saturated_server = TinixCutMcpServer::new();
+    let saturated_server = AutomationOperations::new();
     let worker_permits: Vec<_> = (0..4)
         .map(|index| {
             saturated_server
@@ -676,9 +325,9 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
                 .expect("fill the four-worker capacity")
         })
         .collect();
-    let mut saturated_client = DuplexMcpClient::new(saturated_server).await;
+    let mut saturated_client = OperationsHarness::new(saturated_server).await;
     let saturated = saturated_client
-        .call_tool(
+        .execute(
             "tinixcut_media_scene_candidates",
             serde_json::json!({ "mediaPath": fixture.to_str().unwrap(), "threshold": 0.31 }),
         )
@@ -696,8 +345,8 @@ async fn test_p40_mcp_scene_candidates_are_read_only_and_cached() {
 async fn test_p41_edit_plan_validation_is_versioned_read_only_and_command_backed() {
     let dir = test_dir("edit_plan_validate");
     let (project_path, project) = create_sample_project(&dir, "plan_project");
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
     let plan = serde_json::json!({
         "schemaVersion": 1,
         "goal": "Add a second video track",
@@ -715,7 +364,7 @@ async fn test_p41_edit_plan_validation_is_versioned_read_only_and_command_backed
         }]
     });
     let valid = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_validate",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(), "plan": plan
@@ -746,7 +395,7 @@ async fn test_p41_edit_plan_validation_is_versioned_read_only_and_command_backed
         }]
     });
     let stale = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_validate",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(), "plan": stale_plan
@@ -761,7 +410,7 @@ async fn test_p41_edit_plan_validation_is_versioned_read_only_and_command_backed
         .contains("Stale edit plan"));
 
     let malformed = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_validate",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -795,10 +444,10 @@ async fn test_p41_deterministic_draft_validates_and_applies_through_command_serv
     let dir = test_dir("edit_plan_draft");
     let (project_path, project, _media_path) =
         create_sample_project_with_media(&dir, "draft_project", 2);
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
     let drafted = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -824,7 +473,7 @@ async fn test_p41_deterministic_draft_validates_and_applies_through_command_serv
     assert_eq!(after.tracks, project.tracks);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -854,7 +503,7 @@ async fn test_p41_deterministic_draft_validates_and_applies_through_command_serv
     assert_eq!(applied_project.settings.height, 1920);
 
     let second_draft = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -873,7 +522,7 @@ async fn test_p41_deterministic_draft_validates_and_applies_through_command_serv
         .unwrap()
         .starts_with("draft_r1_"));
     let applied_twice = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -925,9 +574,9 @@ async fn test_p41_deterministic_draft_includes_selected_audio_and_srt_cues() {
     )
     .unwrap();
 
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let drafted = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": project_path.to_str().unwrap(),
@@ -964,7 +613,7 @@ async fn test_p41_deterministic_draft_includes_selected_audio_and_srt_cues() {
 
 #[tokio::test]
 #[ignore = "requires an explicitly started local LM Studio server and loaded model"]
-async fn test_p41_mcp_opt_in_local_ai_draft_is_validated_and_read_only() {
+async fn test_p41_operations_opt_in_local_ai_draft_is_validated_and_read_only() {
     let dir = test_dir("local_ai_draft");
     let (project_path, project, _) = create_sample_project_with_media(&dir, "local_ai_draft", 30);
     let selected_ids = project
@@ -972,10 +621,10 @@ async fn test_p41_mcp_opt_in_local_ai_draft_is_validated_and_read_only() {
         .iter()
         .map(|asset| asset.asset_id.clone())
         .collect::<Vec<_>>();
-    let client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let client = OperationsHarness::new(AutomationOperations::new()).await;
     let mut client = client;
     let response = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1002,7 +651,7 @@ async fn test_p41_mcp_opt_in_local_ai_draft_is_validated_and_read_only() {
     assert_eq!(load_project(&project_path).unwrap(), project);
 
     let unavailable_model = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1027,123 +676,18 @@ async fn test_p41_mcp_opt_in_local_ai_draft_is_validated_and_read_only() {
 }
 
 #[tokio::test]
-#[ignore = "binds local LM Studio port 1234; run only when no local model server is active"]
-async fn test_p41_mcp_local_ai_cancellation_drops_http_request_without_project_mutation() {
-    use std::io::Read as StdRead;
-    use std::net::TcpListener;
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    let listener = TcpListener::bind("127.0.0.1:1234")
-        .expect("Port 1234 must be free for the local cancellation mock");
-    let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
-    let mock = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        let mut bytes = [0_u8; 8192];
-        let _ = stream.read(&mut bytes);
-        accepted_tx.send(()).unwrap();
-        let mut closed_by_client = false;
-        loop {
-            match stream.read(&mut bytes) {
-                Ok(0) => {
-                    closed_by_client = true;
-                    break;
-                }
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
-        closed_by_client
-    });
-
-    let dir = test_dir("local_ai_cancel");
-    let (project_path, project, _) = create_sample_project_with_media(&dir, "local_ai_cancel", 30);
-    let selected_ids = project
-        .assets
-        .iter()
-        .map(|asset| asset.asset_id.clone())
-        .collect::<Vec<_>>();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
-    let request_id = next_id();
-    let call = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "tools/call",
-        "params": {
-            "name": "tinixcut_edit_plan_draft",
-            "arguments": {
-                "projectPath": project_path.to_string_lossy(),
-                "goal": "Create a short local cancellation test draft",
-                "mediaIds": selected_ids,
-                "targetDurationFrames": 60,
-                "plannerProvider": "lm-studio-local",
-                "localModel": "cancellation-test-model"
-            },
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": {"name":"phase41-cancel-test","version":"1"}
-            }
-        }
-    });
-    client
-        .writer
-        .write_all(format!("{}\n", serde_json::to_string(&call).unwrap()).as_bytes())
-        .await
-        .unwrap();
-    client.writer.flush().await.unwrap();
-    tokio::task::spawn_blocking(move || accepted_rx.recv_timeout(Duration::from_secs(3)))
-        .await
-        .unwrap()
-        .expect("Local planner request did not reach the mock endpoint");
-
-    let cancelled = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/cancelled",
-        "params": {"requestId": request_id, "reason": "phase41 acceptance cancellation"}
-    });
-    client
-        .writer
-        .write_all(format!("{}\n", serde_json::to_string(&cancelled).unwrap()).as_bytes())
-        .await
-        .unwrap();
-    client.writer.flush().await.unwrap();
-
-    let ping = tokio::time::timeout(
-        Duration::from_secs(2),
-        client.send_request("ping", serde_json::json!({})),
-    )
-    .await
-    .expect("MCP server did not recover after cancelling local AI inference");
-    assert_eq!(ping["id"], next_id() - 1);
-    assert!(
-        mock.join().unwrap(),
-        "Cancellation must close the pending HTTP request"
-    );
-    assert_eq!(load_project(&project_path).unwrap(), project);
-    fs::remove_dir_all(dir).unwrap();
-}
-
-// ===========================================================================
-// P15-AC-09 through P15-AC-13: Read-Only Tools, Dry-Run & Ledger Isolation
-// ===========================================================================
-
-#[tokio::test]
 async fn test_p15_ac09_ac10_inspect_success_and_error() {
     let dir = test_dir("inspect");
     let (proj_path, project) = create_sample_project(&dir, "inspect_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // AC-09: Inspect success
     let args = serde_json::json!({
         "projectPath": proj_path.to_str().unwrap()
     });
-    let res = client.call_tool("tinixcut_inspect", args).await;
+    let res = client.execute("tinixcut_inspect", args).await;
     assert_eq!(res["result"]["isError"], false);
     let content = &res["result"]["structuredContent"];
     assert_eq!(content["projectId"], project.project_id);
@@ -1154,7 +698,7 @@ async fn test_p15_ac09_ac10_inspect_success_and_error() {
     let bad_args = serde_json::json!({
         "projectPath": dir.join("non_existent.tcproj").to_str().unwrap()
     });
-    let bad_res = client.call_tool("tinixcut_inspect", bad_args).await;
+    let bad_res = client.execute("tinixcut_inspect", bad_args).await;
     assert_eq!(bad_res["result"]["isError"], true);
     assert_eq!(
         bad_res["result"]["structuredContent"]["code"],
@@ -1163,16 +707,16 @@ async fn test_p15_ac09_ac10_inspect_success_and_error() {
 }
 
 #[tokio::test]
-async fn test_phase39_mcp_project_bootstrap_and_read_only_media_probe() {
+async fn test_phase39_operations_project_bootstrap_and_read_only_media_probe() {
     let dir = test_dir("phase39_project_bootstrap_probe");
-    let project_path = dir.join("created_via_mcp.tcproj");
+    let project_path = dir.join("created_via_operations.tcproj");
     let media_path = dir.join("probe_media.mp4");
     generate_synthetic_mp4(&media_path, 2, "blue");
     assert!(media_path.is_file(), "Synthetic media fixture must exist");
 
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let create = client
-        .call_tool(
+        .execute(
             "tinixcut_project_create",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1190,7 +734,7 @@ async fn test_phase39_mcp_project_bootstrap_and_read_only_media_probe() {
 
     let original_bytes = fs::read(&project_path).unwrap();
     let duplicate_create = client
-        .call_tool(
+        .execute(
             "tinixcut_project_create",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1206,7 +750,7 @@ async fn test_phase39_mcp_project_bootstrap_and_read_only_media_probe() {
     assert_eq!(fs::read(&project_path).unwrap(), original_bytes);
 
     let probe = client
-        .call_tool(
+        .execute(
             "tinixcut_media_probe",
             serde_json::json!({ "mediaPath": media_path.to_string_lossy() }),
         )
@@ -1221,7 +765,7 @@ async fn test_phase39_mcp_project_bootstrap_and_read_only_media_probe() {
     assert!(report["streams"].as_array().unwrap().len() >= 2);
 
     let missing = client
-        .call_tool(
+        .execute(
             "tinixcut_media_probe",
             serde_json::json!({ "mediaPath": dir.join("missing.mp4").to_string_lossy() }),
         )
@@ -1240,10 +784,10 @@ async fn test_p42_project_variant_creates_isolated_revision_checked_copy() {
         create_sample_project_with_media(&dir, "variant_source", 4);
     let source_bytes = fs::read(&source_path).unwrap();
     let destination_path = dir.join("variant_copy.tinix");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let variant_result = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1272,7 +816,7 @@ async fn test_p42_project_variant_creates_isolated_revision_checked_copy() {
     assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
 
     let existing_destination = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1290,7 +834,7 @@ async fn test_p42_project_variant_creates_isolated_revision_checked_copy() {
     assert_eq!(load_project(&destination_path).unwrap(), variant);
 
     let stale_source = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1314,10 +858,10 @@ async fn test_p42_project_compare_reports_revision_bound_content_changes_without
     let (left_path, left, _) = create_sample_project_with_media(&dir, "compare_left", 4);
     let left_bytes = fs::read(&left_path).unwrap();
     let right_path = dir.join("compare_right.tinix");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let variant = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": left_path.to_string_lossy(),
@@ -1331,7 +875,7 @@ async fn test_p42_project_compare_reports_revision_bound_content_changes_without
     let mut right = load_project(&right_path).unwrap();
 
     let equivalent = client
-        .call_tool(
+        .execute(
             "tinixcut_project_compare",
             serde_json::json!({
                 "leftProjectPath": left_path.to_string_lossy(),
@@ -1353,7 +897,7 @@ async fn test_p42_project_compare_reports_revision_bound_content_changes_without
     save_project_atomic(&right, &right_path).unwrap();
     let right_bytes = fs::read(&right_path).unwrap();
     let compared = client
-        .call_tool(
+        .execute(
             "tinixcut_project_compare",
             serde_json::json!({
                 "leftProjectPath": left_path.to_string_lossy(),
@@ -1381,7 +925,7 @@ async fn test_p42_project_compare_reports_revision_bound_content_changes_without
     assert_eq!(fs::read(&right_path).unwrap(), right_bytes);
 
     let stale = client
-        .call_tool(
+        .execute(
             "tinixcut_project_compare",
             serde_json::json!({
                 "leftProjectPath": left_path.to_string_lossy(),
@@ -1407,10 +951,10 @@ async fn test_p42_edit_plan_can_be_applied_to_variant_without_changing_source() 
         create_sample_project_with_media(&dir, "variant_edit_source", 4);
     let source_bytes = fs::read(&source_path).unwrap();
     let variant_path = dir.join("draft_variant.tinix");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let branched = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1425,7 +969,7 @@ async fn test_p42_edit_plan_can_be_applied_to_variant_without_changing_source() 
     assert_eq!(variant_before.revision, 0);
 
     let draft = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_draft",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1440,7 +984,7 @@ async fn test_p42_edit_plan_can_be_applied_to_variant_without_changing_source() 
     let plan = &draft["result"]["structuredContent"]["plan"];
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1499,10 +1043,10 @@ async fn test_p42_edit_plan_reorder_preview_and_apply_are_revision_checked_and_i
     save_project_atomic(&source, &source_path).unwrap();
     let source_bytes = fs::read(&source_path).unwrap();
     let variant_path = dir.join("reorder_variant.tinix");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let branched = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1516,7 +1060,7 @@ async fn test_p42_edit_plan_reorder_preview_and_apply_are_revision_checked_and_i
     let variant_before = load_project(&variant_path).unwrap();
 
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_reorder",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1535,7 +1079,7 @@ async fn test_p42_edit_plan_reorder_preview_and_apply_are_revision_checked_and_i
     assert_eq!(load_project(&variant_path).unwrap(), variant_before);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1575,7 +1119,7 @@ async fn test_p42_edit_plan_reorder_preview_and_apply_are_revision_checked_and_i
 }
 
 #[tokio::test]
-async fn test_p42_reorder_missing_media_fails_without_project_mutation_and_mcp_recovers() {
+async fn test_p42_reorder_missing_media_fails_without_project_mutation_and_operations_recovers() {
     let dir = test_dir("phase42_reorder_missing_media");
     let (project_path, mut project, media_path) =
         create_sample_project_with_media(&dir, "reorder_missing", 4);
@@ -1612,9 +1156,9 @@ async fn test_p42_reorder_missing_media_fails_without_project_mutation_and_mcp_r
     let project_bytes_before = fs::read(&project_path).unwrap();
     fs::remove_file(&media_path).unwrap();
 
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let rejected = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_reorder",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1640,17 +1184,7 @@ async fn test_p42_reorder_missing_media_fails_without_project_mutation_and_mcp_r
     assert_eq!(fs::read(&project_path).unwrap(), project_bytes_before);
     assert_eq!(load_project(&project_path).unwrap(), project);
 
-    let discovery = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    assert!(
-        discovery.get("error").is_none(),
-        "MCP discovery failed after the planner error: {discovery:?}"
-    );
-    assert!(
-        discovery["result"]["tools"].as_array().is_some(),
-        "MCP returned no tools after the planner error: {discovery:?}"
-    );
+    assert!(!AutomationOperations::command_schemas().is_empty());
     assert_eq!(fs::read(&project_path).unwrap(), project_bytes_before);
 
     fs::remove_dir_all(dir).unwrap();
@@ -1663,10 +1197,10 @@ async fn test_p42_canvas_resize_plan_preview_and_apply_only_changes_canvas_setti
         create_sample_project_with_media(&dir, "canvas_resize_source", 4);
     let source_bytes = fs::read(&source_path).unwrap();
     let variant_path = dir.join("canvas_resize_variant.tinix");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let variant = client
-        .call_tool(
+        .execute(
             "tinixcut_project_variant",
             serde_json::json!({
                 "sourceProjectPath": source_path.to_string_lossy(),
@@ -1681,7 +1215,7 @@ async fn test_p42_canvas_resize_plan_preview_and_apply_only_changes_canvas_setti
     let variant_bytes_before = fs::read(&variant_path).unwrap();
 
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_canvas",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1710,7 +1244,7 @@ async fn test_p42_canvas_resize_plan_preview_and_apply_only_changes_canvas_setti
     assert_eq!(fs::read(&variant_path).unwrap(), variant_bytes_before);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": variant_path.to_string_lossy(),
@@ -1746,10 +1280,10 @@ async fn test_p42_edit_plan_volume_preview_and_apply_changes_only_selected_clip(
     let (project_path, source, _) = create_sample_project_with_media(&dir, "volume_source", 4);
     let source_bytes = fs::read(&project_path).unwrap();
     let item_id = source.tracks[0].items[0].item_id.clone();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_volume",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1776,7 +1310,7 @@ async fn test_p42_edit_plan_volume_preview_and_apply_changes_only_selected_clip(
     assert_eq!(fs::read(&project_path).unwrap(), source_bytes);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1847,10 +1381,10 @@ async fn test_p42_edit_plan_text_replace_searches_selected_captions_and_applies_
     source.tracks.push(caption_track);
     save_project_atomic(&source, &project_path).unwrap();
     let source_bytes = fs::read(&project_path).unwrap();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_text_replace",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1882,7 +1416,7 @@ async fn test_p42_edit_plan_text_replace_searches_selected_captions_and_applies_
     assert_eq!(fs::read(&project_path).unwrap(), source_bytes);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1924,7 +1458,7 @@ async fn test_p42_edit_plan_text_replace_searches_selected_captions_and_applies_
     );
 
     let not_found = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_text_replace",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1951,10 +1485,10 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
     let source_bytes = fs::read(&project_path).unwrap();
     let source_item = &source.tracks[0].items[0];
     let source_item_id = source_item.item_id.clone();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_trim",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -1990,7 +1524,7 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
     assert_eq!(fs::read(&project_path).unwrap(), source_bytes);
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2026,7 +1560,7 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
     let mut stale_operations = receipt["plan"]["operations"].clone();
     stale_operations[0]["operationId"] = serde_json::json!("phase42-stale-trim-operation");
     let stale_apply = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2048,7 +1582,7 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
     assert_eq!(load_project(&project_path).unwrap(), trimmed);
 
     let second_preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_trim",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2072,7 +1606,7 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
     );
 
     let second_apply = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2107,7 +1641,7 @@ async fn test_p42_edit_plan_trim_preview_and_apply_preserve_clip_source_in_point
 }
 
 #[tokio::test]
-async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
+async fn test_p45_operations_scene_edit_plan_is_revision_bound_and_read_only() {
     let dir = test_dir("p45_scene_edit_plan");
     let (project_path, project, media_path) =
         create_sample_project_with_media(&dir, "p45_scene_project", 30);
@@ -2157,9 +1691,9 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
         ],
         "warnings": []
     });
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let invalid_constraints = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_selection_suggest",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2183,7 +1717,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
             .contains("Must-keep")
     );
     let invalid_asset_policy = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2202,7 +1736,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
             .contains("Allowed source asset IDs")
     );
     let invalid_preview_constraints = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2224,7 +1758,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
             .contains("must-keep")
     );
     let valid_preview_constraints = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2281,7 +1815,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
         "bold-headline"
     );
     let incomplete_title = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2298,7 +1832,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
         .unwrap_or_default()
         .contains("supplied together"));
     let preview = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2337,7 +1871,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     );
     let manifest_path = dir.join("scene-workflow.json");
     let manifest_result = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_create",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2362,7 +1896,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     assert!(!manifest_text.contains(&asset.path));
     assert!(manifest_text.contains("scene-draft.mp4"));
     let validate = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_validate",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2377,7 +1911,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     let mut changed_plan = receipt["plan"].clone();
     changed_plan["goal"] = serde_json::json!("Modified retry plan");
     let rejected = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_validate",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2395,7 +1929,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     changed_media.extend_from_slice(b"changed source bytes");
     fs::write(&media_path, changed_media).unwrap();
     let changed_input = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_validate",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2410,7 +1944,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
         "WORKFLOW_RESUME_REJECTED"
     );
     let collision = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_create",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2425,7 +1959,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     stale_project.revision += 1;
     save_project_atomic(&stale_project, &project_path).unwrap();
     let stale_revision = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_validate",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2450,7 +1984,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
     let mut stale_report = report.clone();
     stale_report["sourceFingerprint"] = serde_json::Value::String("f".repeat(64));
     let stale = client
-        .call_tool(
+        .execute(
             "tinixcut_edit_plan_scene_draft",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2470,7 +2004,7 @@ async fn test_p45_mcp_scene_edit_plan_is_revision_bound_and_read_only() {
 }
 
 #[tokio::test]
-async fn test_p57_mcp_export_preflight_is_read_only_and_reports_replacement() {
+async fn test_p57_operations_export_preflight_is_read_only_and_reports_replacement() {
     let dir = test_dir("p57_export_preflight");
     let (project_path, project) = create_sample_project(&dir, "preflight_project");
     let output_path = dir.join("existing-output.mp4");
@@ -2479,10 +2013,10 @@ async fn test_p57_mcp_export_preflight_is_read_only_and_reports_replacement() {
         b"preserve this output until a render succeeds",
     )
     .unwrap();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let report = client
-        .call_tool(
+        .execute(
             "tinixcut_export_preflight",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2511,7 +2045,7 @@ async fn test_p57_mcp_export_preflight_is_read_only_and_reports_replacement() {
     );
 
     let invalid_destination = client
-        .call_tool(
+        .execute(
             "tinixcut_export_preflight",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2529,16 +2063,16 @@ async fn test_p57_mcp_export_preflight_is_read_only_and_reports_replacement() {
 }
 
 #[tokio::test]
-async fn test_p57_mcp_export_preflight_rejects_offline_media_without_mutation() {
+async fn test_p57_operations_export_preflight_rejects_offline_media_without_mutation() {
     let dir = test_dir("p57_export_preflight_offline_media");
     let (project_path, project, media_path) =
         create_sample_project_with_media(&dir, "offline_preflight_project", 1);
     fs::remove_file(&media_path).expect("fixture media should be removable for offline test");
     let output_path = dir.join("must-not-be-created.mp4");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let report = client
-        .call_tool(
+        .execute(
             "tinixcut_export_preflight",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2558,7 +2092,7 @@ async fn test_p57_mcp_export_preflight_rejects_offline_media_without_mutation() 
         .contains("offline or missing"));
 
     let start = client
-        .call_tool(
+        .execute(
             "tinixcut_export_start",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2582,7 +2116,7 @@ async fn test_p57_mcp_export_preflight_rejects_offline_media_without_mutation() 
 }
 
 #[tokio::test]
-async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
+async fn test_p56_operations_workflow_checkpoints_cover_apply_save_and_export() {
     let dir = test_dir("p56_workflow_checkpoints");
     let (project_path, project) = create_sample_project(&dir, "checkpoint_project");
     let plan = tinixcut_lib::modules::automation::edit_plan::EditPlan {
@@ -2605,10 +2139,10 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
     let plan_json = serde_json::to_value(&plan).unwrap();
     let manifest_path = dir.join("workflow.json");
     let artifact_path = dir.join("workflow.mp4");
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let created = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_create",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2621,7 +2155,7 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
     assert_eq!(created["result"]["isError"], false, "{created}");
 
     let applied = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2643,7 +2177,7 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
 
     for state in ["applied", "saved"] {
         let checkpoint = client
-            .call_tool(
+            .execute(
                 "tinixcut_workflow_manifest_checkpoint",
                 serde_json::json!({
                     "projectPath": project_path.to_string_lossy(),
@@ -2662,7 +2196,7 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
 
     generate_synthetic_mp4(&artifact_path, 1, "blue");
     let exported = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_checkpoint",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2681,7 +2215,7 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
     assert_eq!(evidence["artifactSha256"].as_str().unwrap().len(), 64);
 
     let retry = client
-        .call_tool(
+        .execute(
             "tinixcut_workflow_manifest_checkpoint",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy(),
@@ -2704,71 +2238,117 @@ async fn test_p56_mcp_workflow_checkpoints_cover_apply_save_and_export() {
 }
 
 #[tokio::test]
-#[ignore = "requires an explicitly started LM Studio local API with google/gemma-4-e4b loaded"]
-async fn test_p46_mcp_local_scene_selection_suggestion_is_read_only() {
-    let dir = test_dir("p46_scene_selection");
-    let (project_path, project, _media_path) =
-        create_sample_project_with_media(&dir, "p46_scene_project", 30);
-    let asset = project.assets.first().unwrap();
-    let source_fingerprint =
-        tinixcut_lib::modules::media::visual_scene::aggregate_source_fingerprint(&[
-            tinixcut_lib::modules::media::visual_scene::VisualSceneSource {
-                asset_id: asset.asset_id.clone(),
-                asset_name: asset.name.clone(),
-                path: PathBuf::from(&asset.path),
-            },
-        ])
-        .unwrap();
-    let report = serde_json::json!({
-        "schemaVersion": tinixcut_lib::modules::media::visual_scene::VISUAL_SCENE_SCHEMA_VERSION,
-        "algorithmVersion": tinixcut_lib::modules::media::visual_scene::VISUAL_SCENE_ALGORITHM_VERSION,
-        "provider": "lm-studio-local",
-        "model": "google/gemma-4-e4b",
-        "query": "short travel scenes",
-        "sourceFingerprint": source_fingerprint,
-        "configFingerprint": "0".repeat(64),
-        "truncated": false,
-        "scenes": [
-            {"sceneId":"scene-01","assetId":asset.asset_id,"assetName":asset.name,"sourceStartMicros":0,"sourceEndMicros":5000000,"sampledAtMicros":2500000,"caption":"People walking along the river at dawn","tags":["river","people"],"relevanceScore":0.8,"rationale":"Representative frame"},
-            {"sceneId":"scene-02","assetId":asset.asset_id,"assetName":asset.name,"sourceStartMicros":10000000,"sourceEndMicros":15000000,"sampledAtMicros":12500000,"caption":"A lantern-lit street with wet pavement","tags":["street","lantern"],"relevanceScore":0.9,"rationale":"Representative frame"}
-        ],
-        "warnings": ["Model captions need human review."]
+#[ignore = "requires LM Studio local API with google/gemma-4-e4b loaded"]
+async fn test_p46_cli_local_vision_and_scene_selection_are_read_only() {
+    fn cli_call(name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_tinixcut"))
+            .args(["call", name, "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(serde_json::to_string(&arguments).unwrap().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "CLI {name} failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    let dir = test_dir("p46_cli_operations_vision");
+    let (project_path, mut project) = create_sample_project(&dir, "p46_scene_project");
+    let media_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../artifacts/phase44/disposable/phase44_hoi_an_visual_fixture.mp4");
+    let asset = Asset {
+        asset_id: "ast_p46_scene_project".to_string(),
+        name: "phase44_hoi_an_visual_fixture.mp4".to_string(),
+        path: media_path.to_string_lossy().to_string(),
+        media_kind: MediaKind::Video,
+        duration: Some(RationalTime::new(450, FrameRate::FPS_30)),
+        file_size: fs::metadata(&media_path).unwrap().len(),
+        dimensions: None,
+    };
+    project.assets.push(asset.clone());
+    save_project_atomic(&project, &project_path).unwrap();
+
+    let cli_visual = cli_call(
+        "media_visual_scenes",
+        serde_json::json!({
+            "media": [{"assetId":asset.asset_id,"mediaPath":media_path,"displayName":asset.name}],
+            "query": "Describe useful scenes for a travel montage from the selected video.",
+            "model": "google/gemma-4-e4b",
+            "maxScenes": 3
+        }),
+    );
+    let cli_report = &cli_visual["result"]["structuredContent"];
+    let cli_scene_shape = cli_report["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|scene| {
+            (
+                scene["sceneId"].as_str().unwrap().to_string(),
+                scene["sourceStartMicros"].as_u64().unwrap(),
+                scene["sourceEndMicros"].as_u64().unwrap(),
+                scene["sampledAtMicros"].as_u64().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cli_visual["result"]["isError"], false, "{cli_visual}");
+    assert_eq!(cli_report["provider"], "lm-studio-local");
+    assert_eq!(cli_report["model"], "google/gemma-4-e4b");
+    assert!(!cli_scene_shape.is_empty() && cli_scene_shape.len() <= 3);
+    assert!(cli_report["scenes"].as_array().unwrap().iter().all(|scene| {
+        !scene["caption"].as_str().unwrap_or_default().is_empty()
+            && !scene["tags"].as_array().unwrap().is_empty()
+    }));
+
+    let selection_args = serde_json::json!({
+        "projectPath": project_path.to_string_lossy(),
+        "goal": "Create a calm 5-second travel montage using the strongest available moments.",
+        "report": cli_report,
+        "targetDurationSeconds": 5,
+        "localModel": "google/gemma-4-e4b"
     });
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
-    let suggestion = client
-        .call_tool(
-            "tinixcut_edit_plan_scene_selection_suggest",
-            serde_json::json!({
-                "projectPath": project_path.to_string_lossy(),
-                "goal": "Create a calm 5-second travel montage that ends on the lantern street.",
-                "report": report,
-                "targetDurationSeconds": 5,
-                "localModel": "google/gemma-4-e4b"
-            }),
-        )
-        .await;
-    assert_eq!(suggestion["result"]["isError"], false, "{suggestion}");
-    let content = &suggestion["result"]["structuredContent"];
+    let cli_suggestion = cli_call("edit_plan_scene_selection_suggest", selection_args.clone());
+    assert_eq!(cli_suggestion["result"]["isError"], false, "{cli_suggestion}");
+    let content = &cli_suggestion["result"]["structuredContent"];
     assert_eq!(content["provider"], "lm-studio-local");
     assert_eq!(content["model"], "google/gemma-4-e4b");
+    assert_eq!(content["targetDurationSeconds"], 5);
     let ids = content["orderedSceneIds"].as_array().unwrap();
     assert!(!ids.is_empty());
-    assert!(ids.iter().all(|id| id == "scene-01" || id == "scene-02"));
-    assert_eq!(content["targetDurationSeconds"], 5);
+    assert!(ids.iter().all(|id| {
+        cli_report["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|scene| &scene["sceneId"] == id)
+    }));
     let unchanged = load_project(&project_path).unwrap();
     assert_eq!(unchanged.revision, project.revision);
     assert_eq!(unchanged.tracks, project.tracks);
     assert_eq!(unchanged.assets, project.assets);
+    assert!(!cli_scene_shape.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
 async fn test_p15_ac11_capabilities_report() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let res = client
-        .call_tool("tinixcut_capabilities", serde_json::json!({}))
+        .execute("tinixcut_capabilities", serde_json::json!({}))
         .await;
     assert_eq!(res["result"]["isError"], false);
     let caps = &res["result"]["structuredContent"];
@@ -2790,8 +2370,8 @@ async fn test_p15_ac12_ac13_dry_run_invariant_and_ledger_isolation() {
     let (proj_path, project) = create_sample_project(&dir, "dry_proj");
     let initial_meta = fs::metadata(&proj_path).unwrap();
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let envelope = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -2817,7 +2397,7 @@ async fn test_p15_ac12_ac13_dry_run_invariant_and_ledger_isolation() {
         "envelope": envelope
     });
 
-    let res = client.call_tool("tinixcut_dry_run", args).await;
+    let res = client.execute("tinixcut_dry_run", args).await;
     assert_eq!(res["result"]["isError"], false);
     let diff = &res["result"]["structuredContent"];
     assert_eq!(diff["projectId"], project.project_id);
@@ -2845,8 +2425,8 @@ async fn test_p15_ac14_ac15_apply_execution_and_durable_persistence() {
     let dir = test_dir("apply_durable");
     let (proj_path, project) = create_sample_project(&dir, "apply_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let envelope = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -2872,7 +2452,7 @@ async fn test_p15_ac14_ac15_apply_execution_and_durable_persistence() {
         "envelope": envelope
     });
 
-    let res = client.call_tool("tinixcut_apply", args).await;
+    let res = client.execute("tinixcut_apply", args).await;
     assert_eq!(res["result"]["isError"], false);
     let receipt: CommandReceipt =
         serde_json::from_value(res["result"]["structuredContent"].clone()).unwrap();
@@ -2889,11 +2469,11 @@ async fn test_p15_ac14_ac15_apply_execution_and_durable_persistence() {
 }
 
 #[tokio::test]
-async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
-    let dir = test_dir("p18_audio_crossfade_mcp");
+async fn test_p18_audio_crossfade_operations_uses_command_service_and_idempotency() {
+    let dir = test_dir("p18_audio_crossfade_operations");
     let project_path = dir.join("audio_crossfade.tcproj");
     let rate = FrameRate::FPS_30;
-    let mut project = Project::new("Phase 18 MCP".to_string());
+    let mut project = Project::new("Phase 18 shared operations".to_string());
     let mut track = Track::new("Audio Track".to_string(), TrackKind::Audio);
 
     for (index, (timeline_start, source_start)) in [(0, 10), (30, 20)].into_iter().enumerate() {
@@ -2933,7 +2513,7 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
     project.tracks.push(track);
     save_project_atomic(&project, &project_path).unwrap();
 
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let create_envelope = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
         project_id: project.project_id.clone(),
@@ -2942,11 +2522,11 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
         client_epoch: Some(1),
         sequence_number: Some(1),
         dry_run: false,
-        transaction_id: Some("tx_p18_mcp_create".to_string()),
+        transaction_id: Some("tx_p18_operations_create".to_string()),
         operations: vec![OperationEnvelope {
-            operation_id: "op_p18_mcp_create".to_string(),
+            operation_id: "op_p18_operations_create".to_string(),
             operation: CommandOperation::AudioCrossfadeCreate {
-                transition_id: Some("audio_xfade_mcp".to_string()),
+                transition_id: Some("audio_xfade_operations".to_string()),
                 track_id,
                 left_item_id: left_id,
                 right_item_id: right_id,
@@ -2959,7 +2539,7 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
         "envelope": create_envelope,
     });
     let created = client
-        .call_tool("tinixcut_apply", create_args.clone())
+        .execute("tinixcut_apply", create_args.clone())
         .await;
     assert_eq!(created["result"]["isError"], false, "{created:?}");
     let created_receipt: CommandReceipt =
@@ -2967,7 +2547,7 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
     assert_eq!(created_receipt.prior_revision, 0);
     assert_eq!(created_receipt.new_revision, 1);
 
-    let replayed = client.call_tool("tinixcut_apply", create_args).await;
+    let replayed = client.execute("tinixcut_apply", create_args).await;
     assert_eq!(replayed["result"]["isError"], false, "{replayed:?}");
     let replay_receipt: CommandReceipt =
         serde_json::from_value(replayed["result"]["structuredContent"].clone()).unwrap();
@@ -2978,20 +2558,20 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
         (
             2,
             1,
-            "op_p18_mcp_update",
-            "tx_p18_mcp_update",
+            "op_p18_operations_update",
+            "tx_p18_operations_update",
             CommandOperation::AudioCrossfadeUpdateDuration {
-                transition_id: "audio_xfade_mcp".to_string(),
+                transition_id: "audio_xfade_operations".to_string(),
                 new_duration: RationalTime::new(12, rate),
             },
         ),
         (
             3,
             2,
-            "op_p18_mcp_remove",
-            "tx_p18_mcp_remove",
+            "op_p18_operations_remove",
+            "tx_p18_operations_remove",
             CommandOperation::AudioCrossfadeRemove {
-                transition_id: "audio_xfade_mcp".to_string(),
+                transition_id: "audio_xfade_operations".to_string(),
             },
         ),
     ] {
@@ -3010,7 +2590,7 @@ async fn test_p18_audio_crossfade_mcp_uses_command_service_and_idempotency() {
             }],
         };
         let result = client
-            .call_tool(
+            .execute(
                 "tinixcut_apply",
                 serde_json::json!({
                     "projectPath": project_path.to_string_lossy(),
@@ -3036,8 +2616,8 @@ async fn test_p15_ac16_save_failure_never_reports_success() {
     let tmp_path = proj_path.with_extension("tcproj.tmp");
     fs::create_dir_all(&tmp_path).unwrap();
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let envelope = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -3063,7 +2643,7 @@ async fn test_p15_ac16_save_failure_never_reports_success() {
         "envelope": envelope
     });
 
-    let res = client.call_tool("tinixcut_apply", args).await;
+    let res = client.execute("tinixcut_apply", args).await;
 
     // Clean up temporary directory
     let _ = fs::remove_dir_all(&tmp_path);
@@ -3080,8 +2660,8 @@ async fn test_p15_ac17_ac18_mandatory_structured_identity() {
     let dir = test_dir("structured_id");
     let (proj_path, project) = create_sample_project(&dir, "struct_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // Case 1: Missing client_id
     let mut env = CommandEnvelope {
@@ -3096,7 +2676,7 @@ async fn test_p15_ac17_ac18_mandatory_structured_identity() {
         operations: vec![],
     };
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env }),
         )
@@ -3111,7 +2691,7 @@ async fn test_p15_ac17_ac18_mandatory_structured_identity() {
     env.client_id = Some("agent-1".to_string());
     env.client_epoch = None;
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env }),
         )
@@ -3126,7 +2706,7 @@ async fn test_p15_ac17_ac18_mandatory_structured_identity() {
     env.client_epoch = Some(1);
     env.sequence_number = Some(0);
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env }),
         )
@@ -3141,7 +2721,7 @@ async fn test_p15_ac17_ac18_mandatory_structured_identity() {
     env.sequence_number = Some(1);
     env.transaction_id = None;
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env }),
         )
@@ -3158,8 +2738,8 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
     let dir = test_dir("idempotency");
     let (proj_path, project) = create_sample_project(&dir, "idem_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let op1 = OperationEnvelope {
         operation_id: "op-idem-1".to_string(),
@@ -3184,7 +2764,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
 
     // 1. Initial Apply
     let res1 = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env1 }),
         )
@@ -3196,7 +2776,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
 
     // 2. AC-19: Lost-Response Replay with exact same envelope
     let replay_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": env1 }),
         )
@@ -3234,7 +2814,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
         transaction_id: Some("tx-idem-col".to_string()),
         operations: vec![collision_op],
     };
-    let col_res = client.call_tool("tinixcut_apply", serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": collision_env })).await;
+    let col_res = client.execute("tinixcut_apply", serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": collision_env })).await;
     assert_eq!(col_res["result"]["isError"], true);
     assert_eq!(
         col_res["result"]["structuredContent"]["code"],
@@ -3262,7 +2842,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
         operations: vec![gap_op],
     };
     let gap_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": gap_env }),
         )
@@ -3293,7 +2873,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
         }],
     };
     let exp_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": proj_path.to_str().unwrap(), "envelope": exp_env }),
         )
@@ -3338,7 +2918,7 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
         }],
     };
     let evicted_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({ "projectPath": evicted_path.to_str().unwrap(), "envelope": evicted_env }),
         )
@@ -3368,22 +2948,15 @@ async fn test_p15_ac19_ac20_ac21_idempotency_replay_collision_and_sequence_gap()
 
 #[tokio::test]
 async fn test_p15_ac22_ac23_protocol_and_domain_error_boundaries() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
-    // AC-22: Protocol error on unknown method
-    let res = client
-        .send_request("non_existent_method", serde_json::json!({}))
-        .await;
-    assert!(res.get("error").is_some());
-    assert_eq!(res["error"]["code"], -32601);
-
-    // AC-23: Domain error preserves structured format and server remains operational
+    // Domain errors preserve a structured format and later operations still run.
     let dir = test_dir("err_boundary");
     let (proj_path, _) = create_sample_project(&dir, "err_proj");
 
     let bad_apply = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3409,7 +2982,7 @@ async fn test_p15_ac22_ac23_protocol_and_domain_error_boundaries() {
 
     // Server is alive and executes subsequent capabilities call
     let alive = client
-        .call_tool("tinixcut_capabilities", serde_json::json!({}))
+        .execute("tinixcut_capabilities", serde_json::json!({}))
         .await;
     assert_eq!(alive["result"]["isError"], false);
 }
@@ -3419,7 +2992,7 @@ async fn test_p15_ac24_authoritative_write_gate_concurrency() {
     let dir = test_dir("concurrency");
     let (proj_path, project) = create_sample_project(&dir, "conc_proj");
 
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
 
     // Spawn 5 concurrent apply requests against the same project file
     let mut handles = Vec::new();
@@ -3428,7 +3001,7 @@ async fn test_p15_ac24_authoritative_write_gate_concurrency() {
         let path_str = proj_path.to_str().unwrap().to_string();
         let pid = project.project_id.clone();
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s).await;
+            let mut c = OperationsHarness::new(s).await;
             let env = CommandEnvelope {
                 schema_version: CURRENT_SCHEMA_VERSION,
                 project_id: pid,
@@ -3447,7 +3020,7 @@ async fn test_p15_ac24_authoritative_write_gate_concurrency() {
                     },
                 }],
             };
-            c.call_tool(
+            c.execute(
                 "tinixcut_apply",
                 serde_json::json!({
                     "projectPath": path_str,
@@ -3475,8 +3048,8 @@ async fn test_p15_ac25_stale_revision_rejection() {
     let dir = test_dir("stale_rev");
     let (proj_path, project) = create_sample_project(&dir, "stale_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -3491,7 +3064,7 @@ async fn test_p15_ac25_stale_revision_rejection() {
     };
 
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3514,8 +3087,8 @@ async fn test_p15_ac26_multi_op_atomicity() {
     let dir = test_dir("multi_op");
     let (proj_path, project) = create_sample_project(&dir, "multi_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // Operation 1 is valid (create track), Operation 2 is invalid (create duplicate track id)
     let op1 = OperationEnvelope {
@@ -3546,7 +3119,7 @@ async fn test_p15_ac26_multi_op_atomicity() {
     };
 
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3573,8 +3146,8 @@ async fn test_p15_ac27_save_reopen_parity() {
     let dir = test_dir("reopen_parity");
     let (proj_path, project) = create_sample_project(&dir, "parity_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -3596,7 +3169,7 @@ async fn test_p15_ac27_save_reopen_parity() {
     };
 
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3624,12 +3197,12 @@ async fn test_p15_ac28_ac29_explicit_save_as_and_stateless_save() {
     let (proj_path, _) = create_sample_project(&dir, "source_proj");
     let target_path = dir.join("target_copy.tcproj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // AC-28: Save to targetPath
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_save",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3649,7 +3222,7 @@ async fn test_p15_ac28_ac29_explicit_save_as_and_stateless_save() {
 
     // AC-29: Save without targetPath overwrites projectPath cleanly
     let res_overwrite = client
-        .call_tool(
+        .execute(
             "tinixcut_save",
             serde_json::json!({
                 "projectPath": target_path.to_str().unwrap(),
@@ -3669,12 +3242,12 @@ async fn test_p15_ac30_ac31_export_start_status_cancel() {
     let (proj_path, _) = create_sample_project(&dir, "exp_proj");
     let out_file = dir.join("out.mp4");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // 1. AC-30: export_start returns jobId and status
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_start",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3691,7 +3264,7 @@ async fn test_p15_ac30_ac31_export_start_status_cancel() {
 
     // 2. AC-31: export_status returns current progress
     let status_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_status",
             serde_json::json!({
                 "jobId": job_id
@@ -3703,7 +3276,7 @@ async fn test_p15_ac30_ac31_export_start_status_cancel() {
 
     // 3. AC-31: export_cancel cancels job
     let cancel_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_cancel",
             serde_json::json!({
                 "jobId": job_id
@@ -3721,10 +3294,10 @@ async fn test_p15_ac31_explicit_cancel_cleans_active_render_artifacts() {
     let out_file = dir.join("cancel_cleanup.mp4");
     fs::write(&out_file, b"PRE_EXISTING_VALID_CONTENT").unwrap();
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
     let start_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_start",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3758,7 +3331,7 @@ async fn test_p15_ac31_explicit_cancel_cleans_active_render_artifacts() {
     );
 
     let cancel_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_cancel",
             serde_json::json!({ "jobId": job_id }),
         )
@@ -3767,7 +3340,7 @@ async fn test_p15_ac31_explicit_cancel_cleans_active_render_artifacts() {
     assert_eq!(cancel_res["result"]["structuredContent"]["cancelled"], true);
 
     let status_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_status",
             serde_json::json!({ "jobId": job_id }),
         )
@@ -3809,12 +3382,12 @@ async fn test_p15_ac31_export_snapshot_isolation() {
     let (proj_path, project, _) = create_sample_project_with_media(&dir, "snap_iso_proj", 2);
     let out_file = dir.join("isolated_export.mp4");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // 1. Start export at revision 0
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_start",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3848,7 +3421,7 @@ async fn test_p15_ac31_export_snapshot_isolation() {
         }],
     };
     let apply_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3870,7 +3443,7 @@ async fn test_p15_ac31_export_snapshot_isolation() {
     let mut finished = false;
     for _ in 0..100 {
         let status_res = client
-            .call_tool(
+            .execute(
                 "tinixcut_export_status",
                 serde_json::json!({ "jobId": job_id }),
             )
@@ -3897,7 +3470,7 @@ async fn test_p15_ac31_export_snapshot_isolation() {
 
 #[tokio::test]
 async fn test_p15_ac35_shutdown_job_cleanup() {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let jid = {
         let mut jm = server.jobs.lock().unwrap();
         let (id, _) = jm.submit_job(
@@ -3921,13 +3494,7 @@ async fn test_p15_ac35_shutdown_job_cleanup() {
 
 #[tokio::test]
 async fn test_p15_ac36_security_boundary_no_unsafe_tools() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-
-    let res = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    let tools = res["result"]["tools"].as_array().unwrap();
+    let tools = AutomationOperations::command_schemas();
 
     let forbidden_substrings = [
         "shell",
@@ -3957,8 +3524,8 @@ async fn test_p15_ac38_project_schema_unchanged() {
     let dir = test_dir("schema_check");
     let (proj_path, project) = create_sample_project(&dir, "schema_proj");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -3980,7 +3547,7 @@ async fn test_p15_ac38_project_schema_unchanged() {
     };
 
     client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -3992,9 +3559,9 @@ async fn test_p15_ac38_project_schema_unchanged() {
     let raw_text = fs::read_to_string(&proj_path).unwrap();
     let raw_json: serde_json::Value = serde_json::from_str(&raw_text).unwrap();
 
-    // MCP writes must preserve the current project schema without adding MCP metadata.
+    // shared operations writes must preserve the current project schema without adding shared operations metadata.
     assert_eq!(raw_json["schema_version"], CURRENT_SCHEMA_VERSION);
-    // Verify zero MCP-specific metadata fields in project root
+    // Verify zero shared operations-specific metadata fields in project root
     assert!(raw_json.get("mcp").is_none());
     assert!(raw_json.get("mcpSession").is_none());
     assert!(raw_json.get("serverHandles").is_none());
@@ -4028,10 +3595,10 @@ async fn test_p15_ac39_restart_replay_consistency() {
 
     // Server Instance 1 executes apply
     {
-        let server1 = TinixCutMcpServer::new();
-        let mut client1 = DuplexMcpClient::new(server1).await;
+        let server1 = AutomationOperations::new();
+        let mut client1 = OperationsHarness::new(server1).await;
         let res = client1
-            .call_tool(
+            .execute(
                 "tinixcut_apply",
                 serde_json::json!({
                     "projectPath": proj_path.to_str().unwrap(),
@@ -4044,11 +3611,11 @@ async fn test_p15_ac39_restart_replay_consistency() {
 
     // Server Instance 2 starts up fresh with zero shared in-memory state
     {
-        let server2 = TinixCutMcpServer::new();
-        let mut client2 = DuplexMcpClient::new(server2).await;
+        let server2 = AutomationOperations::new();
+        let mut client2 = OperationsHarness::new(server2).await;
         // Re-submit identical mutation to Server 2
         let replay_res = client2
-            .call_tool(
+            .execute(
                 "tinixcut_apply",
                 serde_json::json!({
                     "projectPath": proj_path.to_str().unwrap(),
@@ -4118,9 +3685,9 @@ async fn test_pre_phase15_command_operation_fingerprint_compatibility_and_replay
     assert_eq!(loaded.command_ledger.len(), 1);
     assert_eq!(loaded.command_ledger[0].fingerprint, pre15_fp);
 
-    // Resend exact same logical structured operation identity/payload via MCP
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    // Resend exact same logical structured operation identity/payload via shared operations
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let replay_env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -4138,7 +3705,7 @@ async fn test_pre_phase15_command_operation_fingerprint_compatibility_and_replay
     };
 
     let replay_res = client
-        .call_tool(
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
                 "projectPath": proj_path.to_str().unwrap(),
@@ -4199,1154 +3766,12 @@ async fn test_pre_phase15_command_operation_fingerprint_compatibility_and_replay
 // P15-AC-01, AC-02, AC-32, AC-33, AC-34, AC-40: Real Subprocess Qualification
 // ===========================================================================
 
-#[test]
-fn test_p15_ac01_ac02_ac32_ac33_ac34_ac40_real_subprocess_e2e() {
-    let bin = env!("CARGO_BIN_EXE_tinixcut");
-    let dir = test_dir("subproc_e2e");
-    let (proj_path, project) = create_sample_project(&dir, "subproc_proj");
-
-    let mut child = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn tinixcut mcp subprocess");
-
-    let mut stdin = child.stdin.take().expect("Failed to open child stdin");
-    let stdout = child.stdout.take().expect("Failed to open child stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // 1. server/discover via real subprocess (verifying 2026-07-28 and capabilities)
-    let req_disc = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "server/discover",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": {
-                    "name": "subproc-agent",
-                    "version": "1.0.0"
-                }
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&req_disc).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-
-    let mut line_disc = String::new();
-    reader.read_line(&mut line_disc).unwrap();
-    let val_disc: serde_json::Value =
-        serde_json::from_str(&line_disc).expect("Subprocess stdout must be 100% valid JSON-RPC");
-    assert_eq!(val_disc["id"], 1);
-    let disc_res = &val_disc["result"];
-    let versions = disc_res["supportedVersions"]
-        .as_array()
-        .expect("supportedVersions");
-    assert!(
-        versions.iter().any(|v| v.as_str() == Some("2026-07-28")),
-        "Real subprocess server/discover must advertise 2026-07-28: {:?}",
-        versions
-    );
-    assert!(
-        disc_res["capabilities"]["tools"].is_object(),
-        "Must advertise tools capability"
-    );
-
-    // 2. tools/list via real subprocess (modern path without initialize!)
-    let req1 = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&req1).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-
-    let mut line1 = String::new();
-    reader.read_line(&mut line1).unwrap();
-    // AC-32: Stdout Protocol Purity (MUST parse as valid JSON-RPC)
-    let val1: serde_json::Value =
-        serde_json::from_str(&line1).expect("Subprocess stdout must be 100% valid JSON-RPC");
-    assert_eq!(val1["id"], 2);
-    let tools = val1["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 36);
-
-    // 3. tinixcut_inspect via real subprocess
-    let req2 = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            },
-            "name": "tinixcut_inspect",
-            "arguments": {
-                "projectPath": proj_path.to_str().unwrap()
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&req2).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-
-    let mut line2 = String::new();
-    reader.read_line(&mut line2).unwrap();
-    let val2: serde_json::Value = serde_json::from_str(&line2).unwrap();
-    assert_eq!(val2["id"], 3);
-    assert_eq!(
-        val2["result"]["structuredContent"]["projectId"],
-        project.project_id
-    );
-
-    let artifact_path = dir.join("stdio-export.mp4");
-    let manifest_path = dir.join("stdio-workflow.json");
-    let plan = tinixcut_lib::modules::automation::edit_plan::EditPlan {
-        schema_version: 1,
-        goal: "Create one video track through MCP stdio".to_string(),
-        project_id: project.project_id.clone(),
-        base_revision: project.revision,
-        referenced_media_ids: Vec::new(),
-        assumptions: Vec::new(),
-        warnings: Vec::new(),
-        operations: vec![OperationEnvelope {
-            operation_id: "op-sub-1".to_string(),
-            operation: CommandOperation::TrackCreate {
-                track_id: Some("track_v2".to_string()),
-                name: "Track 2 Subprocess".to_string(),
-                kind: TrackKind::Video,
-            },
-        }],
-    };
-    let plan_json = serde_json::to_value(&plan).unwrap();
-    let project_path = proj_path.to_string_lossy().to_string();
-    let manifest_path_string = manifest_path.to_string_lossy().to_string();
-    let artifact_path_string = artifact_path.to_string_lossy().to_string();
-    let manifest = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        4,
-        "tinixcut_workflow_manifest_create",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path_string,
-            "plan": plan_json,
-            "artifactPaths": [artifact_path_string]
-        }),
-    );
-    assert_eq!(manifest["result"]["isError"], false, "{manifest}");
-
-    // 4. tinixcut_apply via real subprocess
-    let env = CommandEnvelope {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project_id: project.project_id.clone(),
-        base_revision: 0,
-        client_id: Some("agent-subproc".to_string()),
-        client_epoch: Some(1),
-        sequence_number: Some(1),
-        dry_run: false,
-        transaction_id: Some("tx-sub-1".to_string()),
-        operations: vec![OperationEnvelope {
-            operation_id: "op-sub-1".to_string(),
-            operation: CommandOperation::TrackCreate {
-                track_id: Some("track_v2".to_string()),
-                name: "Track 2 Subprocess".to_string(),
-                kind: TrackKind::Video,
-            },
-        }],
-    };
-    let req3 = serde_json::json!({
-        "jsonrpc": "2.0",
-            "id": 5,
-        "method": "tools/call",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            },
-            "name": "tinixcut_apply",
-            "arguments": {
-                "projectPath": proj_path.to_str().unwrap(),
-                "envelope": env
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&req3).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-
-    let mut line3 = String::new();
-    reader.read_line(&mut line3).unwrap();
-    let val3: serde_json::Value = serde_json::from_str(&line3).unwrap();
-    assert_eq!(val3["id"], 5);
-    assert_eq!(val3["result"]["isError"], false);
-    assert_eq!(val3["result"]["structuredContent"]["newRevision"], 1);
-
-    for (id, state) in [(6, "applied"), (7, "saved")] {
-        let checkpoint = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            id,
-            "tinixcut_workflow_manifest_checkpoint",
-            serde_json::json!({
-                "projectPath": project_path,
-                "manifestPath": manifest_path_string,
-                "plan": plan_json,
-                "state": state
-            }),
-        );
-        assert_eq!(checkpoint["result"]["isError"], false, "{checkpoint}");
-        assert_eq!(
-            checkpoint["result"]["structuredContent"]["checkpoint"]["state"],
-            state
-        );
-    }
-    generate_synthetic_mp4(&artifact_path, 1, "blue");
-    let exported = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        8,
-        "tinixcut_workflow_manifest_checkpoint",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path_string,
-            "plan": plan_json,
-            "state": "exported",
-            "artifactPath": artifact_path_string
-        }),
-    );
-    assert_eq!(exported["result"]["isError"], false, "{exported}");
-    assert_eq!(
-        exported["result"]["structuredContent"]["checkpoint"]["state"],
-        "exported"
-    );
-
-    // AC-34: Graceful exit on stdin EOF
-    drop(stdin);
-    let status = child.wait().expect("Child must exit on EOF");
-    assert!(status.success(), "Child must exit with exit status 0");
-
-    // Verify disk persistence after subprocess exit
-    let reloaded = load_project(&proj_path).unwrap();
-    assert_eq!(reloaded.revision, 1);
-    assert_eq!(reloaded.tracks.len(), 2);
-
-    // Restart a fresh MCP process and retry the same exported checkpoint. The durable sidecar
-    // must return the original receipt without adding a second operation or replacing evidence.
-    let mut restarted = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Restarted MCP process must start");
-    let mut restarted_stdin = restarted.stdin.take().unwrap();
-    let mut restarted_reader = BufReader::new(restarted.stdout.take().unwrap());
-    let retry = stdio_call_tool(
-        &mut restarted_stdin,
-        &mut restarted_reader,
-        1,
-        "tinixcut_workflow_manifest_checkpoint",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path_string,
-            "plan": plan_json,
-            "state": "exported",
-            "artifactPath": artifact_path_string
-        }),
-    );
-    assert_eq!(retry["result"]["isError"], false, "{retry}");
-    assert_eq!(
-        retry["result"]["structuredContent"]["alreadyRecorded"],
-        true
-    );
-    drop(restarted_stdin);
-    assert!(restarted.wait().unwrap().success());
-    let restarted_project = load_project(&proj_path).unwrap();
-    assert_eq!(restarted_project.revision, 1);
-    assert_eq!(restarted_project.tracks.len(), 2);
-}
-
-#[test]
-fn test_p56_real_stdio_three_project_batch_isolates_collision_and_continues() {
-    let bin = env!("CARGO_BIN_EXE_tinixcut");
-    // This test is also useful when more than one Cargo invocation is active, so its fixture
-    // directory must be unique across processes (the shared test_dir counter is process-local).
-    let dir = std::env::temp_dir().join(format!(
-        "tinixcut_p56_three_project_batch_{}_{}",
-        std::process::id(),
-        uuid::Uuid::new_v4().simple()
-    ));
-    fs::create_dir_all(&dir).expect("batch fixture directory must be created");
-    let mut projects = Vec::new();
-    for index in 0..3 {
-        let name = format!("batch_project_{index}");
-        let (project_path, project, _) = create_sample_project_with_media(&dir, &name, 1);
-        projects.push((project_path, project));
-    }
-
-    // Project 1 has a pre-existing output. The batch client must skip only this item and
-    // preserve the existing artifact while continuing with projects 0 and 2.
-    let outputs = (0..3)
-        .map(|index| dir.join(format!("batch_output_{index}.mp4")))
-        .collect::<Vec<_>>();
-    let preserved_collision = b"prior user output; batch must not replace it";
-    fs::write(&outputs[1], preserved_collision).unwrap();
-    let collision_bytes_before = fs::read(&outputs[1]).unwrap();
-
-    let mut child = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("MCP stdio process must start");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
-
-    // One invalid item must return a structured error without terminating the process or
-    // preventing later items from being processed.
-    let invalid = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        1,
-        "tinixcut_inspect",
-        serde_json::json!({ "projectPath": dir.join("missing.tcproj") }),
-    );
-    assert_eq!(invalid["result"]["isError"], true, "{invalid}");
-
-    let mut exported = 0;
-    let mut collision_isolated = false;
-    for (index, (project_path, project)) in projects.iter().enumerate() {
-        let output_path = &outputs[index];
-        let report = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            10 + (index as u64 * 10),
-            "tinixcut_export_preflight",
-            serde_json::json!({
-                "projectPath": project_path,
-                "outputPath": output_path,
-            }),
-        );
-        assert_eq!(report["result"]["isError"], false, "{report}");
-        let output_exists = report["result"]["structuredContent"]["outputExists"]
-            .as_bool()
-            .unwrap_or(false);
-
-        if index == 1 {
-            assert!(
-                output_exists,
-                "preflight must report the existing destination: {report}"
-            );
-            assert_eq!(fs::read(output_path).unwrap(), collision_bytes_before);
-            collision_isolated = true;
-            continue;
-        }
-        assert!(
-            !output_exists,
-            "each successful batch item has a unique output"
-        );
-
-        let manifest_path = dir.join(format!("batch_manifest_{index}.json"));
-        let operation_id = format!("batch_track_{index}");
-        let plan = tinixcut_lib::modules::automation::edit_plan::EditPlan {
-            schema_version: 1,
-            goal: format!("Batch acceptance project {index}"),
-            project_id: project.project_id.clone(),
-            base_revision: project.revision,
-            referenced_media_ids: Vec::new(),
-            assumptions: Vec::new(),
-            warnings: Vec::new(),
-            operations: vec![OperationEnvelope {
-                operation_id: operation_id.clone(),
-                operation: CommandOperation::TrackCreate {
-                    track_id: Some(format!("batch_extra_track_{index}")),
-                    name: format!("Batch Track {index}"),
-                    kind: TrackKind::Video,
-                },
-            }],
-        };
-        let plan_json = serde_json::to_value(&plan).unwrap();
-        let manifest = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            11 + (index as u64 * 10),
-            "tinixcut_workflow_manifest_create",
-            serde_json::json!({
-                "projectPath": project_path,
-                "manifestPath": manifest_path,
-                "plan": plan_json,
-                "artifactPaths": [output_path],
-            }),
-        );
-        assert_eq!(manifest["result"]["isError"], false, "{manifest}");
-
-        let apply = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            12 + (index as u64 * 10),
-            "tinixcut_apply",
-            serde_json::json!({
-                "projectPath": project_path,
-                "envelope": CommandEnvelope {
-                    schema_version: CURRENT_SCHEMA_VERSION,
-                    project_id: project.project_id.clone(),
-                    base_revision: project.revision,
-                    client_id: Some(format!("batch_client_{index}")),
-                    client_epoch: Some(1),
-                    sequence_number: Some(1),
-                    dry_run: false,
-                    transaction_id: Some(format!("batch_tx_{index}")),
-                    operations: plan.operations.clone(),
-                },
-            }),
-        );
-        assert_eq!(apply["result"]["isError"], false, "{apply}");
-        let applied = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            13 + (index as u64 * 10),
-            "tinixcut_workflow_manifest_checkpoint",
-            serde_json::json!({
-                "projectPath": project_path,
-                "manifestPath": manifest_path,
-                "plan": plan_json,
-                "state": "applied",
-            }),
-        );
-        assert_eq!(applied["result"]["isError"], false, "{applied}");
-
-        let save = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            14 + (index as u64 * 10),
-            "tinixcut_save",
-            serde_json::json!({ "projectPath": project_path }),
-        );
-        assert_eq!(save["result"]["isError"], false, "{save}");
-        let saved = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            15 + (index as u64 * 10),
-            "tinixcut_workflow_manifest_checkpoint",
-            serde_json::json!({
-                "projectPath": project_path,
-                "manifestPath": manifest_path,
-                "plan": plan_json,
-                "state": "saved",
-            }),
-        );
-        assert_eq!(saved["result"]["isError"], false, "{saved}");
-
-        let start = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            16 + (index as u64 * 10),
-            "tinixcut_export_start",
-            serde_json::json!({ "projectPath": project_path, "outputPath": output_path }),
-        );
-        assert_eq!(start["result"]["isError"], false, "{start}");
-        let job_id = start["result"]["structuredContent"]["jobId"]
-            .as_str()
-            .expect("export job id")
-            .to_string();
-        let mut completed = false;
-        for poll in 0..120 {
-            let status = stdio_call_tool(
-                &mut stdin,
-                &mut reader,
-                17 + (index as u64 * 200) + poll,
-                "tinixcut_export_status",
-                serde_json::json!({ "jobId": job_id }),
-            );
-            assert_eq!(status["result"]["isError"], false, "{status}");
-            match status["result"]["structuredContent"]["status"].as_str() {
-                Some("completed") => {
-                    completed = true;
-                    break;
-                }
-                Some("failed") => panic!("batch export failed: {status}"),
-                _ => std::thread::sleep(std::time::Duration::from_millis(100)),
-            }
-        }
-        assert!(completed, "batch export did not finish for project {index}");
-        let checkpoint = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            18 + (index as u64 * 200),
-            "tinixcut_workflow_manifest_checkpoint",
-            serde_json::json!({
-                "projectPath": project_path,
-                "manifestPath": manifest_path,
-                "plan": plan_json,
-                "state": "exported",
-                "artifactPath": output_path,
-            }),
-        );
-        assert_eq!(checkpoint["result"]["isError"], false, "{checkpoint}");
-        assert!(output_path.exists());
-        let persisted = load_project(project_path).unwrap();
-        assert_eq!(persisted.revision, 1);
-        assert_eq!(persisted.tracks.len(), project.tracks.len() + 1);
-        exported += 1;
-    }
-
-    assert_eq!(exported, 2);
-    assert!(collision_isolated);
-    assert_eq!(fs::read(&outputs[1]).unwrap(), collision_bytes_before);
-    drop(stdin);
-    assert!(child.wait().unwrap().success());
-}
-
-#[test]
-fn test_p56_real_stdio_batch_cancel_isolated_and_next_project_exports() {
-    let bin = env!("CARGO_BIN_EXE_tinixcut");
-    let dir = std::env::temp_dir().join(format!(
-        "tinixcut_p56_cancel_batch_{}_{}",
-        std::process::id(),
-        uuid::Uuid::new_v4().simple()
-    ));
-    fs::create_dir_all(&dir).expect("batch cancellation fixture directory must be created");
-    let (cancelled_project_path, cancelled_project, _) =
-        create_sample_project_with_media(&dir, "cancelled_batch_item", 60);
-    let (next_project_path, next_project, _) =
-        create_sample_project_with_media(&dir, "next_batch_item", 1);
-    let cancelled_output = dir.join("cancelled_output.mp4");
-    let next_output = dir.join("next_output.mp4");
-
-    let mut child = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("MCP stdio process must start");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
-
-    let start_cancelled = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        1,
-        "tinixcut_export_start",
-        serde_json::json!({
-            "projectPath": cancelled_project_path,
-            "outputPath": cancelled_output,
-        }),
-    );
-    assert_eq!(
-        start_cancelled["result"]["isError"], false,
-        "{start_cancelled}"
-    );
-    let cancelled_job = start_cancelled["result"]["structuredContent"]["jobId"]
-        .as_str()
-        .expect("first batch export must return a job ID")
-        .to_string();
-
-    let temp_output_exists = (0..500).any(|_| {
-        let exists = fs::read_dir(&dir).unwrap().flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .contains(".tc_render.tmp.mp4")
-        });
-        if !exists {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        exists
-    });
-    assert!(
-        temp_output_exists,
-        "first batch export must reach active rendering before cancellation"
-    );
-
-    let cancel = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        2,
-        "tinixcut_export_cancel",
-        serde_json::json!({ "jobId": cancelled_job }),
-    );
-    assert_eq!(cancel["result"]["isError"], false, "{cancel}");
-    assert_eq!(cancel["result"]["structuredContent"]["cancelled"], true);
-    let cancelled_status = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        3,
-        "tinixcut_export_status",
-        serde_json::json!({ "jobId": cancelled_job }),
-    );
-    assert_eq!(
-        cancelled_status["result"]["structuredContent"]["status"],
-        "cancelled"
-    );
-
-    let cleanup_completed = (0..250).any(|_| {
-        let has_temp = fs::read_dir(&dir).unwrap().flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .contains(".tc_render.tmp.mp4")
-        });
-        if has_temp {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        !has_temp
-    });
-    assert!(
-        cleanup_completed,
-        "cancelled batch item must clean its temporary render"
-    );
-    assert!(
-        !cancelled_output.exists(),
-        "cancelled batch item must not promote output"
-    );
-
-    // The same MCP subprocess remains usable: process the next independent batch item.
-    let next_start = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        4,
-        "tinixcut_export_start",
-        serde_json::json!({
-            "projectPath": next_project_path,
-            "outputPath": next_output,
-        }),
-    );
-    assert_eq!(next_start["result"]["isError"], false, "{next_start}");
-    let next_job = next_start["result"]["structuredContent"]["jobId"]
-        .as_str()
-        .expect("next batch export must return a job ID")
-        .to_string();
-    let mut next_completed = false;
-    for poll in 0..120 {
-        let status = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            5 + poll,
-            "tinixcut_export_status",
-            serde_json::json!({ "jobId": next_job }),
-        );
-        assert_eq!(status["result"]["isError"], false, "{status}");
-        match status["result"]["structuredContent"]["status"].as_str() {
-            Some("completed") => {
-                next_completed = true;
-                break;
-            }
-            Some("failed") | Some("cancelled") => panic!("next batch export failed: {status}"),
-            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
-        }
-    }
-    assert!(
-        next_completed,
-        "next independent batch export did not complete"
-    );
-    assert!(next_output.is_file());
-
-    let mut ffmpeg = tinixcut_lib::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
-        .expect("bundled FFmpeg must resolve");
-    let decode = ffmpeg
-        .args(["-v", "error", "-i"])
-        .arg(&next_output)
-        .args(["-f", "null", "-"])
-        .output()
-        .expect("next batch output must full-decode");
-    assert!(
-        decode.status.success(),
-        "next batch output failed FFmpeg decode: {}",
-        String::from_utf8_lossy(&decode.stderr)
-    );
-    assert_eq!(
-        load_project(&cancelled_project_path).unwrap(),
-        cancelled_project
-    );
-    assert_eq!(load_project(&next_project_path).unwrap(), next_project);
-
-    drop(stdin);
-    assert!(child.wait().unwrap().success());
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn test_p56_real_stdio_new_project_stale_revision_recovers_and_exports() {
-    let bin = env!("CARGO_BIN_EXE_tinixcut");
-    let dir = std::env::temp_dir().join(format!(
-        "tinixcut_p56_new_project_{}_{}",
-        std::process::id(),
-        uuid::Uuid::new_v4().simple()
-    ));
-    fs::create_dir_all(&dir).expect("new-project fixture directory must be created");
-    let project_path = dir.join("new_project.tcproj");
-    let media_path = dir.join("new_project_media.mp4");
-    let output_path = dir.join("new_project_export.mp4");
-    let manifest_path = dir.join("new_project_workflow.json");
-    generate_synthetic_mp4(&media_path, 1, "blue");
-    assert!(media_path.is_file(), "disposable source media must exist");
-    let media_size = fs::metadata(&media_path).unwrap().len();
-
-    let mut child = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("MCP stdio process must start");
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
-
-    let created = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        1,
-        "tinixcut_project_create",
-        serde_json::json!({ "projectPath": project_path, "name": "New project batch fixture" }),
-    );
-    assert_eq!(created["result"]["isError"], false, "{created}");
-    let initial = load_project(&project_path).expect("MCP-created project must load");
-    assert_eq!(initial.revision, 0);
-
-    let import_operation = OperationEnvelope {
-        operation_id: "new_project_asset_import".into(),
-        operation: CommandOperation::AssetImport {
-            asset_id: Some("new_project_asset".into()),
-            name: "new_project_media.mp4".into(),
-            path: media_path.to_string_lossy().into_owned(),
-            media_kind: MediaKind::Video,
-            duration: Some(RationalTime::new(30, FrameRate::FPS_30)),
-            file_size: media_size,
-            dimensions: None,
-        },
-    };
-    let imported = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        2,
-        "tinixcut_apply",
-        serde_json::json!({
-            "projectPath": project_path,
-            "envelope": CommandEnvelope {
-                schema_version: CURRENT_SCHEMA_VERSION,
-                project_id: initial.project_id.clone(),
-                base_revision: 0,
-                client_id: Some("new-project-import-client".into()),
-                client_epoch: Some(1),
-                sequence_number: Some(1),
-                dry_run: false,
-                transaction_id: Some("new-project-import-transaction".into()),
-                operations: vec![import_operation],
-            },
-        }),
-    );
-    assert_eq!(imported["result"]["isError"], false, "{imported}");
-    let after_import = load_project(&project_path).expect("media import must persist");
-    assert_eq!(after_import.revision, 1);
-    assert_eq!(after_import.assets.len(), 1);
-
-    // A client holding the pre-import revision must fail without mutating the project.
-    let stale = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        3,
-        "tinixcut_apply",
-        serde_json::json!({
-            "projectPath": project_path,
-            "envelope": CommandEnvelope {
-                schema_version: CURRENT_SCHEMA_VERSION,
-                project_id: after_import.project_id.clone(),
-                base_revision: 0,
-                client_id: Some("new-project-stale-client".into()),
-                client_epoch: Some(1),
-                sequence_number: Some(1),
-                dry_run: false,
-                transaction_id: Some("new-project-stale-transaction".into()),
-                operations: vec![OperationEnvelope {
-                    operation_id: "stale_track_operation".into(),
-                    operation: CommandOperation::TrackCreate {
-                        track_id: Some("must_not_exist".into()),
-                        name: "Stale track".into(),
-                        kind: TrackKind::Video,
-                    },
-                }],
-            },
-        }),
-    );
-    assert_eq!(stale["result"]["isError"], true, "{stale}");
-    assert_eq!(
-        stale["result"]["structuredContent"]["code"],
-        "STALE_REVISION"
-    );
-    let unchanged = load_project(&project_path).unwrap();
-    assert_eq!(unchanged.revision, 1);
-    assert!(unchanged.tracks.is_empty());
-
-    let plan = tinixcut_lib::modules::automation::edit_plan::EditPlan {
-        schema_version: 1,
-        goal: "Create a one-second video from a new MCP project".into(),
-        project_id: unchanged.project_id.clone(),
-        base_revision: unchanged.revision,
-        referenced_media_ids: vec!["new_project_asset".into()],
-        assumptions: Vec::new(),
-        warnings: Vec::new(),
-        operations: vec![
-            OperationEnvelope {
-                operation_id: "new_project_video_track".into(),
-                operation: CommandOperation::TrackCreate {
-                    track_id: Some("new_project_video_track".into()),
-                    name: "Video".into(),
-                    kind: TrackKind::Video,
-                },
-            },
-            OperationEnvelope {
-                operation_id: "new_project_video_clip".into(),
-                operation: CommandOperation::ClipCreate {
-                    track_id: "new_project_video_track".into(),
-                    item_id: Some("new_project_video_clip".into()),
-                    name: "One-second source".into(),
-                    kind: ItemKind::Video,
-                    asset_id: Some("new_project_asset".into()),
-                    timeline_start: RationalTime::zero(FrameRate::FPS_30),
-                    duration: RationalTime::new(30, FrameRate::FPS_30),
-                    source_start: Some(RationalTime::zero(FrameRate::FPS_30)),
-                },
-            },
-        ],
-    };
-    let plan_json = serde_json::to_value(&plan).unwrap();
-    let manifest = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        4,
-        "tinixcut_workflow_manifest_create",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path,
-            "plan": plan_json,
-            "artifactPaths": [output_path],
-        }),
-    );
-    assert_eq!(manifest["result"]["isError"], false, "{manifest}");
-    let applied = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        5,
-        "tinixcut_apply",
-        serde_json::json!({
-            "projectPath": project_path,
-            "envelope": CommandEnvelope {
-                schema_version: CURRENT_SCHEMA_VERSION,
-                project_id: unchanged.project_id.clone(),
-                base_revision: unchanged.revision,
-                client_id: Some("new-project-edit-client".into()),
-                client_epoch: Some(1),
-                sequence_number: Some(1),
-                dry_run: false,
-                transaction_id: Some("new-project-edit-transaction".into()),
-                operations: plan.operations.clone(),
-            },
-        }),
-    );
-    assert_eq!(applied["result"]["isError"], false, "{applied}");
-    assert_eq!(load_project(&project_path).unwrap().revision, 2);
-    let applied_checkpoint = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        6,
-        "tinixcut_workflow_manifest_checkpoint",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path,
-            "plan": plan_json,
-            "state": "applied",
-        }),
-    );
-    assert_eq!(
-        applied_checkpoint["result"]["isError"], false,
-        "{applied_checkpoint}"
-    );
-
-    let saved = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        7,
-        "tinixcut_save",
-        serde_json::json!({ "projectPath": project_path }),
-    );
-    assert_eq!(saved["result"]["isError"], false, "{saved}");
-    let saved_checkpoint = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        8,
-        "tinixcut_workflow_manifest_checkpoint",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path,
-            "plan": plan_json,
-            "state": "saved",
-        }),
-    );
-    assert_eq!(
-        saved_checkpoint["result"]["isError"], false,
-        "{saved_checkpoint}"
-    );
-
-    let start = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        9,
-        "tinixcut_export_start",
-        serde_json::json!({ "projectPath": project_path, "outputPath": output_path }),
-    );
-    assert_eq!(start["result"]["isError"], false, "{start}");
-    let job_id = start["result"]["structuredContent"]["jobId"]
-        .as_str()
-        .expect("new project export job ID")
-        .to_string();
-    let mut completed = false;
-    for poll in 0..120 {
-        let status = stdio_call_tool(
-            &mut stdin,
-            &mut reader,
-            10 + poll,
-            "tinixcut_export_status",
-            serde_json::json!({ "jobId": job_id }),
-        );
-        assert_eq!(status["result"]["isError"], false, "{status}");
-        match status["result"]["structuredContent"]["status"].as_str() {
-            Some("completed") => {
-                completed = true;
-                break;
-            }
-            Some("failed") => panic!("new project export failed: {status}"),
-            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
-        }
-    }
-    assert!(completed, "new project export must complete");
-    let exported_checkpoint = stdio_call_tool(
-        &mut stdin,
-        &mut reader,
-        131,
-        "tinixcut_workflow_manifest_checkpoint",
-        serde_json::json!({
-            "projectPath": project_path,
-            "manifestPath": manifest_path,
-            "plan": plan_json,
-            "state": "exported",
-            "artifactPath": output_path,
-        }),
-    );
-    assert_eq!(
-        exported_checkpoint["result"]["isError"], false,
-        "{exported_checkpoint}"
-    );
-    assert!(output_path.is_file());
-    let mut decode = tinixcut_lib::modules::media::resolver::MediaBinaryResolver::command("ffmpeg")
-        .expect("bundled FFmpeg must be available");
-    let decoded = decode
-        .args(["-v", "error", "-xerror", "-i"])
-        .arg(&output_path)
-        .args(["-f", "null", "-"])
-        .output()
-        .expect("full decode process must start");
-    assert!(
-        decoded.status.success(),
-        "export full decode failed: {}",
-        String::from_utf8_lossy(&decoded.stderr)
-    );
-    let persisted = load_project(&project_path).unwrap();
-    assert_eq!(persisted.revision, 2);
-    assert_eq!(persisted.assets.len(), 1);
-    assert_eq!(persisted.tracks.len(), 1);
-    assert_eq!(persisted.tracks[0].items.len(), 1);
-    drop(stdin);
-    assert!(child.wait().unwrap().success());
-}
-
-#[test]
-fn test_p15_ac35_subprocess_shutdown_orphan_and_temp_cleanup() {
-    let bin = env!("CARGO_BIN_EXE_tinixcut");
-    let dir = test_dir("shutdown_cleanup_subproc");
-    let (proj_path, _, _) = create_sample_project_with_media(&dir, "shutdown_proj", 10);
-    let out_file = dir.join("shutdown_render.mp4");
-
-    let mut child = Command::new(bin)
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn tinixcut mcp subprocess");
-
-    let mut stdin = child.stdin.take().expect("Failed to open child stdin");
-    let stdout = child.stdout.take().expect("Failed to open child stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // 1. Discover
-    let disc_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "server/discover",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": { "name": "test-agent", "version": "1.0.0" }
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&disc_req).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-    let mut line1 = String::new();
-    reader.read_line(&mut line1).unwrap();
-
-    // 2. Start a 10s export
-    let exp_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            },
-            "name": "tinixcut_export_start",
-            "arguments": {
-                "projectPath": proj_path.to_str().unwrap(),
-                "outputPath": out_file.to_str().unwrap()
-            }
-        }
-    });
-    stdin
-        .write_all(format!("{}\n", serde_json::to_string(&exp_req).unwrap()).as_bytes())
-        .unwrap();
-    stdin.flush().unwrap();
-    let mut line2 = String::new();
-    reader.read_line(&mut line2).unwrap();
-    let exp_val: serde_json::Value = serde_json::from_str(&line2).unwrap();
-    assert_eq!(exp_val["id"], 2);
-    assert_eq!(exp_val["result"]["isError"], false);
-
-    // Give FFmpeg worker a moment to spawn and create temp render file
-    std::thread::sleep(std::time::Duration::from_millis(150));
-
-    // 3. Drop stdin while export is actively running to trigger clean MCP shutdown
-    drop(stdin);
-
-    // 4. Subprocess exits cleanly
-    let status = child.wait().expect("Subprocess must exit on stdin EOF");
-    assert!(status.success(), "Subprocess must exit with status 0");
-
-    // 5. Verify no temporary render artifact files remain in directory
-    let entries = fs::read_dir(&dir).unwrap();
-    let tmp_files: Vec<_> = entries
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .contains(".tc_render.tmp.mp4")
-        })
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .collect();
-    assert!(
-        tmp_files.is_empty(),
-        "All temporary render files must be cleaned up on shutdown! Found: {:?}",
-        tmp_files
-    );
-
-    // 6. Prove directory is not locked by any orphaned FFmpeg process
-    let lock_probe = dir.join("probe_lock.tmp");
-    fs::write(&lock_probe, b"probe").expect("Directory must remain writable");
-    let _ = fs::remove_file(&lock_probe);
-}
-
-#[tokio::test]
-async fn test_p58a_every_tool_declares_safety_annotations() {
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
-    let res = client
-        .send_request("tools/list", serde_json::json!({}))
-        .await;
-    let tools = res["result"]["tools"].as_array().expect("tools array");
-    let read_only: std::collections::BTreeSet<&str> = [
-        "project_compare",
-        "audio_align",
-        "project_chapters",
-        "frame_scopes",
-        "lut_probe",
-        "media_probe",
-        "edit_plan_validate",
-        "edit_plan_draft",
-        "edit_plan_scene_draft",
-        "edit_plan_scene_selection_suggest",
-        "edit_plan_reorder",
-        "edit_plan_trim",
-        "edit_plan_volume",
-        "edit_plan_canvas",
-        "edit_plan_text_replace",
-        "media_scene_candidates",
-        "media_visual_scenes",
-        "media_transcript",
-        "inspect",
-        "capabilities",
-        "dry_run",
-        "workflow_manifest_validate",
-        "export_preflight",
-        "export_status",
-        "template_validate",
-    ]
-    .into_iter()
-    .collect();
-    let destructive: std::collections::BTreeSet<&str> =
-        ["apply", "save", "export_start", "template_apply"]
-            .into_iter()
-            .collect();
-    for tool in tools {
-        let name = tool["name"].as_str().unwrap();
-        let short = name.trim_start_matches("tinixcut_");
-        let a = &tool["annotations"];
-        assert!(a.is_object(), "{name} has no annotations");
-        assert_eq!(a["openWorldHint"], false, "{name}");
-        assert_eq!(
-            a["readOnlyHint"],
-            read_only.contains(short),
-            "{name} readOnlyHint"
-        );
-        assert_eq!(
-            a["destructiveHint"],
-            destructive.contains(short),
-            "{name} destructiveHint"
-        );
-        if read_only.contains(short) {
-            assert_eq!(
-                a["idempotentHint"], true,
-                "{name} read-only tools are idempotent"
-            );
-        }
-    }
-}
-
 #[tokio::test]
 async fn test_p58a_destructive_apply_requires_prior_identical_dry_run_when_gate_is_on() {
     let dir = test_dir("p58a_gate");
     let (project_path, project) = create_sample_project(&dir, "gate_project");
-    let server = TinixCutMcpServer::new().with_destructive_confirmation(true);
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new().with_destructive_confirmation(true);
+    let mut client = OperationsHarness::new(server).await;
     let path = project_path.to_str().unwrap();
 
     let envelope = |base: u64, seq: u64, tx: &str, ops: serde_json::Value| {
@@ -5370,14 +3795,14 @@ async fn test_p58a_destructive_apply_requires_prior_identical_dry_run_when_gate_
 
     // Non-destructive edits are never gated.
     let created = client
-        .call_tool("tinixcut_apply", serde_json::json!({
+        .execute("tinixcut_apply", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision, 1, "p58a-create", create_ops) }))
         .await;
     assert_eq!(created["result"]["isError"], false, "{created}");
 
     // Destructive apply without a dry run is refused and changes nothing.
     let refused = client
-        .call_tool("tinixcut_apply", serde_json::json!({
+        .execute("tinixcut_apply", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-1", delete_ops.clone()) }))
         .await;
     assert_eq!(refused["result"]["isError"], true, "{refused}");
@@ -5392,24 +3817,24 @@ async fn test_p58a_destructive_apply_requires_prior_identical_dry_run_when_gate_
 
     // A dry run of a different envelope does not unlock it.
     let other = client
-        .call_tool("tinixcut_dry_run", serde_json::json!({
+        .execute("tinixcut_dry_run", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-other", serde_json::json!([])) }))
         .await;
     assert_eq!(other["result"]["isError"], false, "{other}");
     let still_refused = client
-        .call_tool("tinixcut_apply", serde_json::json!({
+        .execute("tinixcut_apply", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-2", delete_ops.clone()) }))
         .await;
     assert_eq!(still_refused["result"]["isError"], true, "{still_refused}");
 
     // The identical envelope after its own dry run is accepted, once.
     let dry = client
-        .call_tool("tinixcut_dry_run", serde_json::json!({
+        .execute("tinixcut_dry_run", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-3", delete_ops.clone()) }))
         .await;
     assert_eq!(dry["result"]["isError"], false, "{dry}");
     let applied = client
-        .call_tool("tinixcut_apply", serde_json::json!({
+        .execute("tinixcut_apply", serde_json::json!({
             "projectPath": path, "envelope": envelope(project.revision + 1, 2, "p58a-del-3", delete_ops) }))
         .await;
     assert_eq!(applied["result"]["isError"], false, "{applied}");
@@ -5441,10 +3866,10 @@ LUT_3D_SIZE 2
     }
     let lut_path = dir.join("probe.cube");
     fs::write(&lut_path, cube).unwrap();
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
 
     let probe = client
-        .call_tool(
+        .execute(
             "tinixcut_lut_probe",
             serde_json::json!({ "lutPath": lut_path.to_str().unwrap() }),
         )
@@ -5456,7 +3881,7 @@ LUT_3D_SIZE 2
     assert_eq!(report["clipLut"]["sha256"].as_str().unwrap().len(), 64);
 
     let missing = client
-        .call_tool(
+        .execute(
             "tinixcut_lut_probe",
             serde_json::json!({ "lutPath": dir.join("nope.cube").to_str().unwrap() }),
         )
@@ -5478,9 +3903,9 @@ async fn test_p58d_frame_scopes_reports_export_frame_statistics_read_only() {
     let dir = test_dir("p58d_scopes");
     let (project_path, project, _media) =
         create_sample_project_with_media(&dir, "scopes_project", 2);
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let empty = client
-        .call_tool(
+        .execute(
             "tinixcut_frame_scopes",
             serde_json::json!({ "projectPath": project_path.to_str().unwrap(), "frame": 0 }),
         )
@@ -5515,7 +3940,7 @@ async fn test_p58d_frame_scopes_reports_export_frame_statistics_read_only() {
     );
 
     let missing = client
-        .call_tool(
+        .execute(
             "tinixcut_frame_scopes",
             serde_json::json!({ "projectPath": dir.join("nope.tcproj").to_str().unwrap(), "frame": 0 }),
         )
@@ -5548,9 +3973,9 @@ async fn test_p58e_project_chapters_lists_markers_and_reports_violations_without
     project.revision += 1;
     save_project_atomic(&project, &project_path).unwrap();
 
-    let mut client = DuplexMcpClient::new(TinixCutMcpServer::new()).await;
+    let mut client = OperationsHarness::new(AutomationOperations::new()).await;
     let result = client
-        .call_tool(
+        .execute(
             "tinixcut_project_chapters",
             serde_json::json!({ "projectPath": project_path.to_str().unwrap() }),
         )
@@ -5574,5 +3999,178 @@ async fn test_p58e_project_chapters_lists_markers_and_reports_violations_without
     ])
     .unwrap();
     assert!(cli.contains("00:30 Middle"), "{cli}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_real_media_export_and_active_analysis_cancellation() {
+    use std::time::{Duration, Instant};
+    let dir = test_dir("cli_real_media");
+    let (project_path, _, media) = create_sample_project_with_media(&dir, "cli_real", 4);
+    assert!(media.is_file());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tinixcut"))
+        .arg("api-session").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    fn send(input: &mut ChildStdin, value: serde_json::Value) { writeln!(input, "{value}").unwrap(); input.flush().unwrap(); }
+    fn receive(output: &mut BufReader<ChildStdout>) -> serde_json::Value { let mut line = String::new(); assert!(output.read_line(&mut line).unwrap() > 0); serde_json::from_str(&line).unwrap() }
+    let dest = dir.join("render.mp4");
+    send(&mut input, serde_json::json!({"id":1,"command":"export_start","arguments":{"projectPath":project_path,"outputPath":dest}}));
+    let start = receive(&mut output); assert_eq!(start["result"]["isError"], false, "{start}");
+    let job = start["result"]["structuredContent"]["jobId"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        send(&mut input, serde_json::json!({"id":2,"command":"export_status","arguments":{"jobId":job}}));
+        let response = receive(&mut output);
+        let status = response["result"]["structuredContent"]["status"].as_str().unwrap();
+        if status == "completed" { break; }
+        assert!(status == "running" || status == "queued", "{response}");
+        assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(100));
+    }
+    let decode = tinixcut_lib::modules::media::resolver::MediaBinaryResolver::command("ffmpeg").unwrap().args(["-v", "error", "-i", dest.to_str().unwrap(), "-f", "null", "-"]).output().unwrap();
+    assert!(decode.status.success(), "{}", String::from_utf8_lossy(&decode.stderr));
+    send(&mut input, serde_json::json!({"id":3,"command":"media_scene_candidates","arguments":{"mediaPath":media,"threshold":0.314159}}));
+    std::thread::sleep(Duration::from_millis(50));
+    send(&mut input, serde_json::json!({"id":4,"command":"cancel","arguments":{"id":3}}));
+    let first = receive(&mut output); let second = receive(&mut output);
+    let cancel = if first["id"] == 4 { &first } else { &second };
+    let analysis = if first["id"] == 3 { &first } else { &second };
+    assert_eq!(cancel["result"]["cancelled"], true, "{cancel} {analysis}");
+    assert_eq!(analysis["result"]["isError"], true, "{analysis}");
+    assert_eq!(analysis["result"]["structuredContent"]["code"], "OPERATION_CANCELLED", "{analysis}");
+    drop(input); assert!(child.wait().unwrap().success());
+}
+
+#[tokio::test]
+async fn cli_operation_success_parity_for_media_and_edit_plans() {
+    let dir = test_dir("cli_read_plans");
+    let (path, mut project, media) = create_sample_project_with_media(&dir, "read_plans", 4);
+    let rate = FrameRate::FPS_30;
+    project.tracks[0].items[0].timeline_range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate));
+    project.tracks[0].items[0].source_range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate));
+    let second = TimelineItem::new(Some(project.assets[0].asset_id.clone()), "Second".into(), ItemKind::Video,
+        TimeRange::new(RationalTime::new(60, rate), RationalTime::new(60, rate)),
+        TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate))).unwrap();
+    let second_id = second.item_id.clone();
+    project.tracks[0].items.push(second);
+    let range = TimeRange::new(RationalTime::new(0, rate), RationalTime::new(60, rate));
+    let mut caption = TimelineItem::new(None, "Caption".into(), ItemKind::Text, range.clone(), range).unwrap();
+    caption.text_content = Some("Visit Da Nang".into());
+    let caption_id = caption.item_id.clone();
+    let mut captions = Track::new("Captions".into(), TrackKind::Video); captions.items.push(caption);
+    project.tracks.push(captions); save_project_atomic(&project, &path).unwrap();
+    let mut cli = Command::new(env!("CARGO_BIN_EXE_tinixcut")).env("TINIX_TEMPLATE_CATALOG_DIR", dir.join("catalog-cli")).arg("api-session").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut input = cli.stdin.take().unwrap();
+    let mut output = BufReader::new(cli.stdout.take().unwrap());
+    let mut operations = OperationsHarness::new(AutomationOperations::new()).await;
+    let item = &project.tracks[0].items[0].item_id;
+    let asset = &project.assets[0].asset_id;
+    let scene_source = tinixcut_lib::modules::media::visual_scene::VisualSceneSource {
+        asset_id: project.assets[0].asset_id.clone(),
+        asset_name: project.assets[0].name.clone(),
+        path: PathBuf::from(&project.assets[0].path),
+    };
+    let scene_report = serde_json::json!({
+        "schemaVersion": tinixcut_lib::modules::media::visual_scene::VISUAL_SCENE_SCHEMA_VERSION,
+        "algorithmVersion": tinixcut_lib::modules::media::visual_scene::VISUAL_SCENE_ALGORITHM_VERSION,
+        "provider": "lm-studio-local",
+        "model": "google/gemma-4-e4b",
+        "query": "travel scenes",
+        "sourceFingerprint": tinixcut_lib::modules::media::visual_scene::aggregate_source_fingerprint(&[scene_source]).unwrap(),
+        "configFingerprint": "0".repeat(64),
+        "truncated": false,
+        "scenes": [
+            {"sceneId":"scene-01","assetId":project.assets[0].asset_id,"assetName":project.assets[0].name,"sourceStartMicros":0,"sourceEndMicros":1000000,"sampledAtMicros":500000,"caption":"Opening view","tags":["street"],"relevanceScore":0.7,"rationale":"Buildings are visible."},
+            {"sceneId":"scene-02","assetId":project.assets[0].asset_id,"assetName":project.assets[0].name,"sourceStartMicros":1000000,"sourceEndMicros":2000000,"sampledAtMicros":1500000,"caption":"Lantern street","tags":["lanterns"],"relevanceScore":0.9,"rationale":"Lanterns and wet pavement are visible."}
+        ],
+        "warnings": []
+    });
+    let scene_draft_args = serde_json::json!({
+        "projectPath": path,
+        "goal": "Put the lantern scene first",
+        "report": scene_report,
+        "selectedSceneIds": ["scene-02", "scene-01"],
+        "targetDurationFrames": 60,
+        "exactDuration": true
+    });
+    let cases = [
+        ("project_compare", serde_json::json!({"leftProjectPath":path,"leftExpectedRevision":project.revision,"rightProjectPath":path,"rightExpectedRevision":project.revision})),
+        ("media_probe", serde_json::json!({"mediaPath":media})),
+        ("edit_plan_reorder", serde_json::json!({"projectPath":path,"goal":"Reorder","trackId":project.tracks[0].track_id,"itemIds":[second_id,item],"plannerProvider":"caller-order-v1"})),
+        ("edit_plan_text_replace", serde_json::json!({"projectPath":path,"goal":"Replace","itemIds":[caption_id],"searchText":"Da Nang","replacementText":"Hoi An"})),
+        ("audio_align", serde_json::json!({"projectPath":path,"referenceItemId":item,"itemIds":[second_id]})),
+
+        ("frame_scopes", serde_json::json!({"projectPath":path,"frame":0})),
+        ("edit_plan_trim", serde_json::json!({"projectPath":path,"goal":"Trim","itemId":item,"targetDurationFrames":30})),
+        ("edit_plan_volume", serde_json::json!({"projectPath":path,"goal":"Set volume","itemId":item,"volume":0.6})),
+        ("edit_plan_draft", serde_json::json!({"projectPath":path,"goal":"Make a cut","mediaIds":[asset],"targetDurationFrames":60})),
+        ("edit_plan_scene_draft", scene_draft_args),
+        ("media_scene_candidates", serde_json::json!({"mediaPath":media,"threshold":0.4})),
+    ];
+    for (name, args) in cases {
+        writeln!(input, "{}", serde_json::json!({"id":1,"command":name,"arguments":args})).unwrap(); input.flush().unwrap();
+        let mut line = String::new(); output.read_line(&mut line).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let expected = operations.execute(name, args).await;
+        assert_eq!(actual["result"]["isError"], false, "{name}: {actual}");
+        assert_eq!(expected["result"]["isError"], false, "{name}: {expected}");
+        if name == "edit_plan_scene_draft" {
+            let left = &actual["result"]["structuredContent"];
+            let right = &expected["result"]["structuredContent"];
+            assert_eq!(left["provider"], right["provider"]);
+            assert_eq!(left["validation"]["valid"], right["validation"]["valid"]);
+            assert_eq!(left["validation"]["issues"], right["validation"]["issues"]);
+            assert_eq!(
+                left["validation"]["diff"]["operationsEvaluated"],
+                right["validation"]["diff"]["operationsEvaluated"]
+            );
+            let mut left_plan = left["plan"].clone();
+            let mut right_plan = right["plan"].clone();
+            for plan in [&mut left_plan, &mut right_plan] {
+                for operation in plan["operations"].as_array_mut().unwrap() {
+                    operation.as_object_mut().unwrap().remove("operationId");
+                    let payload = operation["operation"]["payload"].as_object_mut().unwrap();
+                    payload.remove("track_id");
+                    payload.remove("item_id");
+                }
+            }
+            assert_eq!(left_plan, right_plan, "{name}");
+        } else if name == "audio_align" {
+            let left = &actual["result"]["structuredContent"];
+            let right = &expected["result"]["structuredContent"];
+            assert_eq!(left["referenceItemId"], right["referenceItemId"]);
+            assert_eq!(left["proposals"].as_array().unwrap().len(), right["proposals"].as_array().unwrap().len());
+            for (left, right) in left["proposals"].as_array().unwrap().iter().zip(right["proposals"].as_array().unwrap()) {
+                for field in ["itemId", "currentStartFrame", "proposedStartFrame", "deltaFrames", "confident"] {
+                    assert_eq!(left[field], right[field], "{field}");
+                }
+                for field in ["score", "peakRatio", "offsetSeconds"] {
+                    let delta = (left[field].as_f64().unwrap() - right[field].as_f64().unwrap()).abs();
+                    assert!(delta <= 1e-9, "{field} differs by {delta}");
+                }
+            }
+        } else {
+            assert_eq!(actual["result"], expected["result"], "{name}");
+        }
+    }
+    let cli_project = dir.join("template-cli.tcproj");
+    let operations_project = dir.join("template-operations.tcproj");
+    fs::copy(&path, &cli_project).unwrap(); fs::copy(&path, &operations_project).unwrap();
+    let draft_file = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("artifacts/animated-text-templates/phase-35/draft_vietnamese_v1.json");
+    let mut draft: serde_json::Value = serde_json::from_slice(&fs::read(draft_file).unwrap()).unwrap();
+    draft["templateId"] = serde_json::json!(format!("parity_template_{}", next_id()));
+    let mut args = serde_json::json!({"projectPath":cli_project,"itemId":caption_id,"draft":draft,"clientId":"parity-template","clientEpoch":1,"sequenceNumber":1,"transactionId":"parity-template","baseRevision":0});
+    writeln!(input, "{}", serde_json::json!({"id":1,"command":"template_apply","arguments":args})).unwrap(); input.flush().unwrap();
+    let mut line=String::new(); output.read_line(&mut line).unwrap();
+    let actual: serde_json::Value = serde_json::from_str(&line).unwrap();
+    args["projectPath"] = serde_json::json!(operations_project);
+    let expected = operations.execute("template_apply", args).await;
+    assert_eq!(actual["result"]["isError"], false, "{actual}");
+    assert_eq!(expected["result"]["isError"], false, "{expected}");
+    let left=load_project(&cli_project).unwrap(); let right=load_project(&operations_project).unwrap();
+    assert_eq!(left.revision, right.revision); assert_eq!(left.tracks, right.tracks);
+    assert!(left.tracks[1].items[0].template_instance.is_some());
+    drop(input);
+    assert!(cli.wait().unwrap().success());
     fs::remove_dir_all(dir).unwrap();
 }

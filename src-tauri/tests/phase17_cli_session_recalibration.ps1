@@ -36,7 +36,7 @@ function Send-Request($proc, $request, [string]$idKey, $expectedId, [switch]$Ret
         throw "JSONL error response: $line"
     }
     if ($idKey -eq 'id' -and ($null -ne $response.error -or $response.result.isError -eq $true)) {
-        throw "MCP error response: $line"
+        throw "CLI JSONL error response: $line"
     }
     if ($ReturnResponse) {
         return [pscustomobject]@{ elapsed_ms = $timer.Elapsed.TotalMilliseconds; response = $response }
@@ -177,51 +177,7 @@ foreach ($workload in @('W0', 'W1', 'W2')) {
         $proc.Dispose()
     }
 
-    $stdoutStats = @{}
-    $proc = New-Child 'mcp'
-    try {
-        $meta = @{
-            'io.modelcontextprotocol/protocolVersion' = '2026-07-28'
-            'io.modelcontextprotocol/clientCapabilities' = @{}
-            'io.modelcontextprotocol/clientInfo' = @{ name = 'phase17-recalibration'; version = '1.0.0' }
-        }
-        $null = Send-Request $proc @{
-            jsonrpc = '2.0'; id = 1; method = 'server/discover'; params = @{ _meta = $meta }
-        } 'id' 1
-
-        foreach ($toolName in @('tinixcut_inspect', 'tinixcut_dry_run', 'tinixcut_apply')) {
-            $n = if ($toolName -eq 'tinixcut_apply') { 30 } else { 30 }
-            $mcpCounter = [pscustomobject]@{ Value = 0 }
-            $invoke = {
-                param($i)
-                $args = @{ projectPath = $path }
-                if ($toolName -ne 'tinixcut_inspect') {
-                    if ($toolName -eq 'tinixcut_apply') { $mcpCounter.Value++; $sequence = $mcpCounter.Value; $revision = $sequence - 1 }
-                    else { $sequence = 1; $revision = 0 }
-                    $operationSuffix = if ($toolName -eq 'tinixcut_apply') { $sequence } else { $i }
-                    $envl = New-EnvelopeForWorkload $projectId $trackId $revision $sequence "$workload-$toolName-$operationSuffix" ($toolName -eq 'tinixcut_dry_run')
-                    $args.envelope = $envl
-                }
-                Send-Request $proc @{
-                    jsonrpc = '2.0'; id = "$workload-$toolName-$i"; method = 'tools/call'
-                    params = @{ _meta = $meta; name = $toolName; arguments = $args }
-                } 'id' "$workload-$toolName-$i"
-            }
-            1..5 | ForEach-Object { $null = & $invoke $_ }
-            $watch = [System.Diagnostics.Stopwatch]::StartNew()
-            $samples = @(1..$n | ForEach-Object { & $invoke $_ })
-            $watch.Stop()
-            $stdoutStats[$toolName] = Get-Stats $samples $watch.Elapsed.TotalMilliseconds
-        }
-        $proc.StandardInput.Close()
-        $proc.WaitForExit()
-        $stderr = $proc.StandardError.ReadToEnd()
-        $results.Add([ordered]@{ workload = $workload; transport = 'mcp_stdio'; metrics = $stdoutStats; stderr = $stderr })
-    } finally {
-        if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit() }
-        $proc.Dispose()
-    }
 }
 
-$results | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $root 'transport-results.json') -Encoding utf8
+$results | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $root 'cli-session-results.json') -Encoding utf8
 $results | ConvertTo-Json -Depth 20

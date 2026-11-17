@@ -1,6 +1,6 @@
 //! Read-only scene boundary analysis results.
 
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
 pub const SCENE_ANALYSIS_SCHEMA_VERSION: u32 = 1;

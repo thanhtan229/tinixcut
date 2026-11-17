@@ -1142,7 +1142,7 @@ fn project_compare_current_with_path(
     path: String,
     expected_project_id: String,
     expected_revision: u64,
-) -> Result<crate::modules::automation::mcp::ProjectCompareReport, String> {
+) -> Result<crate::modules::automation::operations::ProjectCompareReport, String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
     let current = engine.service.project();
     if current.project_id != expected_project_id || current.revision != expected_revision {
@@ -1155,7 +1155,7 @@ fn project_compare_current_with_path(
         "Project comparison",
     )?;
     let other = load_project(compare_path).map_err(|e| e.to_string())?;
-    Ok(crate::modules::automation::mcp::project_compare_report(
+    Ok(crate::modules::automation::operations::project_compare_report(
         current, &other,
     ))
 }

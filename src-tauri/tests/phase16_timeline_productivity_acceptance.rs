@@ -6,7 +6,7 @@
 //! - Primary duplicate
 //! - Automation generic compatibility and supported operations
 
-use tinixcut_lib::modules::automation::mcp::TinixCutMcpServer;
+use tinixcut_lib::modules::automation::operations::AutomationOperations;
 use tinixcut_lib::modules::automation::{AutomationAdapter, AutomationSession};
 use tinixcut_lib::modules::command::{
     CommandEnvelope, CommandError, CommandOperation, CommandService, DiffChange, OperationEnvelope,
@@ -17,7 +17,6 @@ use tinixcut_lib::modules::domain::{
     TransitionKind, CURRENT_SCHEMA_VERSION,
 };
 use tinixcut_lib::modules::history::{HistoryEntry, HistoryManager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 
 fn create_test_project_with_asset(fps: u32) -> (Project, String) {
     let mut project = Project::new("Phase 16 Test Project".to_string());
@@ -1480,71 +1479,30 @@ fn test_p16_automation_session_generic_dry_run_and_apply_for_phase16_commands() 
 
 // =========================================================================
 // P16 Remediation: ADR-001 Replay/Idempotency & Mixed-Rate RationalTime
-// & Generic CLI/JSONL/MCP Transport Inheritance
+// & Generic CLI/JSONL/shared operations Transport Inheritance
 // =========================================================================
 
-struct DuplexMcpClient {
-    reader: TokioBufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
-    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+struct OperationsHarness {
+    operations: tinixcut_lib::modules::automation::operations::AutomationOperations,
 }
 
-impl DuplexMcpClient {
-    async fn new(server: TinixCutMcpServer) -> Self {
-        let (client_io, server_io) = tokio::io::duplex(131072);
-        tokio::spawn(async move {
-            if let Ok(running) = rmcp::serve_server(server, server_io).await {
-                let _ = running.waiting().await;
-            }
-        });
-        let (read_half, write_half) = tokio::io::split(client_io);
-        Self {
-            reader: TokioBufReader::new(read_half),
-            writer: write_half,
-        }
+impl OperationsHarness {
+    async fn new(operations: tinixcut_lib::modules::automation::operations::AutomationOperations) -> Self {
+        Self { operations }
     }
 
-    async fn send_request(
-        &mut self,
-        method: &str,
-        mut params: serde_json::Value,
-    ) -> serde_json::Value {
-        static REQ_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
-        let id = REQ_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some(map) = params.as_object_mut() {
-            if !map.contains_key("_meta") {
-                map.insert(
-                    "_meta".to_string(),
-                    serde_json::json!({
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "test-client-p16",
-                            "version": "1.0.0"
-                        }
-                    }),
-                );
-            }
+    async fn execute(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        match self.operations.execute(
+            name,
+            arguments,
+            tinixcut_lib::modules::automation::operations::OperationContext::default(),
+        ).await {
+            Ok(result) => serde_json::json!({"result": serde_json::to_value(result).unwrap()}),
+            Err(tinixcut_lib::modules::automation::operations::OperationError::InvalidParams(message)) =>
+                serde_json::json!({"result":{"isError":true,"content":[{"type":"text","text":format!("failed to deserialize parameters: {message}")}]}}),
+            Err(tinixcut_lib::modules::automation::operations::OperationError::Internal(message)) =>
+                serde_json::json!({"error":{"code":-32603,"message":message}}),
         }
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        let req_str = format!("{}\n", serde_json::to_string(&req).unwrap());
-        self.writer.write_all(req_str.as_bytes()).await.unwrap();
-        self.writer.flush().await.unwrap();
-        let mut line = String::new();
-        self.reader.read_line(&mut line).await.unwrap();
-        serde_json::from_str(&line).expect("Expected valid JSON-RPC response")
-    }
-
-    async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
-        let params = serde_json::json!({
-            "name": name,
-            "arguments": arguments,
-        });
-        self.send_request("tools/call", params).await
     }
 }
 
@@ -2070,7 +2028,7 @@ fn test_p16_ac24_ac34_ac40_mixed_rate_rational_time_edge_cases_zero_float() {
 }
 
 #[tokio::test]
-async fn test_p16_ac53_generic_cli_jsonl_mcp_transport_inheritance() {
+async fn test_p16_ac53_generic_cli_jsonl_operations_transport_inheritance() {
     let fps = 30;
     let (mut project, asset_id) = create_test_project_with_asset(fps);
     let mut track = Track::new("Track 1".to_string(), TrackKind::Video);
@@ -2278,90 +2236,90 @@ async fn test_p16_ac53_generic_cli_jsonl_mcp_transport_inheritance() {
     );
 
     // -------------------------------------------------------------------------
-    // Transport 3: MCP smoke via TinixCutMcpServer & DuplexMcpClient
+    // Transport 3: shared operations smoke via AutomationOperations & OperationsHarness
     // -------------------------------------------------------------------------
-    let mcp_proj_file = temp_dir.join("mcp_test.tcproj");
-    tinixcut_lib::modules::persistence::save_project_atomic(&project, &mcp_proj_file).unwrap();
+    let operations_proj_file = temp_dir.join("operations_test.tcproj");
+    tinixcut_lib::modules::persistence::save_project_atomic(&project, &operations_proj_file).unwrap();
 
-    let server = TinixCutMcpServer::new();
-    let mut mcp_client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut operations_client = OperationsHarness::new(server).await;
 
-    // MCP dry_run for ClipGroupMove
-    let mcp_gm_env = CommandEnvelope {
+    // shared operations dry_run for ClipGroupMove
+    let operations_gm_env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
         project_id: project.project_id.clone(),
         base_revision: 0,
-        client_id: Some("agent-mcp".to_string()),
+        client_id: Some("agent-operations".to_string()),
         client_epoch: Some(1),
         sequence_number: Some(1),
         dry_run: false,
-        transaction_id: Some("tx-mcp-gm-1".to_string()),
+        transaction_id: Some("tx-operations-gm-1".to_string()),
         operations: vec![OperationEnvelope {
-            operation_id: "mcp_gm_1".to_string(),
+            operation_id: "operations_gm_1".to_string(),
             operation: CommandOperation::ClipGroupMove {
                 item_ids: vec!["clip_b".to_string(), "clip_c".to_string()],
                 delta: RationalTime::new(2 * fps as i64, rate),
             },
         }],
     };
-    let dry_res = mcp_client
-        .call_tool(
+    let dry_res = operations_client
+        .execute(
             "tinixcut_dry_run",
             serde_json::json!({
-                "projectPath": mcp_proj_file.to_str().unwrap(),
-                "envelope": mcp_gm_env
+                "projectPath": operations_proj_file.to_str().unwrap(),
+                "envelope": operations_gm_env
             }),
         )
         .await;
     assert_eq!(
         dry_res["result"]["isError"], false,
-        "MCP tinixcut_dry_run must succeed"
+        "shared operations tinixcut_dry_run must succeed"
     );
 
-    // MCP apply for ClipGroupMove
-    let apply_gm_res = mcp_client
-        .call_tool(
+    // shared operations apply for ClipGroupMove
+    let apply_gm_res = operations_client
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
-                "projectPath": mcp_proj_file.to_str().unwrap(),
-                "envelope": mcp_gm_env
+                "projectPath": operations_proj_file.to_str().unwrap(),
+                "envelope": operations_gm_env
             }),
         )
         .await;
     assert_eq!(
         apply_gm_res["result"]["isError"], false,
-        "MCP tinixcut_apply for ClipGroupMove must succeed"
+        "shared operations tinixcut_apply for ClipGroupMove must succeed"
     );
 
-    // MCP apply for ClipRippleDelete
-    let mcp_rd_env = CommandEnvelope {
+    // shared operations apply for ClipRippleDelete
+    let operations_rd_env = CommandEnvelope {
         schema_version: CURRENT_SCHEMA_VERSION,
         project_id: project.project_id.clone(),
         base_revision: 1,
-        client_id: Some("agent-mcp".to_string()),
+        client_id: Some("agent-operations".to_string()),
         client_epoch: Some(1),
         sequence_number: Some(2),
         dry_run: false,
-        transaction_id: Some("tx-mcp-rd-1".to_string()),
+        transaction_id: Some("tx-operations-rd-1".to_string()),
         operations: vec![OperationEnvelope {
-            operation_id: "mcp_rd_1".to_string(),
+            operation_id: "operations_rd_1".to_string(),
             operation: CommandOperation::ClipRippleDelete {
                 item_id: "clip_a".to_string(),
             },
         }],
     };
-    let apply_rd_res = mcp_client
-        .call_tool(
+    let apply_rd_res = operations_client
+        .execute(
             "tinixcut_apply",
             serde_json::json!({
-                "projectPath": mcp_proj_file.to_str().unwrap(),
-                "envelope": mcp_rd_env
+                "projectPath": operations_proj_file.to_str().unwrap(),
+                "envelope": operations_rd_env
             }),
         )
         .await;
     assert_eq!(
         apply_rd_res["result"]["isError"], false,
-        "MCP tinixcut_apply for ClipRippleDelete must succeed"
+        "shared operations tinixcut_apply for ClipRippleDelete must succeed"
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);

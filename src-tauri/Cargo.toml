@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 mock-ipc-tests = ["tauri/test"]
 
 [dependencies]
+tokio-util = "0.7"
+schemars = "1.2.2"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -31,7 +33,6 @@ flate2 = "1"
 base64 = "0.23.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "time"] }
 reqwest = { version = "0.13", features = ["json"] }
-rmcp = { version = "3.5.0", default-features = false, features = ["server", "macros", "transport-io"] }
 unicode-segmentation = "1.13.3"
 ab_glyph = "0.2.32"
 unicode-normalization = "0.1.26"

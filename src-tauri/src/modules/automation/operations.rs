@@ -1,6 +1,6 @@
-//! Model Context Protocol (MCP) Automation Adapter for TinixCut
+//! Shared headless automation operations exposed by the native CLI.
 //!
-//! Architecture Invariant: MCP is strictly a thin external transport adapter.
+//! Architecture Invariant: Automation uses the same Command Service and persistence path as the UI.
 //! It contains zero second reducers, zero second command registries, zero alternate persistence formats,
 //! and zero independent idempotency ledgers. All mutations route through the canonical CommandService.
 //!
@@ -26,13 +26,8 @@ use crate::modules::persistence::{
     load_project, load_project_revision_if_exists, same_project_path,
     save_project_atomic_if_revision, PersistenceError,
 };
-use rmcp::{
-    handler::server::wrapper::Parameters,
-    model::CallToolResult,
-    schemars::{self, JsonSchema, Schema, SchemaGenerator},
-    serde::{Deserialize, Serialize},
-    tool, tool_handler, tool_router,
-};
+use schemars::{self, JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -1196,12 +1191,64 @@ impl StructuredError {
     }
 }
 
-fn tool_error(err: StructuredError) -> CallToolResult {
-    CallToolResult::structured_error(serde_json::to_value(err).unwrap_or_default())
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationResult {
+    result_type: &'static str,
+    content: Vec<OperationContent>,
+    is_error: bool,
+    pub structured_content: serde_json::Value,
 }
-
-fn tool_ok<T: Serialize>(value: &T) -> CallToolResult {
-    CallToolResult::structured(serde_json::to_value(value).unwrap_or_default())
+#[derive(Debug, Clone, Serialize)]
+struct OperationContent {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    text: String,
+}
+impl OperationResult {
+    fn new(value: serde_json::Value, is_error: bool) -> Self {
+        Self {
+            result_type: "complete",
+            content: vec![OperationContent {
+                kind: "text",
+                text: value.to_string(),
+            }],
+            is_error,
+            structured_content: value,
+        }
+    }
+    pub fn is_error(&self) -> bool {
+        self.is_error
+    }
+}
+#[derive(Debug)]
+pub enum OperationError {
+    InvalidParams(String),
+    Internal(String),
+}
+impl OperationError {
+    fn invalid_params(message: String) -> Self {
+        Self::InvalidParams(message)
+    }
+    fn internal_error(message: String) -> Self {
+        Self::Internal(message)
+    }
+}
+#[derive(Debug)]
+pub struct OperationParams<T>(pub T);
+fn schema_for_type<T: JsonSchema>() -> serde_json::Value {
+    serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .into_generator()
+            .into_root_schema_for::<T>(),
+    )
+    .expect("serialize schema")
+}
+fn tool_error(err: StructuredError) -> OperationResult {
+    OperationResult::new(serde_json::to_value(err).unwrap_or_default(), true)
+}
+fn tool_ok<T: Serialize>(value: &T) -> OperationResult {
+    OperationResult::new(serde_json::to_value(value).unwrap_or_default(), false)
 }
 
 fn serialized_object<T: Serialize>(value: &T) -> serde_json::Value {
@@ -1564,7 +1611,7 @@ pub fn map_command_error(err: CommandError) -> StructuredError {
 }
 
 // ---------------------------------------------------------------------------
-// TinixCut MCP Server Implementation
+// Shared Automation Operations
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1691,19 +1738,19 @@ impl Drop for WorkerCapacityPermit {
 }
 
 #[derive(Clone)]
-pub struct TinixCutMcpServer {
+pub struct AutomationOperations {
     pub jobs: Arc<Mutex<JobManager>>,
     pub write_gate: Arc<tokio::sync::Mutex<()>>,
     pub worker_capacity: Arc<PreviewWorkerCapacity>,
     /// When true, `tinixcut_apply` refuses envelopes with destructive operations unless an
-    /// identical envelope was accepted by `tinixcut_dry_run` earlier in this server session.
+    /// identical envelope was accepted by `tinixcut_dry_run` earlier in this CLI session.
     pub require_destructive_confirmation: bool,
     confirmed_dry_runs: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 /// Environment switch for the opt-in destructive-edit confirmation gate.
 pub const REQUIRE_DESTRUCTIVE_CONFIRMATION_ENV: &str =
-    "TINIXCUT_MCP_REQUIRE_DESTRUCTIVE_CONFIRMATION";
+    "TINIXCUT_AUTOMATION_REQUIRE_DESTRUCTIVE_CONFIRMATION";
 
 /// Identity of an envelope for dry-run confirmation: project, base revision and operations.
 fn dry_run_confirmation_key(project_path: &str, envelope: &CommandEnvelope) -> String {
@@ -1714,13 +1761,13 @@ fn dry_run_confirmation_key(project_path: &str, envelope: &CommandEnvelope) -> S
     )
 }
 
-impl Default for TinixCutMcpServer {
+impl Default for AutomationOperations {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TinixCutMcpServer {
+impl AutomationOperations {
     pub fn new() -> Self {
         Self {
             jobs: Arc::new(Mutex::new(JobManager::new(4))),
@@ -1752,18 +1799,16 @@ impl TinixCutMcpServer {
     }
 }
 
-#[tool_router]
-impl TinixCutMcpServer {
-    #[tool(
-        name = "tinixcut_project_create",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Create and atomically persist a new empty TinixCut project at projectPath; refuses to overwrite an existing file",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectCreateReceipt>()
-    )]
-    async fn project_create(
+#[derive(Clone, Default)]
+pub struct OperationContext {
+    pub ct: tokio_util::sync::CancellationToken,
+}
+
+impl AutomationOperations {
+    pub async fn project_create(
         &self,
-        Parameters(params): Parameters<ProjectCreateArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ProjectCreateArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let _guard = self.write_gate.lock().await;
         if params.name.trim().is_empty() {
             return Ok(tool_error(StructuredError::new(
@@ -1795,17 +1840,10 @@ impl TinixCutMcpServer {
             revision: project.revision,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_project_variant",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Create a separate project variant from a persisted revision; refuses stale sources, same-path targets, and existing destinations",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectVariantReceipt>()
-    )]
-    async fn project_variant(
+    pub async fn project_variant(
         &self,
-        Parameters(params): Parameters<ProjectVariantArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ProjectVariantArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let _guard = self.write_gate.lock().await;
         if params.name.trim().is_empty() {
             return Ok(tool_error(StructuredError::new(
@@ -1892,17 +1930,10 @@ impl TinixCutMcpServer {
             tracks_count: variant.tracks.len(),
         }))
     }
-
-    #[tool(
-        name = "tinixcut_project_compare",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Compare two persisted TinixCut revisions without exposing media paths or changing project data",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectCompareReport>()
-    )]
-    async fn project_compare(
+    pub async fn project_compare(
         &self,
-        Parameters(params): Parameters<ProjectCompareArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ProjectCompareArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let left_path = PathBuf::from(&params.left_project_path);
         let right_path = PathBuf::from(&params.right_project_path);
         let left = match load_project(&left_path) {
@@ -1943,17 +1974,10 @@ impl TinixCutMcpServer {
         }
         Ok(tool_ok(&project_compare_report(&left, &right)))
     }
-
-    #[tool(
-        name = "tinixcut_audio_align",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Propose timeline moves that line other clips up with a reference clip by matching their audio (normalized cross-correlation at 8 kHz). Returns proposals with confidence and never changes the project; apply a confident proposal with a clip move through tinixcut_apply. Clips must be at 1x speed",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::align::AlignmentReport>()
-    )]
-    async fn audio_align(
+    pub async fn audio_align(
         &self,
-        Parameters(params): Parameters<AudioAlignArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<AudioAlignArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -1985,17 +2009,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_project_chapters",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "List YouTube-style chapters from the project's markers and report any rule violations (first chapter at 00:00, at least 3 chapters, each at least 10 seconds). Never changes the project or moves markers",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::chapters::ChapterReport>()
-    )]
-    async fn project_chapters(
+    pub async fn project_chapters(
         &self,
-        Parameters(params): Parameters<ProjectChaptersArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ProjectChaptersArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -2010,17 +2027,10 @@ impl TinixCutMcpServer {
             &project,
         )))
     }
-
-    #[tool(
-        name = "tinixcut_frame_scopes",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Analyse one frame of the export composition of a saved project (luma range, clipping, channel balance) without changing the project. Rich-text overlays are excluded",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<FrameScopesReport>()
-    )]
-    async fn frame_scopes(
+    pub async fn frame_scopes(
         &self,
-        Parameters(params): Parameters<FrameScopesArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<FrameScopesArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -2091,17 +2101,10 @@ impl TinixCutMcpServer {
             excludes_text_overlays: true,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_lut_probe",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Validate a .cube 3D LUT file and return the clipLut reference (name, path, sha256) to use in a ClipColorLutSet operation, plus its size and domain. Never changes a project",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<LutProbeReport>()
-    )]
-    async fn lut_probe(
+    pub async fn lut_probe(
         &self,
-        Parameters(params): Parameters<LutProbeArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<LutProbeArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let path = PathBuf::from(&params.lut_path);
         let clip_lut = match crate::modules::domain::ClipLut::from_file(&path) {
             Ok(lut) => lut,
@@ -2132,17 +2135,10 @@ impl TinixCutMcpServer {
             domain_max: table.domain_max,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_media_probe",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Read media metadata through the bundled ffprobe abstraction without changing any project",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<MediaProbeReport>()
-    )]
-    async fn media_probe(
+    pub async fn media_probe(
         &self,
-        Parameters(params): Parameters<MediaProbeArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<MediaProbeArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let media_path = PathBuf::from(&params.media_path);
         if !media_path.is_file() {
             return Ok(tool_error(StructuredError::new(
@@ -2202,17 +2198,10 @@ impl TinixCutMcpServer {
                 .collect(),
         }))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_validate",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Validate a versioned edit plan against the current project revision and the canonical CommandService dry-run; never writes project state",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanValidation>()
-    )]
-    async fn edit_plan_validate(
+    pub async fn edit_plan_validate(
         &self,
-        Parameters(params): Parameters<EditPlanValidateArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanValidateArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let plan: EditPlan = match serde_json::from_value(params.plan) {
             Ok(plan) => plan,
             Err(error) => {
@@ -2234,18 +2223,11 @@ impl TinixCutMcpServer {
         };
         Ok(tool_ok(&validate_edit_plan(&project, &plan)))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_draft",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create and validate a read-only draft from explicitly selected video assets. Defaults to deterministic offline planning; optionally set plannerProvider=lm-studio-local to send the goal and selected clip names/durations to LM Studio on 127.0.0.1:1234. No media bytes or paths are sent, and the project is not mutated.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_draft(
+    pub async fn edit_plan_draft(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<EditPlanDraftArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<EditPlanDraftArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2346,17 +2328,10 @@ impl TinixCutMcpServer {
         }
         Ok(tool_ok(&receipt))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_scene_draft",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a read-only revision-bound edit-plan preview from explicitly ordered scene IDs in a local visual analysis report. Optional allowedAssetIds restricts all selected scenes to those source assets. Optional targetDurationFrames can be advisory or exactDuration; exact trims only selected source tails and returns an error when source capacity cannot satisfy the target. Optional targetCanvas adds a ProjectSettingsSet operation. Supply openingTitle together with titleTemplate to add a built-in styled title overlay; they are validated as a pair. Revalidates current media and fingerprints; applying remains a separate Command Service operation.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_scene_draft(
+    pub async fn edit_plan_scene_draft(
         &self,
-        Parameters(params): Parameters<EditPlanSceneDraftArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanSceneDraftArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2393,17 +2368,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_scene_selection_suggest",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Ask the explicitly selected local LM Studio model for a review-only subset and order of scene IDs from a supplied visual scene report. Optional allowedAssetIds limits which source scenes are sent to the model. Optional transcriptEvidence supplies source-timed local ASR excerpts; TinixCut validates current source fingerprints and includes only excerpts overlapping allowed scenes. Asset IDs, names, paths and fingerprints are never sent to the model. Optional captionIntent and audioIntent guide ranking only; they do not create subtitle or audio edits. Optional suggestOpeningTitle requests a bounded human-review suggestion. Validates the project/report and applies no edits.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::automation::edit_plan::SceneSelectionSuggestion>()
-    )]
-    async fn edit_plan_scene_selection_suggest(
+    pub async fn edit_plan_scene_selection_suggest(
         &self,
-        Parameters(params): Parameters<EditPlanSceneSelectionSuggestArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanSceneSelectionSuggestArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2460,18 +2428,11 @@ impl TinixCutMcpServer {
         }
         Ok(tool_ok(&suggestion))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_reorder",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a revision-checked preview plan to reorder every clip on a contiguous transition-free video track; supports caller order or explicit local AI planning",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_reorder(
+    pub async fn edit_plan_reorder(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<EditPlanReorderArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<EditPlanReorderArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2554,17 +2515,10 @@ impl TinixCutMcpServer {
         }
         Ok(tool_ok(&receipt))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_trim",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a revision-bound preview plan to shorten the tail of one video clip; preserves its source in-point and clip speed and never mutates the project",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_trim(
+    pub async fn edit_plan_trim(
         &self,
-        Parameters(params): Parameters<EditPlanTrimArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanTrimArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2602,17 +2556,10 @@ impl TinixCutMcpServer {
             validation,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_volume",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a revision-bound preview plan to set one audio or video clip's linear volume; never mutates the project",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_volume(
+    pub async fn edit_plan_volume(
         &self,
-        Parameters(params): Parameters<EditPlanVolumeArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanVolumeArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2650,17 +2597,10 @@ impl TinixCutMcpServer {
             validation,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_canvas",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a revision-bound preview plan to change canvas dimensions; does not automatically reposition or crop existing timeline items",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_canvas(
+    pub async fn edit_plan_canvas(
         &self,
-        Parameters(params): Parameters<EditPlanCanvasArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanCanvasArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2698,17 +2638,10 @@ impl TinixCutMcpServer {
             validation,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_edit_plan_text_replace",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Create a revision-bound review plan that searches explicitly selected caption items for a literal phrase and replaces it; never mutates the project",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<EditPlanDraftReceipt>()
-    )]
-    async fn edit_plan_text_replace(
+    pub async fn edit_plan_text_replace(
         &self,
-        Parameters(params): Parameters<EditPlanTextReplaceArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<EditPlanTextReplaceArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -2747,18 +2680,11 @@ impl TinixCutMcpServer {
             validation,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_media_scene_candidates",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Find bounded scene-boundary candidates in a media file without changing a project; supports request cancellation",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::scene::SceneAnalysisReport>()
-    )]
-    async fn media_scene_candidates(
+    pub async fn media_scene_candidates(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<MediaSceneCandidatesArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<MediaSceneCandidatesArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let source = PathBuf::from(&params.media_path);
         let threshold = params.threshold.unwrap_or(0.3);
         let max_duration = params.max_duration_seconds.unwrap_or(300);
@@ -2834,18 +2760,11 @@ impl TinixCutMcpServer {
             }
         }
     }
-
-    #[tool(
-        name = "tinixcut_media_visual_scenes",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Describe and rank bounded representative frames from explicitly selected local videos using a local LM Studio vision model. Read-only; media paths are not sent to the model or returned.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::visual_scene::VisualSceneAnalysisReport>()
-    )]
-    async fn media_visual_scenes(
+    pub async fn media_visual_scenes(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<MediaVisualScenesArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<MediaVisualScenesArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let max_scenes = params.max_scenes.unwrap_or(16);
         let sources = params
             .media
@@ -2924,18 +2843,11 @@ impl TinixCutMcpServer {
             }
         }
     }
-
-    #[tool(
-        name = "tinixcut_media_transcript",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Transcribe an audio or video file with an explicitly supplied local Whisper CLI and model; returns source-time segments without modifying any project and supports cancellation",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::media::transcription::TranscriptAnalysisReport>()
-    )]
-    async fn media_transcript(
+    pub async fn media_transcript(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<MediaTranscriptArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<MediaTranscriptArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let media_path = PathBuf::from(&params.media_path);
         let cli_path = PathBuf::from(&params.whisper_cli_path);
         let model_path = PathBuf::from(&params.model_path);
@@ -3058,17 +2970,10 @@ impl TinixCutMcpServer {
             }
         }
     }
-
-    #[tool(
-        name = "tinixcut_inspect",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Inspect an existing TinixCut project file and return timeline metadata, tracks, assets, and revision",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ProjectInspectReport>()
-    )]
-    async fn inspect(
+    pub async fn inspect(
         &self,
-        Parameters(params): Parameters<InspectArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<InspectArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -3082,17 +2987,10 @@ impl TinixCutMcpServer {
         let report = AutomationAdapter::inspect_project(&project);
         Ok(tool_ok(&report))
     }
-
-    #[tool(
-        name = "tinixcut_capabilities",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Return editor capabilities, supported operations, transitions, keyframing, and export formats",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<CapabilitiesReport>()
-    )]
-    async fn capabilities(
+    pub async fn capabilities(
         &self,
-        Parameters(_params): Parameters<CapabilitiesArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(_params): OperationParams<CapabilitiesArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let report = CapabilitiesReport {
             supported_operations: AutomationAdapter::supported_operations(),
             supported_transitions: AutomationAdapter::supported_transitions(),
@@ -3118,17 +3016,10 @@ impl TinixCutMcpServer {
         };
         Ok(tool_ok(&report))
     }
-
-    #[tool(
-        name = "tinixcut_dry_run",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Perform a transactional dry run of a CommandEnvelope against a project file without modifying disk state",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<DiffReport>()
-    )]
-    async fn dry_run(
+    pub async fn dry_run(
         &self,
-        Parameters(params): Parameters<DryRunArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<DryRunArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(p) => p,
@@ -3166,17 +3057,10 @@ impl TinixCutMcpServer {
             Err(err) => Ok(tool_error(map_command_error(err))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_apply",
-        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Execute a transactional CommandEnvelope mutation against a project file and atomically persist to disk",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<CommandReceipt>()
-    )]
-    async fn apply(
+    pub async fn apply(
         &self,
-        Parameters(params): Parameters<ApplyArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ApplyArgs>,
+    ) -> Result<OperationResult, OperationError> {
         // Enforce process-local authoritative-write serialization gate
         let _guard = self.write_gate.lock().await;
 
@@ -3290,17 +3174,10 @@ impl TinixCutMcpServer {
 
         Ok(tool_ok(&receipt))
     }
-
-    #[tool(
-        name = "tinixcut_save",
-        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Atomically save or save-as an existing project file from disk to projectPath or targetPath",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<SaveReceipt>()
-    )]
-    async fn save(
+    pub async fn save(
         &self,
-        Parameters(params): Parameters<SaveArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<SaveArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let _guard = self.write_gate.lock().await;
 
         let source_path = PathBuf::from(&params.project_path);
@@ -3354,17 +3231,10 @@ impl TinixCutMcpServer {
             saved_path: dest_path.to_string_lossy().to_string(),
         }))
     }
-
-    #[tool(
-        name = "tinixcut_workflow_manifest_create",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Validate a revision-bound edit plan and persist a non-sensitive workflow manifest containing project revision, plan hash, operation IDs, media fingerprints and artifact paths. Refuses to overwrite an existing manifest; does not apply edits or store brief text, credentials, media bytes or source paths.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<WorkflowManifestCreateReceipt>()
-    )]
-    async fn workflow_manifest_create(
+    pub async fn workflow_manifest_create(
         &self,
-        Parameters(params): Parameters<WorkflowManifestCreateArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<WorkflowManifestCreateArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -3405,17 +3275,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_workflow_manifest_validate",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Read a persisted workflow manifest and validate its planned state, project revision, exact edit plan identity and current media fingerprints before a client retries or resumes. This tool is read-only and never applies edits.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<WorkflowManifestValidateReceipt>()
-    )]
-    async fn workflow_manifest_validate(
+    pub async fn workflow_manifest_validate(
         &self,
-        Parameters(params): Parameters<WorkflowManifestValidateArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<WorkflowManifestValidateArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -3467,17 +3330,10 @@ impl TinixCutMcpServer {
             project_revision: project.revision,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_workflow_manifest_checkpoint",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Record an immutable applied, saved, or exported checkpoint for a planned workflow. Applied is verified against the durable operation ledger; saved is verified from the current project file; exported is verified with ffprobe and a streaming SHA-256. Retries are idempotent only for identical evidence, and existing checkpoints are never overwritten.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::automation::workflow_manifest::WorkflowCheckpointReceipt>()
-    )]
-    async fn workflow_manifest_checkpoint(
+    pub async fn workflow_manifest_checkpoint(
         &self,
-        Parameters(params): Parameters<WorkflowManifestCheckpointArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<WorkflowManifestCheckpointArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let project = match load_project(&project_path) {
             Ok(project) => project,
@@ -3530,17 +3386,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_export_preflight",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Read-only export readiness check bound to the saved project snapshot and output path. Validates the project-matching profile, compiles the canonical composition, probes referenced media, and reports existing-output and free-disk information without starting a job or changing the project.",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::export::ExportPreflightReport>()
-    )]
-    async fn export_preflight(
+    pub async fn export_preflight(
         &self,
-        Parameters(params): Parameters<ExportPreflightArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ExportPreflightArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let snapshot = match load_project(&project_path) {
             Ok(project) => project,
@@ -3562,17 +3411,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_export_start",
-        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Start an asynchronous export render job using JobManager and return a jobId",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ExportStartReceipt>()
-    )]
-    async fn export_start(
+    pub async fn export_start(
         &self,
-        Parameters(params): Parameters<ExportStartArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ExportStartArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let project_path = PathBuf::from(&params.project_path);
         let snapshot = match load_project(&project_path) {
             Ok(p) => p,
@@ -3652,17 +3494,10 @@ impl TinixCutMcpServer {
             output_path: params.output_path,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_export_status",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Query progress and execution status of an active or completed export job",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ExportJobStatusReport>()
-    )]
-    async fn export_status(
+    pub async fn export_status(
         &self,
-        Parameters(params): Parameters<ExportStatusArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ExportStatusArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let jm = match self.jobs.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -3690,17 +3525,10 @@ impl TinixCutMcpServer {
             error: err_str,
         }))
     }
-
-    #[tool(
-        name = "tinixcut_export_cancel",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Cancel an in-progress export render job",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<ExportCancelReceipt>()
-    )]
-    async fn export_cancel(
+    pub async fn export_cancel(
         &self,
-        Parameters(params): Parameters<ExportCancelArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<ExportCancelArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let mut jm = match self.jobs.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -3708,17 +3536,10 @@ impl TinixCutMcpServer {
         let cancelled = jm.cancel_job(&params.job_id);
         Ok(tool_ok(&ExportCancelReceipt { cancelled }))
     }
-
-    #[tool(
-        name = "tinixcut_template_validate",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Validate a typed TemplateDraft against domain limits, security rules, and catalog resources",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateValidationReport>()
-    )]
-    async fn template_validate(
+    pub async fn template_validate(
         &self,
-        Parameters(params): Parameters<TemplateValidateArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<TemplateValidateArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let catalog = crate::modules::templates::catalog::TemplateCatalog::default_catalog();
         let report = crate::modules::templates::agent::AgentTemplateService::validate_draft(
             &params.draft,
@@ -3727,18 +3548,11 @@ impl TinixCutMcpServer {
         );
         Ok(tool_ok(&report))
     }
-
-    #[tool(
-        name = "tinixcut_template_preview",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Render a preview frame of a TemplateDraft at time t using the shared compositor and return frame receipt",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplatePreviewReceipt>()
-    )]
-    async fn template_preview(
+    pub async fn template_preview(
         &self,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        Parameters(params): Parameters<TemplatePreviewArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        context: OperationContext,
+        OperationParams(params): OperationParams<TemplatePreviewArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let time_sec = params.time_seconds.unwrap_or(1.0);
         let out_path = params.output_path.map(PathBuf::from).unwrap_or_else(|| {
             std::env::temp_dir().join(format!(
@@ -3972,7 +3786,7 @@ impl TinixCutMcpServer {
         let spawn_res = match tokio::time::timeout(remaining_timeout, task).await {
             Ok(join_res) => {
                 drop_guard.completed = true;
-                join_res.map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+                join_res.map_err(|e| OperationError::internal_error(e.to_string()))?
             }
             Err(_) => {
                 drop_guard.completed = true;
@@ -4009,7 +3823,7 @@ impl TinixCutMcpServer {
             }
         };
 
-        // Final deadline and cancellation check in MCP immediately before publication/rename
+        // Final deadline and cancellation check immediately before publication/rename.
         if context.ct.is_cancelled()
             || cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
             || params.cancel_requested == Some(true)
@@ -4038,17 +3852,10 @@ impl TinixCutMcpServer {
         temp_artifact.disarm();
         Ok(tool_ok(&receipt))
     }
-
-    #[tool(
-        name = "tinixcut_template_apply",
-        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Apply a validated TemplateDraft to a project text item as an atomic CommandService transaction and persist",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateApplyReceipt>()
-    )]
-    async fn template_apply(
+    pub async fn template_apply(
         &self,
-        Parameters(params): Parameters<TemplateApplyArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<TemplateApplyArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let _guard = self.write_gate.lock().await;
 
         if params
@@ -4124,17 +3931,10 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-
-    #[tool(
-        name = "tinixcut_template_save",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
-        description = "Save a validated TemplateDraft into the template catalog as a reusable TemplateDefinition",
-        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::modules::templates::agent::TemplateSaveReceipt>()
-    )]
-    async fn template_save(
+    pub async fn template_save(
         &self,
-        Parameters(params): Parameters<TemplateSaveArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        OperationParams(params): OperationParams<TemplateSaveArgs>,
+    ) -> Result<OperationResult, OperationError> {
         let catalog = params
             .catalog_dir
             .map(PathBuf::from)
@@ -4164,34 +3964,328 @@ impl TinixCutMcpServer {
             ))),
         }
     }
-}
 
-#[tool_handler(
-    name = "tinixcut",
-    version = "0.1.0",
-    instructions = "TinixCut Automation-First Desktop Video Editor MCP Server"
-)]
-impl rmcp::ServerHandler for TinixCutMcpServer {}
-
-/// Launch the MCP server over standard input and output streams.
-pub async fn run_mcp_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let server = TinixCutMcpServer::new();
-    let server_cleanup = server.clone();
-
-    // Standard I/O transport
-    let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let service = rmcp::serve_server(server, transport).await;
-
-    match service {
-        Ok(running) => {
-            let _ = running.waiting().await;
-        }
-        Err(e) => {
-            eprintln!("TinixCut MCP Server initialization error: {e}");
+    pub fn command_schemas() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"name": "project_create", "description": "Create and atomically persist a new empty TinixCut project at projectPath; refuses to overwrite an existing file", "inputSchema": schema_for_type::<ProjectCreateArgs>()}),
+            serde_json::json!({"name": "project_variant", "description": "Create a separate project variant from a persisted revision; refuses stale sources, same-path targets, and existing destinations", "inputSchema": schema_for_type::<ProjectVariantArgs>()}),
+            serde_json::json!({"name": "project_compare", "description": "Compare two persisted TinixCut revisions without exposing media paths or changing project data", "inputSchema": schema_for_type::<ProjectCompareArgs>()}),
+            serde_json::json!({"name": "audio_align", "description": "Propose timeline moves that line other clips up with a reference clip by matching their audio (normalized cross-correlation at 8 kHz). Returns proposals with confidence and never changes the project; apply a confident proposal with a clip move through tinixcut_apply. Clips must be at 1x speed", "inputSchema": schema_for_type::<AudioAlignArgs>()}),
+            serde_json::json!({"name": "project_chapters", "description": "List YouTube-style chapters from the project's markers and report any rule violations (first chapter at 00:00, at least 3 chapters, each at least 10 seconds). Never changes the project or moves markers", "inputSchema": schema_for_type::<ProjectChaptersArgs>()}),
+            serde_json::json!({"name": "frame_scopes", "description": "Analyse one frame of the export composition of a saved project (luma range, clipping, channel balance) without changing the project. Rich-text overlays are excluded", "inputSchema": schema_for_type::<FrameScopesArgs>()}),
+            serde_json::json!({"name": "lut_probe", "description": "Validate a .cube 3D LUT file and return the clipLut reference (name, path, sha256) to use in a ClipColorLutSet operation, plus its size and domain. Never changes a project", "inputSchema": schema_for_type::<LutProbeArgs>()}),
+            serde_json::json!({"name": "media_probe", "description": "Read media metadata through the bundled ffprobe abstraction without changing any project", "inputSchema": schema_for_type::<MediaProbeArgs>()}),
+            serde_json::json!({"name": "edit_plan_validate", "description": "Validate a versioned edit plan against the current project revision and the canonical CommandService dry-run; never writes project state", "inputSchema": schema_for_type::<EditPlanValidateArgs>()}),
+            serde_json::json!({"name": "edit_plan_draft", "description": "Create and validate a read-only draft from explicitly selected video assets. Defaults to deterministic offline planning; optionally set plannerProvider=lm-studio-local to send the goal and selected clip names/durations to LM Studio on 127.0.0.1:1234. No media bytes or paths are sent, and the project is not mutated.", "inputSchema": schema_for_type::<EditPlanDraftArgs>()}),
+            serde_json::json!({"name": "edit_plan_scene_draft", "description": "Create a read-only revision-bound edit-plan preview from explicitly ordered scene IDs in a local visual analysis report. Optional allowedAssetIds restricts all selected scenes to those source assets. Optional targetDurationFrames can be advisory or exactDuration; exact trims only selected source tails and returns an error when source capacity cannot satisfy the target. Optional targetCanvas adds a ProjectSettingsSet operation. Supply openingTitle together with titleTemplate to add a built-in styled title overlay; they are validated as a pair. Revalidates current media and fingerprints; applying remains a separate Command Service operation.", "inputSchema": schema_for_type::<EditPlanSceneDraftArgs>()}),
+            serde_json::json!({"name": "edit_plan_scene_selection_suggest", "description": "Ask the explicitly selected local LM Studio model for a review-only subset and order of scene IDs from a supplied visual scene report. Optional allowedAssetIds limits which source scenes are sent to the model. Optional transcriptEvidence supplies source-timed local ASR excerpts; TinixCut validates current source fingerprints and includes only excerpts overlapping allowed scenes. Asset IDs, names, paths and fingerprints are never sent to the model. Optional captionIntent and audioIntent guide ranking only; they do not create subtitle or audio edits. Optional suggestOpeningTitle requests a bounded human-review suggestion. Validates the project/report and applies no edits.", "inputSchema": schema_for_type::<EditPlanSceneSelectionSuggestArgs>()}),
+            serde_json::json!({"name": "edit_plan_reorder", "description": "Create a revision-checked preview plan to reorder every clip on a contiguous transition-free video track; supports caller order or explicit local AI planning", "inputSchema": schema_for_type::<EditPlanReorderArgs>()}),
+            serde_json::json!({"name": "edit_plan_trim", "description": "Create a revision-bound preview plan to shorten the tail of one video clip; preserves its source in-point and clip speed and never mutates the project", "inputSchema": schema_for_type::<EditPlanTrimArgs>()}),
+            serde_json::json!({"name": "edit_plan_volume", "description": "Create a revision-bound preview plan to set one audio or video clip's linear volume; never mutates the project", "inputSchema": schema_for_type::<EditPlanVolumeArgs>()}),
+            serde_json::json!({"name": "edit_plan_canvas", "description": "Create a revision-bound preview plan to change canvas dimensions; does not automatically reposition or crop existing timeline items", "inputSchema": schema_for_type::<EditPlanCanvasArgs>()}),
+            serde_json::json!({"name": "edit_plan_text_replace", "description": "Create a revision-bound review plan that searches explicitly selected caption items for a literal phrase and replaces it; never mutates the project", "inputSchema": schema_for_type::<EditPlanTextReplaceArgs>()}),
+            serde_json::json!({"name": "media_scene_candidates", "description": "Find bounded scene-boundary candidates in a media file without changing a project; supports request cancellation", "inputSchema": schema_for_type::<MediaSceneCandidatesArgs>()}),
+            serde_json::json!({"name": "media_visual_scenes", "description": "Describe and rank bounded representative frames from explicitly selected local videos using a local LM Studio vision model. Read-only; media paths are not sent to the model or returned.", "inputSchema": schema_for_type::<MediaVisualScenesArgs>()}),
+            serde_json::json!({"name": "media_transcript", "description": "Transcribe an audio or video file with an explicitly supplied local Whisper CLI and model; returns source-time segments without modifying any project and supports cancellation", "inputSchema": schema_for_type::<MediaTranscriptArgs>()}),
+            serde_json::json!({"name": "inspect", "description": "Inspect an existing TinixCut project file and return timeline metadata, tracks, assets, and revision", "inputSchema": schema_for_type::<InspectArgs>()}),
+            serde_json::json!({"name": "capabilities", "description": "Return editor capabilities, supported operations, transitions, keyframing, and export formats", "inputSchema": schema_for_type::<CapabilitiesArgs>()}),
+            serde_json::json!({"name": "dry_run", "description": "Perform a transactional dry run of a CommandEnvelope against a project file without modifying disk state", "inputSchema": schema_for_type::<DryRunArgs>()}),
+            serde_json::json!({"name": "apply", "description": "Execute a transactional CommandEnvelope mutation against a project file and atomically persist to disk", "inputSchema": schema_for_type::<ApplyArgs>()}),
+            serde_json::json!({"name": "save", "description": "Atomically save or save-as an existing project file from disk to projectPath or targetPath", "inputSchema": schema_for_type::<SaveArgs>()}),
+            serde_json::json!({"name": "workflow_manifest_create", "description": "Validate a revision-bound edit plan and persist a non-sensitive workflow manifest containing project revision, plan hash, operation IDs, media fingerprints and artifact paths. Refuses to overwrite an existing manifest; does not apply edits or store brief text, credentials, media bytes or source paths.", "inputSchema": schema_for_type::<WorkflowManifestCreateArgs>()}),
+            serde_json::json!({"name": "workflow_manifest_validate", "description": "Read a persisted workflow manifest and validate its planned state, project revision, exact edit plan identity and current media fingerprints before a client retries or resumes. This tool is read-only and never applies edits.", "inputSchema": schema_for_type::<WorkflowManifestValidateArgs>()}),
+            serde_json::json!({"name": "workflow_manifest_checkpoint", "description": "Record an immutable applied, saved, or exported checkpoint for a planned workflow. Applied is verified against the durable operation ledger; saved is verified from the current project file; exported is verified with ffprobe and a streaming SHA-256. Retries are idempotent only for identical evidence, and existing checkpoints are never overwritten.", "inputSchema": schema_for_type::<WorkflowManifestCheckpointArgs>()}),
+            serde_json::json!({"name": "export_preflight", "description": "Read-only export readiness check bound to the saved project snapshot and output path. Validates the project-matching profile, compiles the canonical composition, probes referenced media, and reports existing-output and free-disk information without starting a job or changing the project.", "inputSchema": schema_for_type::<ExportPreflightArgs>()}),
+            serde_json::json!({"name": "export_start", "description": "Start an asynchronous export render job using JobManager and return a jobId", "inputSchema": schema_for_type::<ExportStartArgs>()}),
+            serde_json::json!({"name": "export_status", "description": "Query progress and execution status of an active or completed export job", "inputSchema": schema_for_type::<ExportStatusArgs>()}),
+            serde_json::json!({"name": "export_cancel", "description": "Cancel an in-progress export render job", "inputSchema": schema_for_type::<ExportCancelArgs>()}),
+            serde_json::json!({"name": "template_validate", "description": "Validate a typed TemplateDraft against domain limits, security rules, and catalog resources", "inputSchema": schema_for_type::<TemplateValidateArgs>()}),
+            serde_json::json!({"name": "template_preview", "description": "Render a preview frame of a TemplateDraft at time t using the shared compositor and return frame receipt", "inputSchema": schema_for_type::<TemplatePreviewArgs>()}),
+            serde_json::json!({"name": "template_apply", "description": "Apply a validated TemplateDraft to a project text item as an atomic CommandService transaction and persist", "inputSchema": schema_for_type::<TemplateApplyArgs>()}),
+            serde_json::json!({"name": "template_save", "description": "Save a validated TemplateDraft into the template catalog as a reusable TemplateDefinition", "inputSchema": schema_for_type::<TemplateSaveArgs>()}),
+        ]
+    }
+    pub async fn execute(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        context: OperationContext,
+    ) -> Result<OperationResult, OperationError> {
+        let name = name.strip_prefix("tinixcut_").unwrap_or(name);
+        match name {
+            "project_create" => {
+                self.project_create(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "project_variant" => {
+                self.project_variant(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "project_compare" => {
+                self.project_compare(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "audio_align" => {
+                self.audio_align(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "project_chapters" => {
+                self.project_chapters(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "frame_scopes" => {
+                self.frame_scopes(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "lut_probe" => {
+                self.lut_probe(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "media_probe" => {
+                self.media_probe(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_validate" => {
+                self.edit_plan_validate(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_draft" => {
+                self.edit_plan_draft(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "edit_plan_scene_draft" => {
+                self.edit_plan_scene_draft(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_scene_selection_suggest" => {
+                self.edit_plan_scene_selection_suggest(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_reorder" => {
+                self.edit_plan_reorder(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "edit_plan_trim" => {
+                self.edit_plan_trim(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_volume" => {
+                self.edit_plan_volume(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_canvas" => {
+                self.edit_plan_canvas(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "edit_plan_text_replace" => {
+                self.edit_plan_text_replace(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "media_scene_candidates" => {
+                self.media_scene_candidates(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "media_visual_scenes" => {
+                self.media_visual_scenes(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "media_transcript" => {
+                self.media_transcript(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "inspect" => {
+                self.inspect(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "capabilities" => {
+                self.capabilities(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "dry_run" => {
+                self.dry_run(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "apply" => {
+                self.apply(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "save" => {
+                self.save(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "workflow_manifest_create" => {
+                self.workflow_manifest_create(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "workflow_manifest_validate" => {
+                self.workflow_manifest_validate(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "workflow_manifest_checkpoint" => {
+                self.workflow_manifest_checkpoint(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "export_preflight" => {
+                self.export_preflight(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "export_start" => {
+                self.export_start(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "export_status" => {
+                self.export_status(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "export_cancel" => {
+                self.export_cancel(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "template_validate" => {
+                self.template_validate(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "template_preview" => {
+                self.template_preview(
+                    context,
+                    OperationParams(
+                        serde_json::from_value(arguments)
+                            .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                    ),
+                )
+                .await
+            }
+            "template_apply" => {
+                self.template_apply(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            "template_save" => {
+                self.template_save(OperationParams(
+                    serde_json::from_value(arguments)
+                        .map_err(|e| OperationError::invalid_params(e.to_string()))?,
+                ))
+                .await
+            }
+            _ => Err(OperationError::invalid_params(format!(
+                "Unknown command: {name}"
+            ))),
         }
     }
-
-    // Ensure all active render jobs and processes are cancelled on EOF
-    server_cleanup.shutdown_and_cleanup();
-    Ok(())
 }

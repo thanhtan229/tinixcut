@@ -10,7 +10,7 @@ use crate::modules::media::visual_scene::{
     aggregate_source_fingerprint, VisualSceneAnalysisReport, VisualSceneSource,
     VISUAL_SCENE_ALGORITHM_VERSION, VISUAL_SCENE_SCHEMA_VERSION,
 };
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
 pub const EDIT_PLAN_SCHEMA_VERSION: u32 = 1;
@@ -406,7 +406,7 @@ async fn suggest_visual_scene_selection_at_with_transcript(
     let request = serde_json::json!({
         "model": model.trim(),
         "temperature": 0,
-        "max_tokens": 768,
+        "max_tokens": 2048,
         "response_format": { "type": "json_schema", "json_schema": schema },
         "messages": [
             {
@@ -452,15 +452,18 @@ async fn suggest_visual_scene_selection_at_with_transcript(
         .json()
         .await
         .map_err(|error| format!("Local scene planner returned an invalid response: {error}"))?;
-    let content = completion
+    let choice = completion
         .choices
         .first()
-        .ok_or_else(|| "Local scene planner returned no choices".to_string())?
-        .message
-        .content
-        .as_str();
+        .ok_or_else(|| "Local scene planner returned no choices".to_string())?;
+    let content = choice.message.content.as_str();
     let selection: LocalSceneSelection = serde_json::from_str(content)
-        .map_err(|error| format!("Local scene planner returned invalid selection JSON: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Local scene planner returned invalid selection JSON: {error} (finish reason: {})",
+                choice.finish_reason.as_deref().unwrap_or("unknown")
+            )
+        })?;
     if selection.selected_scene_ids.is_empty()
         || selection.selected_scene_ids.len() > allowed_ids.len()
         || selection.rationale.trim().is_empty()
@@ -721,6 +724,8 @@ struct LocalChatCompletion {
 #[derive(Debug, Deserialize)]
 struct LocalChatChoice {
     message: LocalChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
