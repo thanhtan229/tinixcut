@@ -20,6 +20,26 @@ const assets: Asset[] = [
 ];
 
 describe("filterAndSortMediaAssets", () => {
+  it("sorts durations across timebases and keeps unknown or invalid values last in both directions", () => {
+    const timed: Asset[] = [
+      {...assets[0], asset_id:"short", duration:{value:30,rate:{numerator:30,denominator:1}}},
+      {...assets[1], asset_id:"long", duration:{value:30,rate:{numerator:30000,denominator:1001}}},
+      assets[2],
+      {...assets[0], asset_id:"invalid", name:"Invalid", duration:{value:10,rate:{numerator:0,denominator:1}}},
+    ];
+    const before=structuredClone(timed);
+    const sorted=(sort:"duration-asc"|"duration-desc")=>filterAndSortMediaAssets(timed,new Set(),"","all","all",sort).map(a=>a.asset_id);
+    expect(sorted("duration-asc")).toEqual(["short","long","image-b","invalid"]);
+    expect(sorted("duration-desc")).toEqual(["long","short","image-b","invalid"]);
+    expect(filterAndSortMediaAssets(timed,new Set(["long"]),"","all","online","duration-desc").map(a=>a.asset_id)).toEqual(["short","image-b","invalid"]);
+    expect(timed).toEqual(before);
+  });
+
+  it("breaks equal-duration ties deterministically by name then asset identity", () => {
+    const a={...assets[0],asset_id:"b",name:"Same",duration:{value:60,rate:{numerator:30,denominator:1}}};
+    const b={...a,asset_id:"a",duration:{value:50,rate:{numerator:25,denominator:1}}};
+    expect(filterAndSortMediaAssets([a,b],new Set(),"","Video","all","duration-desc").map(a=>a.asset_id)).toEqual(["a","b"]);
+  });
   it("searches names without changing the source asset array", () => {
     const result = filterAndSortMediaAssets(assets, new Set(), "  BEACH ", "all", "all", "name");
     expect(result.map((asset) => asset.asset_id)).toEqual(["image-b"]);

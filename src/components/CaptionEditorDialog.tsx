@@ -39,7 +39,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   const [timingDrafts, setTimingDrafts] = useState<Record<string, { start_frame: number; duration_frames: number }>>({});
   const [query, setQuery] = useState("");
   const [trackFilter, setTrackFilter] = useState("");
-  const [timingFilter, setTimingFilter] = useState<"all" | "notices" | "gap" | "overlap">("all");
+  const [timingFilter, setTimingFilter] = useState<"all" | "notices" | "gap" | "overlap" | "edited" | "invalid">("all");
   const [focusedCaptionId, setFocusedCaptionId] = useState<string | null>(null);
   useEffect(()=>{setTrackFilter("");},[project?.project_id]);
   const [replaceFrom, setReplaceFrom] = useState("");
@@ -63,8 +63,10 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   const timingReview = getCaptionTimingNotices(scopedCaptions, project.settings.frame_rate, timingDrafts);
   const filtered = scopedCaptions.filter(({ item }) => {
     const notice = timingReview.notices[item.item_id];
-    const matchesTiming = timingFilter === "all" || item.item_id === focusedCaptionId || (timingFilter === "notices" ? !!notice : notice?.kind === timingFilter);
-    return matchesTiming && captionMatchesSearch(`${item.text_content ?? ""} ${drafts[item.item_id] ?? ""}`, query);
+    const draft = timingDrafts[item.item_id];
+    const edited = (drafts[item.item_id] ?? item.text_content ?? "") !== (item.text_content ?? "") || (draft !== undefined && (draft.start_frame !== rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate) || draft.duration_frames !== rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate)));
+    const matchesTiming = timingFilter === "all" || item.item_id === focusedCaptionId || (timingFilter === "invalid" ? timingReview.invalidItemIds.has(item.item_id) : timingFilter === "edited" ? edited : timingFilter === "notices" ? !!notice : notice?.kind === timingFilter);
+    return matchesTiming && (item.item_id === focusedCaptionId || captionMatchesSearch(`${item.text_content ?? ""} ${drafts[item.item_id] ?? ""}`, query));
   });
   const invalidTimingTracks = [...timingReview.invalidTrackIds].map(id => project.tracks.find(track => track.track_id === id)?.name ?? id);
   const dirtyDrafts = captions
@@ -158,8 +160,13 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
             <option value="notices">Gaps and overlaps</option>
             <option value="gap">Gaps only</option>
             <option value="overlap">Overlaps only</option>
+            <option value="edited">Pending edits</option>
+            <option value="invalid">Invalid timing</option>
           </select>
           <input aria-label="Search captions" placeholder="Find caption text" value={query} onChange={(event) => setQuery(event.currentTarget.value)} style={{ flex: "1 1 180px" }} />
+          {(query !== "" || trackFilter !== "" || timingFilter !== "all") && <button type="button" onClick={() => {
+            setQuery(""); setTrackFilter(""); setTimingFilter("all"); setFocusedCaptionId(null); setMergeSelection([]);
+          }} title="Clear search, track and timing filters; keep pending edits">Clear filters</button>}
           <input aria-label="Replace text" placeholder="Find" value={replaceFrom} onChange={(event) => setReplaceFrom(event.currentTarget.value)} />
           <input aria-label="Replace with" placeholder="Replace with" value={replaceTo} onChange={(event) => setReplaceTo(event.currentTarget.value)} />
           <button type="button" onClick={applyReplace} disabled={!replaceFrom || busy} title="Replaces matching text on all unlocked captions in the selected track scope, including rows hidden by search or timing filters">{trackFilter ? "Replace in track" : "Replace all"}</button>
@@ -168,12 +175,13 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
         {actionError && <p role="alert" style={{ color: "var(--danger, #f66)" }}>{actionError}</p>}
         <p style={{fontSize:12,color:"var(--text-muted)"}}>{filtered.length} shown · Replace affects {trackFilter ? "the selected track" : "all tracks"}, including captions hidden by search or timing filters. Apply includes pending edits from every track.</p>
         <p style={{fontSize:12,color:"var(--text-muted)"}}>Timing notices compare captions within each track, including rows hidden by search and valid pending edits. Gaps can be intentional.</p>
-        {invalidTimingTracks.length > 0 && <p role="status" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>Timing notices unavailable for {invalidTimingTracks.join(", ")}: enter valid start and duration frames for every caption on that track.{timingFilter !== "all" && " Select All timing to find invalid entries."}</p>}
+        {invalidTimingTracks.length > 0 && <p role="status" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>Timing notices unavailable for {invalidTimingTracks.join(", ")}: enter valid start and duration frames for every caption on that track. Select Invalid timing to find invalid entries.</p>}
 
         <div style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(({ item, trackName, locked }) => {
             const startFrame = rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate);
             const canSplit = canSplitCaptionAtFrame(item, playheadFrame, project.settings.frame_rate);
+            const hasPendingEdits = dirtyDrafts.some(draft => draft.item_id === item.item_id) || dirtyTimingDrafts.some(draft => draft.item_id === item.item_id);
             return (
               <article key={item.item_id} onFocusCapture={() => setFocusedCaptionId(item.item_id)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedCaptionId(null); }} style={{ display: "grid", gridTemplateColumns: "24px 90px 78px 78px 130px minmax(220px,1fr) auto", gap: 8, alignItems: "start", padding: 8, border: "1px solid var(--border-color)", borderRadius: 6 }}>
                 <input type="checkbox" aria-label={`Select caption ${item.item_id} to merge`} checked={mergeSelection.includes(item.item_id)} disabled={locked || busy || (!mergeSelection.includes(item.item_id) && mergeSelection.length >= 2)} onChange={(event) => {
@@ -200,7 +208,11 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
                   const value = event.currentTarget.value;
                   setDrafts((current) => ({ ...current, [item.item_id]: value }));
                 }} />
-                <button type="button" disabled={locked || !canSplit || busy || dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0} onClick={() => void splitAtPlayhead(item.item_id)} title={locked ? "Unlock this track before editing" : dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0 ? "Apply caption edits before splitting" : "Split this caption at the playhead"}>Split here</button>
+                <div style={{display:"flex", flexDirection:"column", gap:4}}><button type="button" disabled={locked || !canSplit || busy || dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0} onClick={() => void splitAtPlayhead(item.item_id)} title={locked ? "Unlock this track before editing" : dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0 ? "Apply caption edits before splitting" : "Split this caption at the playhead"}>Split here</button>
+                <button type="button" aria-label={`Discard caption edits ${item.item_id}`} disabled={locked || busy || !hasPendingEdits} onClick={() => {
+                  setDrafts(current => ({...current, [item.item_id]: item.text_content ?? ""}));
+                  setTimingDrafts(current => ({...current, [item.item_id]: {start_frame: startFrame, duration_frames: rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate)}}));
+                }}>Discard caption edits</button></div>
               </article>
             );
           })}

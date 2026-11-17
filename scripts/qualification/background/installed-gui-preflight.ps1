@@ -66,6 +66,14 @@ public static class InstalledDesktop {
 }
 '@
 $candidate=Get-Content -LiteralPath $CandidateReport -Raw | ConvertFrom-Json
+if (-not $candidate.installation) {
+ $installReceipt=Get-Content -LiteralPath (Join-Path $candidate.directory 'install-report.json') -Raw | ConvertFrom-Json -AsHashtable
+ $expectedDirectory=[IO.Path]::GetFullPath((Join-Path $candidate.directory 'installed'))
+ if ($installReceipt.status -ne 'passed' -or $installReceipt.exitCode -ne 0 -or $installReceipt.installerSha256 -ne $candidate.installer.sha256 -or [IO.Path]::GetFullPath($installReceipt.installDirectory) -ne $expectedDirectory) { throw 'Successful matching install receipt required' }
+ $candidate | Add-Member -NotePropertyName installation -NotePropertyValue ([pscustomobject]@{status='passed';directory=$expectedDirectory;binarySha256=$candidate.expectedInstalledBinary.sha256})
+ $CandidateReport=Join-Path $candidate.directory 'gui-candidate-resolved.json'
+ $candidate | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $CandidateReport -Encoding UTF8
+}
 $binary=Join-Path $candidate.installation.directory 'tinixcut.exe'
 $stream=[IO.File]::OpenRead($binary);$sha=[Security.Cryptography.SHA256]::Create()
 try{$hash=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}finally{$stream.Dispose();$sha.Dispose()}

@@ -33,6 +33,14 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onA
   if (!asset) return null;
   const sourceUrl = convertFileSrc(asset.path);
   const canAdd = Number.isFinite(sourceIn) && Number.isFinite(sourceOut) && sourceIn >= 0 && sourceOut > sourceIn && sourceOut <= duration;
+  const seekBoundary = (seconds: number) => {
+    const media = mediaRef.current;
+    if (!media || !Number.isFinite(seconds) || seconds < 0 || seconds > duration) return;
+    media.pause();
+    media.currentTime = seconds;
+    setPlayhead(seconds);
+  };
+  const canSeek = asset.media_kind !== "Image";
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -63,11 +71,14 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, onClose, onA
           )}
         </div>
         <div className="source-viewer-range">
-          <label>In (seconds)<input aria-label="Source In seconds" type="number" min="0" max={duration} step="0.001" value={sourceIn} onChange={(event) => setSourceIn(Number(event.target.value))} /></label>
-          <button type="button" className="btn-action" disabled={playhead >= sourceOut} onClick={() => setSourceIn(playhead)}>Set In at playhead</button>
-          <label>Out (seconds)<input aria-label="Source Out seconds" type="number" min="0" max={duration} step="0.001" value={sourceOut} onChange={(event) => setSourceOut(Number(event.target.value))} /></label>
-          <button type="button" className="btn-action" disabled={playhead <= sourceIn} onClick={() => setSourceOut(playhead)}>Set Out at playhead</button>
-          <span>{Math.max(0, sourceOut - sourceIn).toFixed(3)} s selected</span>
+          <label>In (seconds)<input aria-label="Source In seconds" type="number" min="0" max={duration} step="0.001" value={Number.isFinite(sourceIn) ? sourceIn : ""} onChange={(event) => setSourceIn(event.target.value === "" ? NaN : Number(event.target.value))} /></label>
+          <button type="button" className="btn-action" disabled={!Number.isFinite(sourceOut) || playhead >= sourceOut} onClick={() => setSourceIn(playhead)}>Set In at playhead</button>
+          <button type="button" className="btn-action" disabled={!canSeek || !Number.isFinite(sourceIn) || sourceIn < 0 || sourceIn > duration} onClick={() => seekBoundary(sourceIn)}>Go to source In</button>
+          <label>Out (seconds)<input aria-label="Source Out seconds" type="number" min="0" max={duration} step="0.001" value={Number.isFinite(sourceOut) ? sourceOut : ""} onChange={(event) => setSourceOut(event.target.value === "" ? NaN : Number(event.target.value))} /></label>
+          <button type="button" className="btn-action" disabled={!Number.isFinite(sourceIn) || playhead <= sourceIn} onClick={() => setSourceOut(playhead)}>Set Out at playhead</button>
+          <button type="button" className="btn-action" disabled={!canSeek || !Number.isFinite(sourceOut) || sourceOut < 0 || sourceOut > duration} onClick={() => seekBoundary(sourceOut)}>Go to source Out</button>
+          <button type="button" className="btn-action" onClick={() => { setSourceIn(0); setSourceOut(duration); }}>Reset source range</button>
+          <span>{canAdd ? `${(sourceOut - sourceIn).toFixed(3)} s selected` : "Enter a valid source range"}</span>
         </div>
         <footer className="modal-dialog-actions">
           {!reviewControls && <button type="button" className="btn-primary" disabled={!canAdd} onClick={() => onAddRange(asset, sourceIn, sourceOut)}>

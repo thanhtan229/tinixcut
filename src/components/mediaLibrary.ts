@@ -33,7 +33,7 @@ export function mediaUsageCounts(tracks: Project["tracks"]): Record<string, numb
 
 export type MediaLibraryKindFilter = "all" | Asset["media_kind"];
 export type MediaLibraryStatusFilter = "all" | "online" | "offline";
-export type MediaLibrarySort = "name" | "kind" | "size";
+export type MediaLibrarySort = "name" | "kind" | "size" | "duration-asc" | "duration-desc";
 
 export function sourceRangeSecondsToFrames(sourceIn: number, sourceOut: number, rate: FrameRate): { start: number; duration: number } | null {
   if (!Number.isFinite(sourceIn) || !Number.isFinite(sourceOut) || sourceIn < 0 || sourceOut <= sourceIn || rate.numerator <= 0 || rate.denominator <= 0) return null;
@@ -62,6 +62,18 @@ export function filterAndSortMediaAssets(
   });
 
   return filtered.sort((left, right) => {
+    if (sort === "duration-asc" || sort === "duration-desc") {
+      const duration = (asset: Asset) => {
+        const time = asset.duration;
+        return time && Number.isSafeInteger(time.value) && time.value > 0 && Number.isSafeInteger(time.rate.numerator) && time.rate.numerator > 0 && Number.isSafeInteger(time.rate.denominator) && time.rate.denominator > 0 ? time : null;
+      };
+      const a = duration(left), b = duration(right);
+      if (!a || !b) return a ? -1 : b ? 1 : left.name.localeCompare(right.name) || left.asset_id.localeCompare(right.asset_id);
+      const x = BigInt(a.value) * BigInt(a.rate.denominator) * BigInt(b.rate.numerator);
+      const y = BigInt(b.value) * BigInt(b.rate.denominator) * BigInt(a.rate.numerator);
+      const order = x < y ? -1 : x > y ? 1 : 0;
+      return order * (sort === "duration-asc" ? 1 : -1) || left.name.localeCompare(right.name) || left.asset_id.localeCompare(right.asset_id);
+    }
     if (sort === "size") return right.file_size - left.file_size || left.name.localeCompare(right.name);
     if (sort === "kind") return left.media_kind.localeCompare(right.media_kind) || left.name.localeCompare(right.name);
     return left.name.localeCompare(right.name);

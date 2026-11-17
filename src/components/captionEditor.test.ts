@@ -49,6 +49,7 @@ describe("caption editor helpers", () => {
     for (const draft of [{ start_frame: NaN, duration_frames: 30 }, { start_frame: 0, duration_frames: 0 }, { start_frame: Number.MAX_SAFE_INTEGER, duration_frames: 30 }]) {
       const result = getCaptionTimingNotices(collectCaptionRows(p), p.settings.frame_rate, { a: draft });
       expect([...result.invalidTrackIds]).toEqual(["one"]);
+      expect([...result.invalidItemIds]).toEqual(["a"]);
       expect(result.notices).toEqual({ d: { kind: "gap", frames: 30 } });
     }
   });

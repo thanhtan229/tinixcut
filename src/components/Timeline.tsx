@@ -693,6 +693,26 @@ export const Timeline: React.FC<TimelineProps> = ({
             const frame=adjacentMarkerFrame(project,playheadFrame,direction);
             return <button key={direction} type="button" className="btn-action" disabled={frame===null} title={direction===-1?"Go to previous marker":"Go to next marker"} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Marker":"Marker ▶"}</button>;
           })}
+          <select
+            className="btn-action"
+            aria-label="Go to marker"
+            title="Go to a marker"
+            value=""
+            disabled={!project?.markers?.length}
+            onChange={(event) => {
+              const marker = project?.markers?.find((candidate) => candidate.marker_id === event.target.value);
+              if (!marker || !project) return;
+              const frame = rationalTimeToFrames(marker.position, project.settings.frame_rate);
+              if (!Number.isFinite(frame)) return;
+              onPlayheadChange(frame);
+              navigation.locateFrame(frame);
+            }}
+          >
+            <option value="">Go to marker…</option>
+            {[...(project?.markers ?? [])]
+              .sort((a, b) => rationalTimeToFrames(a.position, project!.settings.frame_rate) - rationalTimeToFrames(b.position, project!.settings.frame_rate))
+              .map((marker) => <option key={marker.marker_id} value={marker.marker_id}>{marker.label} — frame {rationalTimeToFrames(marker.position, project!.settings.frame_rate)}</option>)}
+          </select>
           <button
             className="btn-action"
             disabled={effectiveSelectedItemIds.size === 0}
@@ -725,6 +745,8 @@ export const Timeline: React.FC<TimelineProps> = ({
           </button>
           <button className="btn-action" onClick={navigation.fitAll} aria-pressed={navigation.mode === "all"} title="Show the complete edit">Fit all</button>
           <button className="btn-action" onClick={navigation.fitSelection} disabled={!selectedViewRange} aria-pressed={navigation.mode === "selection"} title="Show selected clips across tracks">Fit selection</button>
+          <button type="button" className="btn-action" disabled={!selectedViewRange} onClick={() => { if (selectedViewRange) { onPlayheadChange(selectedViewRange.start); navigation.locateFrame(selectedViewRange.start); } }}>Go to selection start</button>
+          <button type="button" className="btn-action" disabled={!selectedViewRange} title="Go to the last included frame of the selected clips" onClick={() => { if (selectedViewRange) { const frame=selectedViewRange.end-1; onPlayheadChange(frame); navigation.locateFrame(frame); } }}>Go to selection last frame</button>
           <button className="btn-action" onClick={navigation.fitInOut} disabled={!inOutViewRange} aria-pressed={navigation.mode === "inout"} title="Show the marked In/Out range">Fit In/Out</button>
           {([['In',markIn],['Out',markOut]] as const).map(([label,frame])=><button key={label} type="button" className="btn-action" disabled={frame==null} title={`Move playhead to ${label} point`} onClick={()=>{if(frame!=null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>Go to {label}</button>)}
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Zoom</span>
@@ -898,7 +920,16 @@ export const Timeline: React.FC<TimelineProps> = ({
                 key={marker.marker_id}
                 type="button"
                 aria-label={`Marker ${marker.label} at frame ${frame}`}
-                title={`${marker.label} — frame ${frame}; double-click to rename, right-click to delete`}
+                title={`${marker.label} — frame ${frame}; double-click or F2 to rename, right-click or Delete to delete`}
+                onKeyDown={(event) => {
+                  if (event.key === "F2" && onRenameMarker) {
+                    event.preventDefault(); event.stopPropagation();
+                    const label = window.prompt("Rename marker", marker.label)?.trim();
+                    if (label) onRenameMarker(marker.marker_id, label);
+                  } else if ((event.key === "Delete" || event.key === "Backspace") && onDeleteMarker) {
+                    event.preventDefault(); event.stopPropagation(); onDeleteMarker(marker.marker_id);
+                  }
+                }}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); onPlayheadChange(frame); }}
                 onDoubleClick={(event) => {

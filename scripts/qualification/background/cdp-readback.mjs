@@ -11,6 +11,8 @@ try {
   if (!dom.trim()) throw new Error('Empty application DOM');
   mkdirSync('artifacts/background', { recursive: true });
   const invoke = (command, args = {}) => page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args });
+  const dismissRecovery = async () => { const later=page.getByRole('button',{name:'Later',exact:true}); try { await later.waitFor({timeout:2000}); await later.click(); } catch (error) { if(error.name!=='TimeoutError') throw error; } };
+  await dismissRecovery();
   const original = await invoke('project_get_current');
   const rate = original.settings.frame_rate;
   const time = value => ({ value, rate });
@@ -24,6 +26,7 @@ try {
   if (!path) throw new Error('Missing temporary project path');
   await invoke('project_save', { path });
   await page.reload();
+  await dismissRecovery();
   await page.getByRole('button', { name: /Caption editor/ }).click();
   await page.getByRole('checkbox', { name: 'Select caption cdp_left to merge' }).check();
   await page.getByRole('checkbox', { name: 'Select caption cdp_right to merge' }).check();
@@ -45,6 +48,7 @@ try {
   const reopened = await invoke('project_open', { path });
   assert.deepEqual(reopened.tracks, merged.tracks);
   await page.reload();
+  await dismissRecovery();
   await page.getByRole('button', { name: /Caption editor/ }).click();
   assert.equal(await page.getByRole('textbox', { name: 'Caption text 0.00–2.00s' }).inputValue(), 'Xin chào\nViệt Nam');
   await page.getByRole('spinbutton', { name: 'Duration frames cdp_left' }).fill('75');
@@ -63,6 +67,7 @@ try {
   const final = await invoke('project_open', { path });
   assert.deepEqual(final.tracks, split.tracks);
   await page.reload();
+  await dismissRecovery();
   await page.screenshot({ path: 'artifacts/background/cdp-smoke.png' });
   const wavPath = path + '.wav';
   const wav = Buffer.alloc(44 + 16000);
@@ -70,10 +75,32 @@ try {
   writeFileSync(wavPath, wav);
   const asset = await invoke('media_import', { filePath: wavPath });
   await page.reload();
+  await dismissRecovery();
   await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  const beforeReset = await invoke('project_get_current');
+  await page.getByLabel('Source In seconds').fill('0.2');
+  await page.getByLabel('Source Out seconds').fill('0.7');
+  await page.getByRole('button', { name: 'Reset source range', exact: true }).click();
+  assert.equal(await page.getByLabel('Source In seconds').inputValue(), '0');
+  assert.equal(await page.getByLabel('Source Out seconds').inputValue(), '1');
+  assert.deepEqual(await invoke('project_get_current'), beforeReset);
+  const addRange = page.getByRole('button', { name: 'Add range to timeline', exact: true });
+  await page.getByLabel('Source In seconds').fill('');
+  assert.equal(await addRange.isDisabled(), true);
+  await page.getByText('Enter a valid source range', { exact: true }).waitFor();
   await page.getByLabel('Source In seconds').fill('0.1');
+  assert.equal(await addRange.isEnabled(), true);
+  await page.getByLabel('Source Out seconds').fill('');
+  assert.equal(await addRange.isDisabled(), true);
   await page.getByLabel('Source Out seconds').fill('0.5');
-  await page.getByRole('button', { name: 'Add range to timeline', exact: true }).click();
+  assert.equal(await addRange.isEnabled(), true);
+  assert.deepEqual(await invoke('project_get_current'), beforeReset);
+  await page.getByRole('button', { name: 'Go to source Out', exact: true }).click();
+  await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && Math.abs(a.currentTime-0.5)<0.04; });
+  await page.getByRole('button', { name: 'Go to source In', exact: true }).click();
+  await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && Math.abs(a.currentTime-0.1)<0.04; });
+  const beforeInsert = await invoke('project_get_current');
+  await addRange.click();
   let added;
   for (let attempt = 0; attempt < 40; attempt++) {
     const p = await invoke('project_get_current');
@@ -85,9 +112,15 @@ try {
   const seconds = t => t.value * t.rate.denominator / t.rate.numerator;
   assert.equal(seconds(added.source_range.start), 0.1);
   assert.equal(seconds(added.timeline_range.duration), 0.4);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  for(let n=0;n<50;n++){const p=await invoke('project_get_current');if(!p.tracks.flatMap(t=>t.items).some(i=>i.item_id===added.item_id))break;await new Promise(r=>setTimeout(r,100));}
+  const undone=await invoke('project_get_current');assert.deepEqual(undone.tracks,beforeInsert.tracks);
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  let redone;for(let n=0;n<50;n++){redone=await invoke('project_get_current');if(redone.tracks.flatMap(t=>t.items).some(i=>i.item_id===added.item_id))break;await new Promise(r=>setTimeout(r,100));}
+  assert.deepEqual(redone.tracks.flatMap(t=>t.items).find(i=>i.item_id===added.item_id),added);
   await invoke('project_save', { path });
   const rangeReopened = await invoke('project_open', { path });
   assert.ok(rangeReopened.tracks.flatMap(t => t.items).some(i => i.asset_id === asset.asset_id));
-  writeFileSync('artifacts/background/cdp-smoke.json', JSON.stringify({ health, url: page.url(), domLength: dom.length, caption: 'UI draft guard/merge/Undo/Redo/timing/split; command save/reopen', sourceViewer: 'Native import; UI 0.1–0.5 seconds range insertion; persisted clip verified', revision: rangeReopened.revision, preview: 'Text fixture screenshot; playback unqualified' }, null, 2));
+  writeFileSync('artifacts/background/cdp-smoke.json', JSON.stringify({ health, url: page.url(), domLength: dom.length, caption: 'UI draft guard/merge/Undo/Redo/timing/split; command save/reopen', sourceViewer: 'Native WAV import; UI changed range, reset, reselect 0.1–0.5 s, seek boundaries, insert, Undo/Redo and save/reopen', revision: rangeReopened.revision, preview: 'Text fixture screenshot; playback unqualified' }, null, 2));
   console.log('PASS: real WebView caption workflow, draft guard and Source Viewer range insertion; save/reopen verified');
 } finally { await browser.close(); }

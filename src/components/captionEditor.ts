@@ -164,9 +164,10 @@ export function getCaptionTimingNotices(
   rows: CaptionRow[],
   rate: Project["settings"]["frame_rate"],
   drafts: Record<string, { start_frame: number; duration_frames: number }>,
-): { notices: Record<string, CaptionTimingNotice>; invalidTrackIds: Set<string> } {
+): { notices: Record<string, CaptionTimingNotice>; invalidTrackIds: Set<string>; invalidItemIds: Set<string> } {
   const tracks = new Map<string, Array<{ id: string; start: number; end: number }>>();
   const invalidTrackIds = new Set<string>();
+  const invalidItemIds = new Set<string>();
   for (const { item, trackId } of rows) {
     const draft = drafts[item.item_id];
     const start = draft?.start_frame ?? rationalTimeToFrames(item.timeline_range.start, rate);
@@ -174,6 +175,7 @@ export function getCaptionTimingNotices(
     const end = start + duration;
     if (!isValidCaptionStartFrame(start) || !isValidCaptionDurationFrames(duration) || !Number.isSafeInteger(end)) {
       invalidTrackIds.add(trackId);
+      invalidItemIds.add(item.item_id);
       continue;
     }
     const entries = tracks.get(trackId) ?? [];
@@ -194,7 +196,7 @@ export function getCaptionTimingNotices(
       coveredEnd = Math.max(coveredEnd ?? entry.end, entry.end);
     }
   }
-  return { notices, invalidTrackIds };
+  return { notices, invalidTrackIds, invalidItemIds };
 }
 
 export function captionMatchesSearch(text: string, query: string): boolean {

@@ -105,8 +105,13 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
               <option value="name">Name</option>
               <option value="kind">Type</option>
               <option value="size">Size</option>
+              <option value="duration-asc">Duration: shortest first</option>
+              <option value="duration-desc">Duration: longest first</option>
             </select>
           </div>
+          {(query !== "" || kindFilter !== "all" || statusFilter !== "all" || (usageCounts && usageFilter !== "all")) && <button type="button" className="btn-action" onClick={() => {
+            setQuery(""); setKindFilter("all"); setStatusFilter("all"); setUsageFilter("all");
+          }}>Clear filters</button>}
         </div>
       )}
       {importProgress && <div role="status" className="media-import-progress">{importProgress}</div>}

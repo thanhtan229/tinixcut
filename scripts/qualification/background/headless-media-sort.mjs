@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {build} from 'vite';
+import {chromium} from 'playwright';
+import {createServer} from 'node:http';
+import {existsSync,readFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {resolve,join,sep} from 'node:path';
+import {tmpdir} from 'node:os';
+const site=mkdtempSync(join(tmpdir(),'tinix-media-sort-'));
+let server,browser;
+try {
+ await build({configFile:false,root:process.cwd(),logLevel:'error',build:{outDir:site,rollupOptions:{input:resolve('scripts/qualification/background/headless-media-sort.html')}}});
+ server=createServer((req,res)=>{const path=resolve(site,'.'+new URL(req.url,'http://localhost').pathname);if(!path.startsWith(site+sep)||!existsSync(path))return res.writeHead(404).end();res.setHeader('Content-Type',path.endsWith('.html')?'text/html':'text/javascript');res.end(readFileSync(path));});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ browser=await chromium.launch({headless:true,args:['--mute-audio']});const page=await browser.newPage();
+ await page.goto(`http://127.0.0.1:${server.address().port}/scripts/qualification/background/headless-media-sort.html`);
+ const names=()=>page.locator('.panel-content > div > div').allTextContents();
+ await page.getByLabel('Sort media').selectOption('duration-asc');let rows=await names();assert.equal(rows.length,120);assert.match(rows[0],/Source 000/);assert.match(rows[119],/Source 119/);
+ await page.getByLabel('Sort media').selectOption('duration-desc');rows=await names();assert.match(rows[0],/Source 118/);assert.match(rows[119],/Source 119/);
+ await page.getByLabel('Filter media usage').selectOption('used');rows=await names();assert.equal(rows.length,1);assert.match(rows[0],/Source 030/);
+ await page.getByLabel('Search media').fill('030');await page.getByRole('button',{name:'Locate on timeline'}).click();await page.getByText('Clip 1/2 · Main').waitFor();await page.getByRole('button',{name:'Locate on timeline'}).click();await page.getByText('Clip 2/2 · Main').waitFor();await page.getByRole('button',{name:'Previous use'}).click();await page.getByText('Clip 1/2 · Main').waitFor();assert.equal((await page.evaluate(()=>window.lastLocate)).frame,0);
+ await page.getByLabel('Filter media usage').selectOption('unused');await page.getByText('No media matches these filters.').waitFor();await page.getByLabel('Search media').fill('03');rows=await names();assert.equal(rows.length,11);assert.ok(rows.every(x=>!x.includes('Source 030')));
+ assert.match(rows[0],/Source 103/);await page.getByLabel('Sort media').selectOption('duration-asc');rows=await names();assert.match(rows[0],/Source 003/);
+ await page.getByLabel('Filter media type').selectOption('Video');
+ await page.getByLabel('Filter media status').selectOption('offline');
+ await page.getByText('No media matches these filters.').waitFor();
+ await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+ rows=await names();assert.equal(rows.length,120);
+ assert.equal(await page.getByLabel('Search media').inputValue(),'');
+ for(const label of ['Filter media type','Filter media status','Filter media usage'])assert.equal(await page.getByLabel(label).inputValue(),'all');
+ assert.equal(await page.getByLabel('Sort media').inputValue(),'duration-asc');
+ assert.equal(await page.getByRole('button',{name:'Clear filters',exact:true}).count(),0);
+ await page.getByText('Clip 1/2 · Main').waitFor();
+ assert.equal(await page.evaluate(()=>window.fixtureProject()),JSON.stringify({settings:{frame_rate:{numerator:30,denominator:1}},tracks:[{name:'Main',items:[{item_id:'one',asset_id:'a30',timeline_range:{start:{value:0,rate:{numerator:30,denominator:1}}}},{item_id:'two',asset_id:'a30',timeline_range:{start:{value:90,rate:{numerator:30,denominator:1}}}}]}]}));
+ console.log('PASS: mixed library sort, filters, search and bidirectional locate');
+} finally {if(browser)await browser.close();if(server)await new Promise(r=>server.close(r));rmSync(site,{recursive:true,force:true});}

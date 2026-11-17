@@ -38,6 +38,27 @@ try{
  const later=page.getByRole('button',{name:'Later',exact:true});
  try{await later.waitFor({timeout:2000});}catch(e){if(e.name!=='TimeoutError')throw e;}
  if(await later.isVisible())await later.click();
+ await page.getByRole('button',{name:'✍ Caption editor',exact:true}).click();
+ const caption=page.getByRole('dialog',{name:'Caption editor'});
+ await caption.getByLabel('Start frame b').fill('35');
+ await caption.getByLabel('Filter caption timing').selectOption('gap');
+ await caption.getByText('Gap before: 5 frames',{exact:true}).waitFor();
+ assert.equal(await caption.locator('article').count(),1);
+ await caption.getByLabel('Filter caption timing').selectOption('overlap');
+ await caption.getByText('Overlap with earlier captions: 5 frames',{exact:true}).waitFor();
+ assert.equal(await caption.locator('article').count(),1);
+ await caption.getByLabel('Filter caption timing').selectOption('all');
+ await caption.getByLabel('Start frame b').fill('');
+ await caption.getByLabel('Filter caption timing').selectOption('invalid');
+ assert.equal(await caption.locator('article').count(),1);
+ assert.equal(await caption.getByRole('button',{name:'Apply edits'}).isDisabled(),true);
+ await caption.getByLabel('Start frame b').fill('35');
+ await caption.getByLabel('Filter caption timing').selectOption('edited');
+ assert.equal(await caption.locator('article').count(),1);
+ await caption.getByLabel('Filter caption timing').selectOption('all');
+ await caption.getByRole('button',{name:'Discard edits'}).click();
+ await caption.getByRole('button',{name:'Close caption editor'}).click();
+ report.captionTiming='Gap, overlap, invalid and pending-edit filters; invalid Apply guard and discard on installed WebView';
  const markerProject=await invoke('project_get_current');
  await page.getByLabel('Go to frame',{exact:true}).fill('0');await page.getByRole('button',{name:'Go',exact:true}).click();
  await page.getByRole('button',{name:'Marker ▶',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#preview-frame-seek')?.value==='30');
@@ -101,6 +122,10 @@ try{
  try{await later.waitFor({timeout:2000});}catch(e){if(e.name!=='TimeoutError')throw e;} if(await later.isVisible())await later.click();
  await page.getByText('Used in 2 timeline clips',{exact:true}).waitFor();
  await page.getByLabel('Filter media usage').selectOption('unused');await page.getByText('No media matches these filters.',{exact:true}).waitFor();
+ await page.getByLabel('Sort media').selectOption('duration-desc');
+ await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+ assert.equal(await page.getByLabel('Filter media usage').inputValue(),'all');assert.equal(await page.getByLabel('Sort media').inputValue(),'duration-desc');
+ report.mediaFilters='Clear filters restores usage and preserves duration sort; offline synthetic fixture';
  await page.getByLabel('Filter media usage').selectOption('used');await page.getByText('Used in 2 timeline clips',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Locate on timeline',exact:true}).click();await page.getByText('Clip 1/2 · Fixture audio',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Locate on timeline',exact:true}).click();await page.getByText('Clip 2/2 · Fixture audio',{exact:true}).waitFor();
@@ -110,6 +135,10 @@ try{
  await page.reload();try{await later.waitFor({timeout:2000});}catch(e){if(e.name!=='TimeoutError')throw e;}if(await later.isVisible())await later.click();
  await page.getByRole('button',{name:'Audio mix',exact:true}).click();const mix=page.getByRole('dialog',{name:'Review audio mix plan'});await mix.getByRole('checkbox',{name:'Normalize music from source audio levels'}).uncheck();await mix.getByRole('button',{name:'Build review plan'}).click();await mix.getByRole('button',{name:'Change settings'}).waitFor();await mix.getByRole('button',{name:'Change settings'}).click();assert.equal(await mix.getByRole('button',{name:'Apply reviewed mix'}).count(),0);await mix.getByRole('button',{name:'Cancel',exact:true}).click();report.installedMix='Offline fixture timing; real plan dry-run, revise; no level analysis or Apply';
  await page.getByRole('button',{name:'✨ Draft',exact:true}).click();const draft=page.getByRole('dialog',{name:'Create video draft'});await draft.getByText(/Offline sample.mp4.*offline/i).waitFor();assert.equal(await draft.getByRole('button',{name:'Generate preview'}).isDisabled(),true);await draft.getByRole('button',{name:'Cancel',exact:true}).click();report.installedDraft='Offline source explicitly disabled; no planner preview';
+ await page.getByRole('button',{name:'↕ Reorder',exact:true}).click();const reorder=page.getByRole('dialog',{name:'Reorder video clips'});await reorder.waitFor();await reorder.getByRole('button',{name:'Cancel',exact:true}).click();
+ await page.locator('[data-timeline-clip]').filter({hasText:'Voice sample'}).click();
+ assert.equal(await page.getByRole('button',{name:'✂ Shorten',exact:true}).isDisabled(),true);
+ report.plannerDialogs='Draft, audio mix and reorder opened/closed; shorten disabled for offline clip; scene-guided requires scene analysis';
  assert.equal(sha(binary),report.binarySha256);report.status='passed';console.log('PASS: exact installed GUI health, paused text frame/export pixels and silent transport');
 }catch(error){report.status='failed';report.error=String(error);console.error(error);process.exitCode=1;
  try{if(page){report.failureDom=await page.locator('body').innerText();report.exactFrameNotes=await page.locator('[title]').evaluateAll(es=>es.filter(e=>e.textContent==='Exact frame: live preview').map(e=>e.title));await page.screenshot({path:join(directory,'failure.png')});}}catch(captureError){report.captureError=String(captureError);}

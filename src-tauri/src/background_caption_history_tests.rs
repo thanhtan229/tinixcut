@@ -503,6 +503,38 @@ fn timeline_group_move_survives_save_reopen() {
 }
 
 #[test]
+#[ignore = "requires fresh headless multi-caption UI command"]
+fn multi_caption_ui_apply_undo_redo() {
+    let evidence_path = std::env::var_os("TINIXCUT_CAPTION_MULTI_COMMAND").expect("set fresh UI command path");
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(evidence_path).unwrap()).unwrap();
+    let initial: crate::modules::domain::Project = serde_json::from_value(value["project"].clone()).unwrap();
+    let envelope: CommandEnvelope = serde_json::from_value(serde_json::json!({
+        "schema_version":initial.schema_version,"project_id":initial.project_id,
+        "base_revision":initial.revision,"transaction_id":"multi-caption-ui",
+        "operations":value["operations"]
+    })).unwrap();
+    let mut service = CommandService::new(initial.clone());
+    let receipt = service.execute(envelope).unwrap();
+    assert_eq!(receipt.operations_applied, 3);
+    let changed = service.project().clone();
+    assert_eq!(changed.tracks[0].items.iter().find(|x| x.item_id == "long-120").unwrap().text_content.as_deref(), Some("changed without match"));
+    assert_eq!(changed.tracks[0].items.iter().find(|x| x.item_id == "long-170").unwrap().text_content.as_deref(), Some("unique-find beta"));
+    assert_eq!(changed.tracks[1].items[1].timeline_range.start.value, 35);
+    assert_eq!(changed.tracks[1].items[0], initial.tracks[1].items[0]);
+    for (before, after) in initial.tracks[0].items.iter().zip(&changed.tracks[0].items) {
+        if before.item_id != "long-120" && before.item_id != "long-170" { assert_eq!(before, after); }
+    }
+    let mut history = HistoryManager::new(20);
+    history.record_edit(HistoryEntry { description: "Edit captions".into(), transaction_id: receipt.transaction_id, prior_snapshot: initial.clone(), resulting_snapshot: changed.clone() });
+    let mut current = changed.clone();
+    assert!(history.undo(&mut current).is_some());
+    assert_eq!(current.tracks, initial.tracks);
+    assert!(history.redo(&mut current).is_some());
+    assert_eq!(current.tracks, changed.tracks);
+    println!("MULTI_CAPTION_UI_APPLY_UNDO_REDO_PASS");
+}
+
+#[test]
 #[ignore = "requires fresh headless caption scoped draft evidence"]
 fn scoped_caption_ui_apply_and_undo() {
     let root=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");

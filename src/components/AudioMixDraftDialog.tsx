@@ -132,6 +132,10 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
         <form onSubmit={submit}>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Voice clips</legend>
+            <div className="draft-subtitle-picker">
+              <button type="button" className="btn-action" onClick={() => setVoiceIds(candidates.filter(({item}) => item.kind === "Video").map(({item}) => item.item_id))}>Select all voice clips</button>
+              <button type="button" className="btn-action" onClick={() => setVoiceIds([])}>Clear voice selection</button>
+            </div>
             {candidates.filter(({ item }) => item.kind === "Video").length === 0 ? <p className="draft-muted">No video clips with embedded audio are available.</p> : candidates.filter(({ item }) => item.kind === "Video").map(({ item, trackName }) => (
               <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={voiceIds.includes(item.item_id)} onChange={(event) => toggle(setVoiceIds, item.item_id, event.target.checked)} />
                 <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s</span></label>
@@ -139,6 +143,10 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
           </fieldset>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Music clips</legend>
+            <div className="draft-subtitle-picker">
+              <button type="button" className="btn-action" onClick={() => setMusicIds(candidates.filter(({item,locked}) => item.kind === "Audio" && !locked).map(({item}) => item.item_id))}>Select all music clips</button>
+              <button type="button" className="btn-action" onClick={() => setMusicIds([])}>Clear music selection</button>
+            </div>
             {candidates.filter(({ item }) => item.kind === "Audio").length === 0 ? <p className="draft-muted">No standalone audio clips are available.</p> : candidates.filter(({ item }) => item.kind === "Audio").map(({ item, trackName, locked }) => (
               <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={musicIds.includes(item.item_id)} disabled={locked} onChange={(event) => toggle(setMusicIds, item.item_id, event.target.checked)} />
                 <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s{locked ? " · locked track" : ""}</span></label>
