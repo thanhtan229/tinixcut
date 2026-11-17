@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, tinix]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Không tải Chromium (~170 MB): các bước dưới đây không cần trình duyệt.
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            service/package-lock.json
+
+      - name: Cài phụ thuộc (frontend + service)
+        run: |
+          npm ci
+          npm --prefix service ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Kiểm tra kiểu frontend (vue-tsc)
+        run: npx vue-tsc --noEmit
+
+      - name: Kiểm tra kiểu service
+        run: npm run tinix:typecheck-service
+
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Kiểm thử offline
+        run: npm run tinix:test
