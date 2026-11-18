@@ -4,6 +4,7 @@ $ErrorActionPreference='Stop'
 $chosen=@('Recovery','SavedRecovery','Workflow','Pointer','Controls','Audio','GainPreview','Captions','Media','HistoryBranch' | Where-Object {Get-Variable -Name $_ -ValueOnly})
 if($chosen.Count -gt 1){throw 'Select only one CDP mode'}
 $mode=if($chosen.Count){$chosen[0]}else{'Smoke'}
+New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'artifacts/background') -Force | Out-Null
 $receipt=if($env:TINIXCUT_CDP_SESSION_REPORT){$env:TINIXCUT_CDP_SESSION_REPORT}else{Join-Path $PWD.Path ('artifacts/background/cdp-session-'+$mode+'.json')}
 $session=[ordered]@{startedAt=[DateTime]::UtcNow.ToString('o');mode=$mode;status='running';functionalStatus='not-run';stages=@();killAttempts=@();diagnostics=@()}
 function Save-Session { $session | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receipt -Encoding UTF8 }
@@ -73,7 +74,8 @@ public static class DesktopProbe {
 
 Write-Output 'CDP desktop interop ready'
 $name='TinixCutCDP-'+[guid]::NewGuid().ToString('N')
-$binary=Join-Path $PWD.Path 'src-tauri\target-qualification\debug\tinixcut.exe'
+$binary=if($env:TINIXCUT_CDP_BINARY){[IO.Path]::GetFullPath($env:TINIXCUT_CDP_BINARY)}else{Join-Path $PWD.Path 'src-tauri\target-qualification\debug\tinixcut.exe'}
+if($env:TINIXCUT_SCOPE_PROBE_RUN -eq '1' -and (-not $Recovery -or -not $env:TINIXCUT_CDP_BINARY -or $env:TINIXCUT_CDP_WINDOW_TITLE -ne 'TinixCut qualification production identity')) {throw 'Scope qualification requires Recovery mode, explicit binary and qualification window title'}
 if (Get-NetTCPConnection -State Listen -LocalPort 9444 -ErrorAction SilentlyContinue) {throw 'CDP port occupied'}
 if (Get-CimInstance Win32_Process -Filter "Name='tinixcut.exe'" | Where-Object {$_.ExecutablePath -eq $binary}) {throw 'Qualification already running'}
 Write-Output 'CDP port/app ownership checked'
@@ -84,17 +86,29 @@ $before=[DesktopProbe]::Name($input); [void][DesktopProbe]::CloseDesktop($input)
 $profile=Join-Path ([IO.Path]::GetTempPath()) $name
 $fixtureDir=Join-Path ([IO.Path]::GetTempPath()) ('tinixcut-cdp-fixtures\'+$name)
 New-Item -ItemType Directory -Path $fixtureDir -Force | Out-Null
+$oldCdpProject=$env:TINIXCUT_CDP_PROJECT
 $env:TINIXCUT_CDP_PROJECT=Join-Path $fixtureDir 'caption.tcproj'
 $oldProfile=$env:WEBVIEW2_USER_DATA_FOLDER
 $env:WEBVIEW2_USER_DATA_FOLDER=$profile
+$oldQualificationRoot=$env:TINIXCUT_QUALIFICATION_DATA_ROOT
+$oldScopeProbe=$env:TINIXCUT_SCOPE_PROBE
+$scopeRoot=$null
 $pi=New-Object DesktopProbe+PROCESS_INFORMATION
 try {
+if($env:TINIXCUT_SCOPE_PROBE_RUN -eq '1') {
+ $scopeRoot=Join-Path ([IO.Path]::GetTempPath()) ('tinixcut-isolated-'+[guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory -Path $scopeRoot -ErrorAction Stop | Out-Null
+ [IO.File]::WriteAllText((Join-Path $scopeRoot 'scope-fixture.txt'),'qualification fixture')
+ $env:TINIXCUT_QUALIFICATION_DATA_ROOT=$scopeRoot
+ $session.qualificationDataRoot=$scopeRoot
+}
 $hashStream=[IO.File]::OpenRead($binary);$hasher=[Security.Cryptography.SHA256]::Create()
 try {$session.binarySha256=[BitConverter]::ToString($hasher.ComputeHash($hashStream)).Replace('-','')}finally{$hashStream.Dispose();$hasher.Dispose()}
 $session.inputDesktop=$before
 $session.desktop=$name
 Save-Session
  foreach($stage in $(if($Recovery -or $SavedRecovery){@('prepare','resume')}else{@('smoke')})) {
+ if($env:TINIXCUT_SCOPE_PROBE_RUN -eq "1") { if(-not $Recovery){throw "Scope probe requires Recovery mode"}; $env:TINIXCUT_SCOPE_PROBE=if($stage -eq "prepare"){"grant"}else{"verify"} }
  $si=New-Object DesktopProbe+STARTUPINFO; $si.cb=[Runtime.InteropServices.Marshal]::SizeOf($si);$si.desktop="winsta0\$name"
  $cmd=New-Object Text.StringBuilder ('"'+$binary+'"')
  if (-not [DesktopProbe]::CreateProcess($binary,$cmd,[IntPtr]::Zero,[IntPtr]::Zero,$false,0x08000000,[IntPtr]::Zero,$PWD.Path,[ref]$si,[ref]$pi)) {throw 'CreateProcess failed'}
@@ -113,7 +127,11 @@ Save-Session
    if($owner.CommandLine -notlike "*$profile*"){throw 'CDP listener does not belong to isolated profile'}
  }
  $session.processId=$pi.processId
+ $appOwner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$pi.processId)
+ if(-not $appOwner -or [IO.Path]::GetFullPath($appOwner.ExecutablePath) -ne $binary){throw 'Launched process binary mismatch'}
  if(-not [DesktopProbe]::HasWindow($desktop,$pi.processId)){throw 'App window not on isolated desktop'}
+ & node scripts/qualification/background/cdp-identity.mjs
+ if($LASTEXITCODE -ne 0){throw 'Qualification window identity mismatch'}
  $script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
  $nodeArgs=@(('scripts/qualification/background/'+$script),$stage)
  $nodeInfo=New-Object Diagnostics.ProcessStartInfo
@@ -133,6 +151,14 @@ Save-Session
  if($stageResult.stdout){Write-Output $stageResult.stdout};if($stageResult.stderr){Write-Output $stageResult.stderr}
  if($timedOut){throw ('CDP stage timed out after '+$TimeoutSeconds+' seconds')}
  if($child.ExitCode -ne 0){throw 'CDP readback failed'}
+ if($scopeRoot) {
+  $scopeMarkerName=if($stage -eq 'prepare'){'scope-grant.ok'}else{'scope-verify.ok'}
+  $scopeMarker=Join-Path $scopeRoot $scopeMarkerName
+  $scopeFile=Join-Path $scopeRoot 'plugin/.persisted-scope-asset'
+  if(-not (Test-Path -LiteralPath $scopeMarker -PathType Leaf) -or -not (Test-Path -LiteralPath $scopeFile -PathType Leaf)) {throw 'Scope probe marker or persisted scope is missing'}
+  if([IO.File]::ReadAllText($scopeMarker) -ne (Join-Path $scopeRoot 'scope-fixture.txt')) {throw 'Scope probe fixture path mismatch'}
+  $stageResult.scopeVerified=$true
+ }
  $input=[DesktopProbe]::OpenInputDesktop(0,$false,1)
  try {if ([DesktopProbe]::Name($input) -ne $before) {throw 'Input desktop changed during CDP readback'}} finally {[void][DesktopProbe]::CloseDesktop($input)}
  $stageResult.inputDesktopUnchanged=$true;Save-Session
@@ -186,13 +212,15 @@ Save-Session
  if($ownedRoot){$ownedRoot.Dispose();$ownedRoot=$null}
  [GC]::Collect();[GC]::WaitForPendingFinalizers();[GC]::Collect()
  if($null -eq $oldProfile){Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue}else{$env:WEBVIEW2_USER_DATA_FOLDER=$oldProfile}
+ if($null -eq $oldQualificationRoot){Remove-Item Env:TINIXCUT_QUALIFICATION_DATA_ROOT -ErrorAction SilentlyContinue}else{$env:TINIXCUT_QUALIFICATION_DATA_ROOT=$oldQualificationRoot}
+ if($null -eq $oldScopeProbe){Remove-Item Env:TINIXCUT_SCOPE_PROBE -ErrorAction SilentlyContinue}else{$env:TINIXCUT_SCOPE_PROBE=$oldScopeProbe}
  $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
  if([IO.Path]::GetFullPath($profile) -ne (Join-Path $tempRoot $name) -or [IO.Path]::GetFullPath($fixtureDir) -ne (Join-Path $tempRoot ('tinixcut-cdp-fixtures\'+$name))){throw 'Cleanup path outside expected temporary directory'}
  Add-CdpCheckpoint 'before-profile-removal'
  for($attempt=0;$attempt -lt 3 -and (Test-Path -LiteralPath $profile);$attempt++) {
    try {Remove-Item -LiteralPath $profile -Recurse -Force} catch {if($attempt -eq 2){throw}; Start-Sleep -Milliseconds 250}
  }
- Remove-Item Env:TINIXCUT_CDP_PROJECT -ErrorAction SilentlyContinue
+ if($null -eq $oldCdpProject){Remove-Item Env:TINIXCUT_CDP_PROJECT -ErrorAction SilentlyContinue}else{$env:TINIXCUT_CDP_PROJECT=$oldCdpProject}
  if(Test-Path -LiteralPath $fixtureDir){Remove-Item -LiteralPath $fixtureDir -Recurse -Force}
  $remainingProfile=@(Get-LiveProfileProcesses $profile)
  $session.cleanup=[ordered]@{passed=((-not (Test-Path -LiteralPath $profile)) -and (-not (Test-Path -LiteralPath $fixtureDir)) -and $remainingProfile.Count -eq 0 -and ([CdpReadOnlyProbe]::State([uint32]$pi.processId) -eq 'exited'));profileRemoved=(-not (Test-Path -LiteralPath $profile));fixtureRemoved=(-not (Test-Path -LiteralPath $fixtureDir));profileProcessCount=$remainingProfile.Count}

@@ -6,7 +6,7 @@ try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   assert.ok(page);
   const title = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('plugin:window|title', { label: 'main' }));
-  assert.equal(title, 'TinixCut Qualification');
+  assert.equal(title, process.env.TINIXCUT_CDP_WINDOW_TITLE || 'TinixCut Qualification');
   const browserSession = await browser.newBrowserCDPSession();
   const closed = page.waitForEvent('close', { timeout: 5000 });
   const request = page.evaluate(() => window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'main' }));

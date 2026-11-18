@@ -498,21 +498,159 @@ fn lut_read_table(path: String, sha256: String) -> Result<LutTable, String> {
     })
 }
 
+#[cfg(feature = "qualification-isolation")]
+fn qualification_root() -> PathBuf {
+    use std::os::windows::fs::MetadataExt;
+    let path = PathBuf::from(
+        std::env::var_os("TINIXCUT_QUALIFICATION_DATA_ROOT")
+            .expect("TINIXCUT_QUALIFICATION_DATA_ROOT is required"),
+    );
+    assert!(
+        path.is_absolute(),
+        "qualification data root must be absolute"
+    );
+    let temp = std::fs::canonicalize(std::env::temp_dir()).expect("resolve temp root");
+    let parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+    assert_eq!(
+        parent.as_ref(),
+        Some(&temp),
+        "qualification root must be a direct child of temp"
+    );
+    assert!(
+        path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n
+            .starts_with("tinixcut-isolated-")
+            && n.len() == "tinixcut-isolated-".len() + 32
+            && n["tinixcut-isolated-".len()..]
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())),
+        "invalid qualification root name"
+    );
+    for candidate in [
+        path.clone(),
+        path.join("config"),
+        path.join("config/settings.json"),
+        path.join("local"),
+        path.join("local/recovery"),
+        path.join("local/recovery/unsaved"),
+        path.join("plugin"),
+        path.join("plugin/.persisted-scope"),
+        path.join("plugin/.persisted-scope-asset"),
+        path.join("scope-fixture.txt"),
+        path.join("scope-grant.ok"),
+        path.join("scope-verify.ok"),
+    ] {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) => assert!(
+                metadata.file_attributes() & 0x400 == 0,
+                "reparse point in qualification path: {}",
+                candidate.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!(
+                "cannot inspect qualification path {}: {error}",
+                candidate.display()
+            ),
+        }
+    }
+    assert!(path.is_dir(), "qualification root must already exist");
+    path
+}
+
+#[cfg(all(test, windows, feature = "qualification-isolation"))]
+mod qualification_guard_tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    #[test]
+    fn qualification_root_guards() {
+        if std::env::var_os("TINIXCUT_GUARD_TEST_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "qualification_guard_tests::qualification_root_guards"])
+                .env("TINIXCUT_GUARD_TEST_CHILD", "1")
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "isolated guard test failed: {}", String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "tinixcut-isolated-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let previous = std::env::var_os("TINIXCUT_QUALIFICATION_DATA_ROOT");
+        std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", &root);
+        assert_eq!(qualification_root(), root);
+        std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", std::env::temp_dir());
+        assert!(std::panic::catch_unwind(qualification_root).is_err());
+        std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", &root);
+        let target = root.join("target");
+        std::fs::create_dir(&target).unwrap();
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:TINIXCUT_TEST_JUNCTION -Target $env:TINIXCUT_TEST_TARGET | Out-Null"])
+            .env("TINIXCUT_TEST_JUNCTION", root.join("plugin"))
+            .env("TINIXCUT_TEST_TARGET", &target)
+            .creation_flags(0x08000000)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "junction creation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(std::panic::catch_unwind(qualification_root).is_err());
+        match previous {
+            Some(value) => std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", value),
+            None => std::env::remove_var("TINIXCUT_QUALIFICATION_DATA_ROOT"),
+        }
+    }
+}
+
+fn settings_directory<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    #[cfg(feature = "qualification-isolation")]
+    {
+        let _ = app;
+        return Ok(qualification_root().join("config"));
+    }
+    #[cfg(not(feature = "qualification-isolation"))]
+    {
+        app.path()
+            .app_config_dir()
+            .map_err(|error| format!("Could not resolve app settings directory: {error}"))
+    }
+}
+
+fn local_data_directory<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    #[cfg(feature = "qualification-isolation")]
+    {
+        let _ = app;
+        return Ok(qualification_root().join("local"));
+    }
+    #[cfg(not(feature = "qualification-isolation"))]
+    {
+        app.path().app_local_data_dir().map_err(|e| e.to_string())
+    }
+}
+
+fn persisted_scope_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    #[cfg(feature = "qualification-isolation")]
+    {
+        return qualification_scope::init_with_directory(Some(qualification_root().join("plugin")));
+    }
+    #[cfg(not(feature = "qualification-isolation"))]
+    {
+        tauri_plugin_persisted_scope::init()
+    }
+}
+
 #[tauri::command]
 fn app_settings_get(app: AppHandle) -> Result<AppSettings, String> {
-    let config_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|error| format!("Could not resolve app settings directory: {error}"))?;
+    let config_dir = settings_directory(&app)?;
     load_settings(&settings_path(&config_dir))
 }
 
 #[tauri::command]
 fn app_settings_save(app: AppHandle, settings: AppSettings) -> Result<AppSettings, String> {
-    let config_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|error| format!("Could not resolve app settings directory: {error}"))?;
+    let config_dir = settings_directory(&app)?;
     let path = settings_path(&config_dir);
     save_settings(&settings, &path)?;
     load_settings(&path)
@@ -529,10 +667,7 @@ fn app_settings_add_recent_project(
             project_path
         )
     })?;
-    let config_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|error| format!("Could not resolve app settings directory: {error}"))?;
+    let config_dir = settings_directory(&app)?;
     let path = settings_path(&config_dir);
     let mut settings = load_settings(&path)?;
     record_recent_project(&mut settings, &canonical.to_string_lossy())?;
@@ -1337,10 +1472,7 @@ fn project_save_unsaved_recovery(
     if project.project_id != expected_project_id || project.revision != expected_revision {
         return Err("Project changed before unsaved recovery could be saved".to_string());
     }
-    let recovery_root = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
+    let recovery_root = local_data_directory(&app)?
         .join("recovery")
         .join("unsaved");
     fs::create_dir_all(&recovery_root).map_err(|error| error.to_string())?;
@@ -1357,10 +1489,7 @@ fn project_save_unsaved_recovery(
 fn project_list_unsaved_recoveries(
     app: AppHandle,
 ) -> Result<Vec<UnsavedRecoveryCandidate>, String> {
-    let recovery_root = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
+    let recovery_root = local_data_directory(&app)?
         .join("recovery")
         .join("unsaved");
     list_unsaved_recovery_candidates(&recovery_root)
@@ -1378,9 +1507,7 @@ fn project_restore_unsaved_recovery(
     let mut engine = state.0.lock().map_err(|e| e.to_string())?;
     restore_unsaved_recovery_engine(
         &mut engine,
-        &app.path()
-            .app_local_data_dir()
-            .map_err(|error| error.to_string())?
+        &local_data_directory(&app)?
             .join("recovery")
             .join("unsaved"),
         &project_id,
@@ -1431,10 +1558,7 @@ fn project_discard_unsaved_recovery(
     expected_recovery_revision: u64,
 ) -> Result<(), String> {
     let engine = state.0.lock().map_err(|e| e.to_string())?;
-    let recovery_root = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
+    let recovery_root = local_data_directory(&app)?
         .join("recovery")
         .join("unsaved");
     let path = unsaved_recovery_path(&recovery_root, &project_id)?;
@@ -4233,9 +4357,64 @@ fn template_draft_apply(
     template_draft_apply_engine(&mut engine_guard, &item_id, &draft, base_revision)
 }
 
+#[cfg(feature = "qualification-isolation")]
+fn qualification_scope_probe(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let Ok(mode) = std::env::var("TINIXCUT_SCOPE_PROBE") else {
+        return Ok(());
+    };
+    let root = qualification_root();
+    let fixture = root.join("scope-fixture.txt");
+    if !fixture.is_file() {
+        return Err("scope probe fixture is missing".into());
+    }
+    let scope = app.asset_protocol_scope();
+    match mode.as_str() {
+        "grant" => {
+            if scope.is_allowed(&fixture) {
+                return Err("scope fixture already allowed".into());
+            }
+            scope.allow_file(&fixture)?;
+        }
+        "verify" => {
+            if !scope.is_allowed(&fixture) {
+                return Err("scope fixture not restored".into());
+            }
+        }
+        _ => return Err("invalid scope probe mode".into()),
+    }
+    std::fs::write(
+        root.join(format!("scope-{mode}.ok")),
+        fixture.to_string_lossy().as_bytes(),
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "qualification-isolation"))]
+fn qualification_scope_probe(_app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+#[cfg(not(feature = "qualification-isolation"))]
+fn reject_unisolated_qualification(product_name: Option<&str>) {
+    assert_ne!(
+        product_name,
+        Some("TinixCut qualification production identity"),
+        "production-identity qualification requires the qualification-isolation feature"
+    );
+}
+
+#[cfg(all(test, not(feature = "qualification-isolation")))]
+#[test]
+fn qualification_config_requires_isolation() {
+    reject_unisolated_qualification(Some("TinixCut"));
+    assert!(std::panic::catch_unwind(|| reject_unisolated_qualification(Some("TinixCut qualification production identity"))).is_err());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_webview2_profile();
+    let context = tauri::generate_context!();
+    #[cfg(not(feature = "qualification-isolation"))]
+    reject_unisolated_qualification(context.config().product_name.as_deref());
     let initial_project = Project::new("Untitled Project".to_string());
     let state = AppState(
         Arc::new(Mutex::new(EditorEngine::new(initial_project))),
@@ -4245,8 +4424,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_persisted_scope::init())
+        .plugin(persisted_scope_plugin())
         .plugin(tauri_plugin_dialog::init())
+        .setup(qualification_scope_probe)
         .manage(state)
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -4335,7 +4515,7 @@ pub fn run() {
             template_draft_save,
             template_draft_apply
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
