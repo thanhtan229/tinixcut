@@ -79,6 +79,37 @@ if($env:TINIXCUT_SCOPE_PROBE_RUN -eq '1' -and (-not $Recovery -or -not $env:TINI
 if (Get-NetTCPConnection -State Listen -LocalPort 9444 -ErrorAction SilentlyContinue) {throw 'CDP port occupied'}
 if (Get-CimInstance Win32_Process -Filter "Name='tinixcut.exe'" | Where-Object {$_.ExecutablePath -eq $binary}) {throw 'Qualification already running'}
 Write-Output 'CDP port/app ownership checked'
+# The fallback locations must also be disposable: a routing regression must not
+# clear the user's real cache or write to their real template catalog.
+$priorTemp=$env:TEMP
+$priorTmp=$env:TMP
+$priorCatalog=$env:TINIX_TEMPLATE_CATALOG_DIR
+$guardRoot=$null
+$guardCache=$null
+$guardCatalog=$null
+$guardBeforeCache=$null
+$guardBeforeCatalog=$null
+. (Join-Path $PSScriptRoot 'cdp-fallback-controls.ps1')
+
+try {
+ if($env:TINIXCUT_SCOPE_PROBE_RUN -eq '1') {
+  $guardRoot=Join-Path ([IO.Path]::GetTempPath()) ('tinixcut-fallback-control-'+[guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $guardRoot -ErrorAction Stop | Out-Null
+  $guardTemp=Join-Path $guardRoot 'temp'
+  $guardCache=Join-Path $guardTemp 'tinixcut_cache'
+  $guardCatalog=Join-Path $guardRoot 'catalog'
+  New-Item -ItemType Directory -Path $guardTemp,$guardCache,$guardCatalog -ErrorAction Stop | Out-Null
+  $guardThumbs=Join-Path $guardCache 'thumbnails'
+  New-Item -ItemType Directory -Path $guardThumbs -ErrorAction Stop | Out-Null
+  [IO.File]::WriteAllText((Join-Path $guardThumbs 'control.txt'),'cache control')
+  [IO.File]::WriteAllText((Join-Path $guardCatalog 'control.txt'),'catalog control')
+  $guardBeforeCache=Get-ControlInventory $guardCache
+  $guardBeforeCatalog=Get-ControlInventory $guardCatalog
+  $env:TEMP=$guardTemp
+  $env:TMP=$guardTemp
+  $env:TINIX_TEMPLATE_CATALOG_DIR=$guardCatalog
+  $session.fallbackControlRoot=$guardRoot
+ }
 $desktop=[DesktopProbe]::CreateDesktop($name,[IntPtr]::Zero,[IntPtr]::Zero,0,0x01ff,[IntPtr]::Zero)
 if ($desktop -eq [IntPtr]::Zero) {throw 'CreateDesktop failed'}
 $input=[DesktopProbe]::OpenInputDesktop(0,$false,1)
@@ -231,4 +262,26 @@ Save-Session
  if(-not $session.cleanup.passed){throw 'Owned CDP resources remain'}
  } catch {$session.status='failed';$session.cleanup=[ordered]@{passed=$false;error=$_.Exception.Message};Add-CdpCheckpoint 'cleanup-failed';throw}
  finally {$session.finishedAt=[DateTime]::UtcNow.ToString('o');Save-Session}
+}
+
+} finally {
+ $guardError=$null
+ try {
+  if($guardRoot -and $null -ne $guardBeforeCache -and $null -ne $guardBeforeCatalog) {
+   $cacheUnchanged=(Get-ControlInventory $guardCache) -ceq $guardBeforeCache
+   $catalogUnchanged=(Get-ControlInventory $guardCatalog) -ceq $guardBeforeCatalog
+   $session.fallbackControls=[ordered]@{cacheUnchanged=$cacheUnchanged;catalogUnchanged=$catalogUnchanged;root=$guardRoot}
+   if(-not $cacheUnchanged -or -not $catalogUnchanged) { throw 'Fallback cache or catalog control changed' }
+   Write-Output 'Verified fallback cache and catalog controls unchanged'
+  }
+ } catch {
+  $guardError=$_.Exception.Message
+  $session.status='failed';$session.functionalStatus='failed';$session.fallbackControlError=$guardError
+ } finally {
+  if($null -eq $priorTemp){Remove-Item Env:TEMP -ErrorAction SilentlyContinue}else{$env:TEMP=$priorTemp}
+  if($null -eq $priorTmp){Remove-Item Env:TMP -ErrorAction SilentlyContinue}else{$env:TMP=$priorTmp}
+  if($null -eq $priorCatalog){Remove-Item Env:TINIX_TEMPLATE_CATALOG_DIR -ErrorAction SilentlyContinue}else{$env:TINIX_TEMPLATE_CATALOG_DIR=$priorCatalog}
+  if($guardRoot){Save-Session}
+ }
+ if($guardError){throw $guardError}
 }

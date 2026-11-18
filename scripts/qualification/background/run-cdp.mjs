@@ -33,7 +33,7 @@ const report = {
   binaryModifiedAt: statSync(binary).mtime.toISOString(),
   previewAudioOutputSha256: createHash('sha256').update(readFileSync('src/components/previewAudioOutput.ts')).digest('hex'),
   audioMeterGraphSha256: createHash('sha256').update(readFileSync('src/components/audioMeterGraph.ts')).digest('hex'),
-  harnessSha256: Object.fromEntries(['run-cdp.mjs', 'cdp-desktop-smoke.ps1', 'cdp-diagnostics.ps1', 'cdp-report-policy.mjs', 'cdp-close.mjs', 'cdp-identity.mjs', 'cdp-isolation-storage.mjs', 'tauri-isolated.conf.json', 'caption-merge.tcproj', 'cdp-audio.mjs', 'cdp-gain-preview.mjs', 'cdp-captions.mjs', 'cdp-media.mjs', 'cdp-history-branch.mjs'].map(name => [name, createHash('sha256').update(readFileSync(resolve('scripts/qualification/background', name))).digest('hex')])),
+  harnessSha256: Object.fromEntries(['run-cdp.mjs', 'cdp-desktop-smoke.ps1', 'cdp-diagnostics.ps1', 'cdp-report-policy.mjs', 'cdp-close.mjs', 'cdp-identity.mjs', 'cdp-fallback-controls.ps1', 'cdp-isolation-storage.mjs', 'tauri-isolated.conf.json', 'caption-merge.tcproj', 'cdp-audio.mjs', 'cdp-gain-preview.mjs', 'cdp-captions.mjs', 'cdp-media.mjs', 'cdp-history-branch.mjs'].map(name => [name, createHash('sha256').update(readFileSync(resolve('scripts/qualification/background', name))).digest('hex')])),
   scope: 'Real qualification WebView on isolated Windows desktops; no OS input; native dialogs/installed/audio-output qualification excluded',
   directory, requestedCases: requestedCases.map(([id]) => id), status: 'running', preflights: [], steps: [],
 };
