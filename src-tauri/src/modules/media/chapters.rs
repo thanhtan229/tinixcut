@@ -4,7 +4,7 @@
 //! of being silently corrected (no markers are moved, merged or invented).
 
 use crate::modules::domain::Project;
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 
 /// YouTube needs at least three chapters, the first at 0:00, each at least 10 seconds long.

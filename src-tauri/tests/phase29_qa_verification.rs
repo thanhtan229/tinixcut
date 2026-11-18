@@ -1303,8 +1303,9 @@ fn test_qa_automation_discovery_and_non_text_rejections() {
 }
 
 #[test]
-fn test_qa_bf01_capabilities_parity_and_mcp_schema() {
-    use rmcp::schemars::{JsonSchema, SchemaGenerator};
+fn test_qa_bf01_capabilities_parity_and_report_schema() {
+    use schemars::generate::SchemaGenerator;
+    use schemars::JsonSchema;
     use tinixcut_lib::modules::automation::{
         AutomationAdapter, AutomationSession, CapabilitiesReport, ProjectInspectReport,
     };
@@ -1374,7 +1375,7 @@ fn test_qa_bf01_capabilities_parity_and_mcp_schema() {
         );
     }
 
-    // 2. BF-01 MCP schema verification
+    // 2. BF-01 report schema verification
     let mut gen = SchemaGenerator::default();
     let inspect_schema = ProjectInspectReport::json_schema(&mut gen);
     let inspect_json = serde_json::to_value(&inspect_schema).expect("serialize inspect schema");

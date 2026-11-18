@@ -5,7 +5,7 @@ use crate::modules::automation::edit_plan::{
 };
 use crate::modules::domain::Project;
 use crate::modules::media::ffmpeg::FFmpegService;
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -172,7 +172,7 @@ impl WorkflowManifest {
         Ok(())
     }
 
-    /// Reconcile a completed MCP step against the saved project and, for export, the actual
+    /// Reconcile a completed automation step against the saved project and, for export, the actual
     /// media file. Checkpoints are immutable sidecars; retries are idempotent only for identical
     /// evidence and never overwrite an earlier result.
     pub fn record_checkpoint(

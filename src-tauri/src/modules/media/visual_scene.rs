@@ -3,7 +3,7 @@
 use crate::modules::media::ffmpeg::FFmpegService;
 use crate::modules::media::MediaError;
 use base64::Engine;
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

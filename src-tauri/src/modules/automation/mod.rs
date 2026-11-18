@@ -3,7 +3,8 @@
 //! and NOT a second project reducer. It routes exclusively through the Command Service.
 
 pub mod edit_plan;
-pub mod mcp;
+pub mod operations;
+pub mod cli;
 pub mod workflow_manifest;
 
 use crate::modules::command::{
@@ -1450,7 +1451,7 @@ impl AutomationAdapter {
                 Ok("Session ended".to_string())
             }
             "help" | "--help" | "-h" => Ok(
-                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render|chapters|session] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  chapters <project_path>                    List YouTube chapters from project markers\n  session, --stdio                           Start long-lived machine-readable JSONL stdio session\n  help, --help                               Show this help message".to_string()
+                "TinixCut Automation CLI\nUsage: tinixcut [inspect|diff|apply|render|chapters|session] <args...>\n\nCommands:\n  inspect <project_path>                     Inspect a project and output JSON summary\n  diff <project_path> <envelope_json_path>   Run a dry-run diff of commands against a project\n  apply <project_path> <envelope_json_path>  Apply commands transactionally to a project\n  render <project_path> <output_path>        Render project to MP4 headlessly\n  chapters <project_path>                    List YouTube chapters from project markers\n  session, --stdio                           Start long-lived machine-readable JSONL stdio session\n  commands [name]                            Discover JSON commands and schemas\n  call <name> [arguments.json|-]              Execute a shared JSON command\n  api-session                                Persistent JSON command/job session\n  help, --help                               Show this help message".to_string()
             ),
             other => Err(AutomationError::Cli(format!("Unknown command '{}'", other))),
         }

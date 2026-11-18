@@ -13,7 +13,7 @@
 
 use crate::modules::domain::{ClipSpeed, ItemKind, Project};
 use crate::modules::media::resolver::MediaBinaryResolver;
-use rmcp::schemars::{self, JsonSchema};
+use schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
 

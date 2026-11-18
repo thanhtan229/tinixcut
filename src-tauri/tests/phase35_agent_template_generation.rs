@@ -1,12 +1,12 @@
 //! Phase 35 Acceptance Test Suite
-//! Agent Template Generation & Refinement via CLI/MCP
+//! Agent Template Generation & Refinement via CLI/shared operations
 //! Governed by Plans/plan_phase35_agent_template_generation.md, ADR-005, and ADR-001 v3.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tinixcut_lib::modules::automation::mcp::TinixCutMcpServer;
+use tinixcut_lib::modules::automation::operations::AutomationOperations;
 use tinixcut_lib::modules::automation::AutomationAdapter;
 use tinixcut_lib::modules::domain::template::{
     ResponsivePolicy, TemplateLayer, TemplateLayerKind, TemplateParameterBinding,
@@ -32,7 +32,6 @@ use tinixcut_lib::modules::templates::agent::{
 };
 use tinixcut_lib::modules::templates::catalog::TemplateCatalog;
 use tinixcut_lib::modules::templates::pack::{TemplatePackManifest, TemplatePackService};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -497,99 +496,27 @@ fn create_multilayer_quote_card_draft() -> TemplateDraft {
     }
 }
 
-struct DuplexMcpClient {
-    reader: TokioBufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
-    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+struct OperationsHarness {
+    operations: tinixcut_lib::modules::automation::operations::AutomationOperations,
 }
 
-impl DuplexMcpClient {
-    async fn new(server: TinixCutMcpServer) -> Self {
-        let (client_io, server_io) = tokio::io::duplex(131072);
-        tokio::spawn(async move {
-            if let Ok(running) = rmcp::serve_server(server, server_io).await {
-                let _ = running.waiting().await;
-            }
-        });
-        let (read_half, write_half) = tokio::io::split(client_io);
-        Self {
-            reader: TokioBufReader::new(read_half),
-            writer: write_half,
+impl OperationsHarness {
+    async fn new(operations: tinixcut_lib::modules::automation::operations::AutomationOperations) -> Self {
+        Self { operations }
+    }
+
+    async fn execute(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        match self.operations.execute(
+            name,
+            arguments,
+            tinixcut_lib::modules::automation::operations::OperationContext::default(),
+        ).await {
+            Ok(result) => serde_json::json!({"result": serde_json::to_value(result).unwrap()}),
+            Err(tinixcut_lib::modules::automation::operations::OperationError::InvalidParams(message)) =>
+                serde_json::json!({"result":{"isError":true,"content":[{"type":"text","text":format!("failed to deserialize parameters: {message}")}]}}),
+            Err(tinixcut_lib::modules::automation::operations::OperationError::Internal(message)) =>
+                serde_json::json!({"error":{"code":-32603,"message":message}}),
         }
-    }
-
-    async fn send_request(
-        &mut self,
-        method: &str,
-        mut params: serde_json::Value,
-    ) -> serde_json::Value {
-        let id = next_id();
-        if let Some(map) = params.as_object_mut() {
-            if !map.contains_key("_meta") {
-                map.insert(
-                    "_meta".to_string(),
-                    serde_json::json!({
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "phase35-test-client",
-                            "version": "1.0.0"
-                        }
-                    }),
-                );
-            }
-        }
-
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-
-        let mut line = serde_json::to_string(&req).unwrap();
-        line.push('\n');
-        self.writer.write_all(line.as_bytes()).await.unwrap();
-        self.writer.flush().await.unwrap();
-
-        let mut resp_line = String::new();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            self.reader.read_line(&mut resp_line),
-        )
-        .await
-        .expect("MCP request timed out after 15s")
-        .expect("Failed to read from MCP stream");
-        if resp_line.trim().is_empty() {
-            panic!("MCP server closed connection (EOF) without response");
-        }
-        serde_json::from_str(&resp_line).expect("Valid JSON-RPC response frame")
-    }
-
-    async fn write_message(&mut self, val: serde_json::Value) {
-        let mut line = serde_json::to_string(&val).unwrap();
-        line.push('\n');
-        self.writer.write_all(line.as_bytes()).await.unwrap();
-        self.writer.flush().await.unwrap();
-    }
-
-    async fn send_notification(&mut self, method: &str, params: serde_json::Value) {
-        let notif = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        self.write_message(notif).await;
-    }
-
-    async fn call_tool(&mut self, tool_name: &str, args: serde_json::Value) -> serde_json::Value {
-        self.send_request(
-            "tools/call",
-            serde_json::json!({
-                "name": tool_name,
-                "arguments": args,
-            }),
-        )
-        .await
     }
 }
 
@@ -598,18 +525,18 @@ impl DuplexMcpClient {
 // ============================================================================
 
 #[tokio::test]
-async fn test_p35_ac01_capabilities_and_schema_surface_cli_and_mcp() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+async fn test_p35_ac01_capabilities_and_schema_surface_cli_and_operations() {
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
-    // 1. Query MCP tinixcut_capabilities
-    let mcp_res = client
-        .call_tool("tinixcut_capabilities", serde_json::json!({}))
+    // 1. Query shared operations tinixcut_capabilities
+    let operations_res = client
+        .execute("tinixcut_capabilities", serde_json::json!({}))
         .await;
-    let structured = &mcp_res["result"]["structuredContent"];
+    let structured = &operations_res["result"]["structuredContent"];
     assert!(
         structured.is_object(),
-        "MCP capabilities must return structured content"
+        "shared operations capabilities must return structured content"
     );
 
     let template_caps = &structured["templateCapabilities"];
@@ -656,13 +583,13 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     base_proj.tracks[0].items.push(item);
     save_project_atomic(&base_proj, &project_path).expect("Save base project");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // 1. Create and validate Draft v1 (Vietnamese patriotic title with gradient + stroke + shadow)
     let draft_v1 = create_vietnamese_title_draft_v1();
     let val_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": draft_v1 }),
         )
@@ -674,7 +601,7 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     // 2. Preview Draft v1 frame at t = 1.0s
     let preview_path = temp.as_ref().join("preview_v1.png");
     let prev_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft_v1,
@@ -697,22 +624,22 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     );
 
     let val_res_v2 = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": draft_v2 }),
         )
         .await;
     assert_eq!(val_res_v2["result"]["structuredContent"]["valid"], true);
 
-    // 4. Apply Draft v2 to the project text item via MCP
+    // 4. Apply Draft v2 to the project text item via shared operations
     let apply_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy().to_string(),
                 "itemId": "title_item_1",
                 "draft": draft_v2,
-                "clientId": "test_agent_mcp",
+                "clientId": "test_agent_operations",
                 "clientEpoch": 1,
                 "sequenceNumber": 1,
                 "transactionId": "tx_p35_ac02_apply",
@@ -771,7 +698,7 @@ async fn test_p35_ac02_vietnamese_title_gradient_stroke_shadow_motion_workflow()
     // 5. Save definition to catalog
     let catalog_dir = temp.as_ref().join("catalog");
     let save_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_save",
             serde_json::json!({
                 "draft": draft_v2,
@@ -831,14 +758,14 @@ async fn test_p35_ac03_multilayer_sticker_quote_card_missing_resources_and_appro
     base_proj.tracks[0].items.push(item);
     save_project_atomic(&base_proj, &project_path).expect("Save base project");
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let quote_draft = create_multilayer_quote_card_draft();
 
     // 1. Validate: should report missing resource & unsupported font approximation as warnings, valid = true
     let val_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": quote_draft }),
         )
@@ -858,7 +785,7 @@ async fn test_p35_ac03_multilayer_sticker_quote_card_missing_resources_and_appro
     // 2. Preview frame through shared compositor: must render with fallback primitives
     let preview_path = temp.as_ref().join("quote_preview.png");
     let prev_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": quote_draft,
@@ -906,7 +833,7 @@ async fn test_p35_ac03_multilayer_sticker_quote_card_missing_resources_and_appro
 }
 
 #[tokio::test]
-async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
+async fn test_p35_ac04_cli_operations_deterministic_equivalence() {
     let temp = test_dir("ac04_equivalence");
     let mut draft = create_vietnamese_title_draft_v1();
     draft.template_id = "vn_hao_khi_ac04".to_string();
@@ -915,7 +842,7 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
 
     // Prepare two identical initial projects
     let path_cli = temp.as_ref().join("project_cli.tcproj");
-    let path_mcp = temp.as_ref().join("project_mcp.tcproj");
+    let path_operations = temp.as_ref().join("project_operations.tcproj");
 
     let mut p1 = create_base_project("EquivalenceP1");
     p1.tracks[0]
@@ -924,7 +851,7 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
     let p2 = p1.clone();
 
     save_project_atomic(&p1, &path_cli).unwrap();
-    save_project_atomic(&p2, &path_mcp).unwrap();
+    save_project_atomic(&p2, &path_operations).unwrap();
 
     // 1. Apply via CLI
     AutomationAdapter::handle_cli(&[
@@ -944,14 +871,14 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
     ])
     .unwrap();
 
-    // 2. Apply via MCP
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-    let mcp_res = client
-        .call_tool(
+    // 2. Apply via shared operations
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
+    let operations_res = client
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
-                "projectPath": path_mcp.to_string_lossy().to_string(),
+                "projectPath": path_operations.to_string_lossy().to_string(),
                 "itemId": "item_eq",
                 "draft": draft,
                 "clientId": "equiv_client",
@@ -962,27 +889,27 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
             }),
         )
         .await;
-    assert!(mcp_res["result"]["structuredContent"].is_object());
+    assert!(operations_res["result"]["structuredContent"].is_object());
 
     // 3. Verify equivalent canonical project state
     let res_cli = load_project(&path_cli).unwrap();
-    let res_mcp = load_project(&path_mcp).unwrap();
+    let res_operations = load_project(&path_operations).unwrap();
 
-    assert_eq!(res_cli.revision, res_mcp.revision);
-    assert_eq!(res_cli.tracks[0].items.len(), res_mcp.tracks[0].items.len());
+    assert_eq!(res_cli.revision, res_operations.revision);
+    assert_eq!(res_cli.tracks[0].items.len(), res_operations.tracks[0].items.len());
 
     let inst_cli = res_cli.tracks[0].items[0]
         .template_instance
         .as_ref()
         .unwrap();
-    let inst_mcp = res_mcp.tracks[0].items[0]
+    let inst_operations = res_operations.tracks[0].items[0]
         .template_instance
         .as_ref()
         .unwrap();
-    assert_eq!(inst_cli.template_id, inst_mcp.template_id);
-    assert_eq!(inst_cli.layers.len(), inst_mcp.layers.len());
+    assert_eq!(inst_cli.template_id, inst_operations.template_id);
+    assert_eq!(inst_cli.layers.len(), inst_operations.layers.len());
 
-    // 4. Verify preview frame renders identically via CLI and MCP adapters
+    // 4. Verify preview frame renders identically via CLI and shared operations adapters
     let preview_cli_path = temp.as_ref().join("preview_cli.png");
     AutomationAdapter::handle_cli(&[
         "template".to_string(),
@@ -1000,27 +927,27 @@ async fn test_p35_ac04_cli_mcp_deterministic_equivalence() {
     assert!(preview_cli_path.exists());
     let bytes_cli = fs::read(&preview_cli_path).expect("Read CLI preview png");
 
-    let preview_mcp_path = temp.as_ref().join("preview_mcp.png");
-    let mcp_prev_res = client
-        .call_tool(
+    let preview_operations_path = temp.as_ref().join("preview_operations.png");
+    let operations_prev_res = client
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
                 "timeSeconds": 1.0,
-                "outputPath": preview_mcp_path.to_string_lossy().to_string(),
+                "outputPath": preview_operations_path.to_string_lossy().to_string(),
                 "width": 640,
                 "height": 360,
             }),
         )
         .await;
-    let mcp_prev_report = &mcp_prev_res["result"]["structuredContent"];
-    assert_eq!(mcp_prev_report["hasVisibleContent"], true);
-    assert!(preview_mcp_path.exists());
-    let bytes_mcp = fs::read(&preview_mcp_path).expect("Read MCP preview png");
+    let operations_prev_report = &operations_prev_res["result"]["structuredContent"];
+    assert_eq!(operations_prev_report["hasVisibleContent"], true);
+    assert!(preview_operations_path.exists());
+    let bytes_operations = fs::read(&preview_operations_path).expect("Read shared operations preview png");
 
     assert_eq!(
-        bytes_cli, bytes_mcp,
-        "CLI and MCP preview adapters must produce identical PNG bytes"
+        bytes_cli, bytes_operations,
+        "CLI and shared operations preview adapters must produce identical PNG bytes"
     );
 }
 
@@ -1091,8 +1018,8 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
     proj.revision = 2; // Project is already at revision 2
     save_project_atomic(&proj, &project_path).unwrap();
 
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // 1. Repair iteration budget exceeded (iteration 6 > 5)
     let mut draft_budget = create_vietnamese_title_draft_v1();
@@ -1122,7 +1049,7 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
     let mut draft_valid = create_vietnamese_title_draft_v1();
     draft_valid.template_id = "vn_hao_khi_ac06".to_string();
     let stale_res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy().to_string(),
@@ -1147,7 +1074,7 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
 
     // 4. Duplicate retry idempotency
     let apply_first = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy().to_string(),
@@ -1170,7 +1097,7 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
 
     // Retry with exact identical identity
     let apply_retry = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": project_path.to_string_lossy().to_string(),
@@ -1194,12 +1121,12 @@ async fn test_p35_ac06_budget_limits_and_stale_revision_failures() {
 
 #[tokio::test]
 async fn test_p35_ac07_timeout_cancellation_and_resource_safety() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // Cancellation of non-existent job returns false cleanly without error
     let cancel_res = client
-        .call_tool(
+        .execute(
             "tinixcut_export_cancel",
             serde_json::json!({ "jobId": "job_non_existent" }),
         )
@@ -1385,13 +1312,13 @@ async fn test_p35_ac08_generate_evidence_artifacts() {
     // 6. Honest Evidence Summary
     let summary = serde_json::json!({
         "phase": 35,
-        "title": "Agent Template Generation & Refinement via CLI/MCP",
+        "title": "Agent Template Generation & Refinement via CLI/shared operations",
         "evaluation": "VERIFIED_BY_EVIDENCE",
         "status": "COMPLETED",
-        "mcp_tools_total": 12,
-        "mcp_tools_documented_in_adr005": 8,
+        "operations_tools_total": 12,
+        "operations_tools_documented_in_adr005": 8,
         "adr005_tool_count_mismatch_note": "ADR-005 defines 8 tools for Phase 10; Phase 35 adds 4 template tools (tinixcut_template_validate, tinixcut_template_preview, tinixcut_template_apply, tinixcut_template_save) totaling 12 tools. ADR-005 document update recommended.",
-        "mcp_tools_added": [
+        "operations_tools_added": [
             "tinixcut_template_validate",
             "tinixcut_template_preview",
             "tinixcut_template_apply",
@@ -1425,7 +1352,7 @@ async fn test_p35_ac08_generate_evidence_artifacts() {
             "Shared compositor preview parity with export",
             "Atomic CommandService apply transaction with durable persistence",
             "Replay idempotency and stale revision gates",
-            "CLI and MCP deterministic equivalence",
+            "CLI and shared operations deterministic equivalence",
             "TemplateCatalog save and .tinixtpl portable pack roundtrip"
         ]
     });
@@ -1578,14 +1505,14 @@ async fn test_p35_ac09_spawned_binary_cli_workflow() {
 
 #[tokio::test]
 async fn test_p35_ac10_transport_level_entry_point_validation() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
-    // 1. MCP rejection of <script> tag in name
+    // 1. shared operations rejection of <script> tag in name
     let mut script_draft = create_vietnamese_title_draft_v1();
     script_draft.name = "<script>alert('xss')</script>".to_string();
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": script_draft }),
         )
@@ -1598,11 +1525,11 @@ async fn test_p35_ac10_transport_level_entry_point_validation() {
         .iter()
         .any(|i| i["code"] == "MALICIOUS_SCRIPT_TAG"));
 
-    // 2. MCP rejection of schemaVersion 999
+    // 2. shared operations rejection of schemaVersion 999
     let mut schema999_draft = create_vietnamese_title_draft_v1();
     schema999_draft.schema_version = 999;
     let res_schema = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": schema999_draft }),
         )
@@ -1615,12 +1542,12 @@ async fn test_p35_ac10_transport_level_entry_point_validation() {
         .iter()
         .any(|i| i["code"] == "UNSUPPORTED_SCHEMA_VERSION"));
 
-    // 3. MCP rejection of unknown nested layer fields (serde deny_unknown_fields)
+    // 3. shared operations rejection of unknown nested layer fields (serde deny_unknown_fields)
     let mut raw_val = serde_json::to_value(create_vietnamese_title_draft_v1()).unwrap();
     raw_val["layers"][0]["kind"]["data"]["maliciousNestedProperty"] =
         serde_json::json!("unvetted_value");
     let res_unknown = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": raw_val }),
         )
@@ -1953,12 +1880,12 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
         "JSONL save must reject text_rich.script"
     );
 
-    // 2. MCP transport rejection across validate, apply, and save
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    // 2. shared operations transport rejection across validate, apply, and save
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     let res_v_tr = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": draft_val_transform }),
         )
@@ -1966,11 +1893,11 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_v_tr["result"]["isError"].as_bool(),
         Some(true),
-        "MCP validate must reject unknown transform property"
+        "shared operations validate must reject unknown transform property"
     );
 
     let res_v_sc = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": draft_val_script }),
         )
@@ -1978,11 +1905,11 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_v_sc["result"]["isError"].as_bool(),
         Some(true),
-        "MCP validate must reject text_rich.script"
+        "shared operations validate must reject text_rich.script"
     );
 
     let res_a_tr = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": "fake.tcproj",
@@ -1994,11 +1921,11 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_a_tr["result"]["isError"].as_bool(),
         Some(true),
-        "MCP apply must reject unknown transform property"
+        "shared operations apply must reject unknown transform property"
     );
 
     let res_a_sc = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": "fake.tcproj",
@@ -2010,11 +1937,11 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_a_sc["result"]["isError"].as_bool(),
         Some(true),
-        "MCP apply must reject text_rich.script"
+        "shared operations apply must reject text_rich.script"
     );
 
     let res_s_tr = client
-        .call_tool(
+        .execute(
             "tinixcut_template_save",
             serde_json::json!({ "draft": draft_val_transform }),
         )
@@ -2022,11 +1949,11 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_s_tr["result"]["isError"].as_bool(),
         Some(true),
-        "MCP save must reject unknown transform property"
+        "shared operations save must reject unknown transform property"
     );
 
     let res_s_sc = client
-        .call_tool(
+        .execute(
             "tinixcut_template_save",
             serde_json::json!({ "draft": draft_val_script }),
         )
@@ -2034,7 +1961,7 @@ async fn test_p35_ac15_strict_nested_validation_rejects_unknown_transform_and_te
     assert_eq!(
         res_s_sc["result"]["isError"].as_bool(),
         Some(true),
-        "MCP save must reject text_rich.script"
+        "shared operations save must reject text_rich.script"
     );
 }
 
@@ -2285,16 +2212,16 @@ fn test_p35_ac18_native_apply_propagates_persistence_failure_atomic_reversion() 
 }
 
 #[tokio::test]
-async fn test_p35_ac19_preview_cancellation_and_deadline_mcp_real_transport() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
-    let temp = test_dir("mcp_preview_cancel");
+async fn test_p35_ac19_preview_cancellation_and_deadline_operations_real_transport() {
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
+    let temp = test_dir("operations_preview_cancel");
     let draft = create_vietnamese_title_draft_v1();
 
-    // 1. MCP Cancellation through real transport
-    let out_cancelled = temp.as_ref().join("mcp_cancelled.png");
+    // 1. shared operations Cancellation through real transport
+    let out_cancelled = temp.as_ref().join("operations_cancelled.png");
     let res_cancel = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
@@ -2313,13 +2240,13 @@ async fn test_p35_ac19_preview_cancellation_and_deadline_mcp_real_transport() {
     );
     assert!(
         !out_cancelled.exists(),
-        "Cancelled MCP preview must not leave output on disk"
+        "Cancelled shared operations preview must not leave output on disk"
     );
 
-    // 2. MCP Deadline / Timeout through real transport (timeoutMs: 0)
-    let out_timeout = temp.as_ref().join("mcp_timeout.png");
+    // 2. shared operations Deadline / Timeout through real transport (timeoutMs: 0)
+    let out_timeout = temp.as_ref().join("operations_timeout.png");
     let res_timeout = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
@@ -2338,14 +2265,14 @@ async fn test_p35_ac19_preview_cancellation_and_deadline_mcp_real_transport() {
     );
     assert!(
         !out_timeout.exists(),
-        "Timed out MCP preview must not leave output on disk"
+        "Timed out shared operations preview must not leave output on disk"
     );
 }
 
 #[tokio::test]
 async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and_unknown_fields() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server).await;
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server).await;
 
     // 1. Raw JSON containing background.fill.script
     let mut draft_val = serde_json::to_value(create_vietnamese_title_draft_v1()).unwrap();
@@ -2369,9 +2296,9 @@ async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and
         raw_res.issues
     );
 
-    // 2. Transport: MCP Validate rejects background.fill.script
+    // 2. Transport: shared operations Validate rejects background.fill.script
     let res_val = client
-        .call_tool(
+        .execute(
             "tinixcut_template_validate",
             serde_json::json!({ "draft": draft_val }),
         )
@@ -2379,12 +2306,12 @@ async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and
     assert_eq!(
         res_val["result"]["isError"].as_bool(),
         Some(true),
-        "MCP validate must reject background.fill.script"
+        "shared operations validate must reject background.fill.script"
     );
 
-    // 3. Transport: MCP Preview rejects background.fill.script
+    // 3. Transport: shared operations Preview rejects background.fill.script
     let res_prev = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({ "draft": draft_val }),
         )
@@ -2392,12 +2319,12 @@ async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and
     assert_eq!(
         res_prev["result"]["isError"].as_bool(),
         Some(true),
-        "MCP preview must reject background.fill.script"
+        "shared operations preview must reject background.fill.script"
     );
 
-    // 4. Transport: MCP Apply rejects background.fill.script
+    // 4. Transport: shared operations Apply rejects background.fill.script
     let res_apply = client
-        .call_tool(
+        .execute(
             "tinixcut_template_apply",
             serde_json::json!({
                 "projectPath": "irrelevant.tcproj",
@@ -2409,12 +2336,12 @@ async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and
     assert_eq!(
         res_apply["result"]["isError"].as_bool(),
         Some(true),
-        "MCP apply must reject background.fill.script"
+        "shared operations apply must reject background.fill.script"
     );
 
-    // 5. Transport: MCP Save rejects background.fill.script
+    // 5. Transport: shared operations Save rejects background.fill.script
     let res_save = client
-        .call_tool(
+        .execute(
             "tinixcut_template_save",
             serde_json::json!({ "draft": draft_val }),
         )
@@ -2422,7 +2349,7 @@ async fn test_p35_ac20_nested_fill_validation_rejects_background_fill_script_and
     assert_eq!(
         res_save["result"]["isError"].as_bool(),
         Some(true),
-        "MCP save must reject background.fill.script"
+        "shared operations save must reject background.fill.script"
     );
 
     // 6. Test unknown fill enum/field
@@ -2638,10 +2565,10 @@ fn test_p35_ac22_output_atomicity_existing_bytes_survive_cancel_timeout_failure(
 }
 
 #[tokio::test]
-async fn test_p35_ac23_mcp_cancellation_job_connect_and_finite_default_deadline() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server.clone()).await;
-    let temp = test_dir("mcp_job_cancel");
+async fn test_p35_ac23_operations_cancellation_job_connect_and_finite_default_deadline() {
+    let server = AutomationOperations::new();
+    let mut client = OperationsHarness::new(server.clone()).await;
+    let temp = test_dir("operations_job_cancel");
     let draft = create_vietnamese_title_draft_v1();
     let out_file = temp.as_ref().join("job_cancel_dest.png");
 
@@ -2668,7 +2595,7 @@ async fn test_p35_ac23_mcp_cancellation_job_connect_and_finite_default_deadline(
 
     // 2. Call preview tool with the cancelled jobId
     let res = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
@@ -2690,7 +2617,7 @@ async fn test_p35_ac23_mcp_cancellation_job_connect_and_finite_default_deadline(
     // 3. Verify finite default deadline is applied when timeoutMs is omitted
     let out_default = temp.as_ref().join("default_deadline.png");
     let res_default = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
@@ -2768,98 +2695,8 @@ fn test_p35_ac24_p2_styled_spans_schema_alignment_and_roundtrip() {
 }
 
 #[tokio::test]
-async fn test_p35_ac25_p1_mcp_request_cancellation_via_notifications_cancelled() {
-    let server = TinixCutMcpServer::new();
-    let mut client = DuplexMcpClient::new(server.clone()).await;
-    let temp = test_dir("mcp_notif_cancel");
-    let draft = create_vietnamese_title_draft_v1();
-    let out_dest = temp.as_ref().join("dest_to_preserve.png");
-    let job_id = "preview_notif_cancel_test_1".to_string();
-
-    // Write initial bytes to destination to prove destination is preserved
-    let initial_bytes = b"PRESERVED_DESTINATION_BYTES_12345";
-    fs::write(&out_dest, initial_bytes).unwrap();
-
-    let req_id = next_id();
-    let call_msg = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": req_id,
-        "method": "tools/call",
-        "params": {
-            "name": "tinixcut_template_preview",
-            "arguments": {
-                "draft": draft,
-                "outputPath": out_dest.to_str().unwrap(),
-                "timeSeconds": 1.0,
-                "timeoutMs": 10000,
-                "jobId": job_id,
-            },
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": {
-                    "name": "phase35-test-client",
-                    "version": "1.0.0"
-                }
-            }
-        }
-    });
-
-    client.write_message(call_msg).await;
-
-    // Yield/sleep briefly to let worker initiate
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-
-    // Send notifications/cancelled referencing req_id
-    client
-        .send_notification(
-            "notifications/cancelled",
-            serde_json::json!({
-                "requestId": req_id,
-                "reason": "user_cancelled"
-            }),
-        )
-        .await;
-
-    // Wait for cancellation to propagate and worker cleanup to complete
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // 1. Assert job is cancelled in JobManager
-    {
-        let jm = server.jobs.lock().unwrap();
-        let job = jm
-            .get_job(&job_id)
-            .expect("Job must be tracked in JobManager");
-        assert_eq!(
-            job.status,
-            tinixcut_lib::modules::job::JobStatus::Cancelled,
-            "JobManager must record job as Cancelled after notifications/cancelled"
-        );
-    }
-
-    // 2. Destination bytes must remain intact
-    let current_bytes = fs::read(&out_dest).unwrap();
-    assert_eq!(
-        current_bytes, initial_bytes,
-        "Destination bytes must survive notifications/cancelled unmodified"
-    );
-
-    // 3. Temp file must be cleaned up
-    let entries = fs::read_dir(temp.as_ref()).unwrap();
-    for entry in entries {
-        let entry = entry.unwrap();
-        let fname = entry.file_name().to_string_lossy().to_string();
-        assert!(
-            !fname.starts_with(".tmp_preview"),
-            "Temp file {} must be cleaned up",
-            fname
-        );
-    }
-}
-
-#[tokio::test]
 async fn test_p35_ac26_p1_preview_job_concurrency_capacity_wait_never_bypasses() {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let temp = test_dir("concurrency_capacity");
     let draft = create_vietnamese_title_draft_v1();
 
@@ -2889,14 +2726,14 @@ async fn test_p35_ac26_p1_preview_job_concurrency_capacity_wait_never_bypasses()
 
     // Launch a preview request while capacity is saturated.
     // It MUST NOT spawn blocking render (must wait in queued state).
-    let mut client_queued = DuplexMcpClient::new(server.clone()).await;
+    let mut client_queued = OperationsHarness::new(server.clone()).await;
     let out_queued = temp.as_ref().join("queued_render.png");
     let draft_clone = draft.clone();
     let out_queued_str = out_queued.to_str().unwrap().to_string();
 
     let queued_handle = tokio::spawn(async move {
         client_queued
-            .call_tool(
+            .execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": draft_clone,
@@ -2966,8 +2803,8 @@ async fn test_p35_ac26_p1_preview_job_concurrency_capacity_wait_never_bypasses()
         let d_clone = draft.clone();
         let out_path = temp.as_ref().join(format!("multi_preview_{}.png", i));
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s_clone).await;
-            c.call_tool(
+            let mut c = OperationsHarness::new(s_clone).await;
+            c.execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3112,7 +2949,7 @@ fn test_p35_ac27_p2_atomic_publish_locked_destination_no_temp_leak_no_missing_wi
 
 #[tokio::test]
 async fn test_p35_ac28_p1_timeout_preserves_destination_committed_output_returns_success() {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let temp = test_dir("timeout_publish_coordination");
     let draft = create_vietnamese_title_draft_v1();
 
@@ -3143,18 +2980,18 @@ async fn test_p35_ac28_p1_timeout_preserves_destination_committed_output_returns
         "Original destination bytes must survive timeout before publication"
     );
 
-    // 2. Through real MCP transport: tight timeoutMs must return OPERATION_TIMEOUT and preserve sentinel
-    let mcp_sentinel = temp.as_ref().join("mcp_sentinel.png");
-    let mcp_sentinel_bytes = b"MCP_SENTINEL_BYTES_SURVIVE_TIMEOUT";
-    fs::write(&mcp_sentinel, mcp_sentinel_bytes).unwrap();
+    // 2. Through real shared operations transport: tight timeoutMs must return OPERATION_TIMEOUT and preserve sentinel
+    let operations_sentinel = temp.as_ref().join("operations_sentinel.png");
+    let operations_sentinel_bytes = b"shared operations_SENTINEL_BYTES_SURVIVE_TIMEOUT";
+    fs::write(&operations_sentinel, operations_sentinel_bytes).unwrap();
 
-    let mut client = DuplexMcpClient::new(server.clone()).await;
+    let mut client = OperationsHarness::new(server.clone()).await;
     let res_timeout = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
-                "outputPath": mcp_sentinel.to_str().unwrap(),
+                "outputPath": operations_sentinel.to_str().unwrap(),
                 "timeSeconds": 1.0,
                 "timeoutMs": 1,
             }),
@@ -3174,16 +3011,16 @@ async fn test_p35_ac28_p1_timeout_preserves_destination_committed_output_returns
         "Error message must indicate timeout: {err_msg}"
     );
 
-    let mcp_bytes_after = fs::read(&mcp_sentinel).unwrap();
+    let operations_bytes_after = fs::read(&operations_sentinel).unwrap();
     assert_eq!(
-        mcp_bytes_after, mcp_sentinel_bytes,
+        operations_bytes_after, operations_sentinel_bytes,
         "Sentinel destination must NEVER be replaced when OPERATION_TIMEOUT is reported"
     );
 
     // 3. Successful commit: returns success receipt and updates destination atomically
     let valid_dest = temp.as_ref().join("valid_commit.png");
     let res_success = client
-        .call_tool(
+        .execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": draft,
@@ -3210,7 +3047,7 @@ async fn test_p35_ac28_p1_timeout_preserves_destination_committed_output_returns
 
 #[tokio::test]
 async fn test_p35_ac29_p1_duplicate_job_ids_dedupe_reject_active_workers_never_exceed_four() {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let temp = test_dir("dup_job_ids");
     let draft = create_vietnamese_title_draft_v1();
 
@@ -3224,8 +3061,8 @@ async fn test_p35_ac29_p1_duplicate_job_ids_dedupe_reject_active_workers_never_e
         let jid = shared_job_id.clone();
         let out_path = temp.as_ref().join(format!("dup_render_{}.png", i));
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s_clone).await;
-            c.call_tool(
+            let mut c = OperationsHarness::new(s_clone).await;
+            c.execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3296,8 +3133,8 @@ async fn test_p35_ac29_p1_duplicate_job_ids_dedupe_reject_active_workers_never_e
         let jid = format!("distinct_control_job_{}", i);
         let out_path = temp.as_ref().join(format!("distinct_render_{}.png", i));
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s_clone).await;
-            c.call_tool(
+            let mut c = OperationsHarness::new(s_clone).await;
+            c.execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3343,7 +3180,7 @@ async fn test_p35_ac29_p1_duplicate_job_ids_dedupe_reject_active_workers_never_e
 #[tokio::test]
 async fn test_p35_ac30_p1_worker_capacity_retained_until_worker_exit_under_timeout_and_cancellation(
 ) {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let temp = test_dir("capacity_retained_until_exit");
     let draft = create_vietnamese_title_draft_v1();
 
@@ -3399,8 +3236,8 @@ async fn test_p35_ac30_p1_worker_capacity_retained_until_worker_exit_under_timeo
         let jid = format!("blocked_worker_{}", i);
         let out_path = temp.as_ref().join(format!("blocked_worker_{}.png", i));
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s_clone).await;
-            c.call_tool(
+            let mut c = OperationsHarness::new(s_clone).await;
+            c.execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3450,8 +3287,8 @@ async fn test_p35_ac30_p1_worker_capacity_retained_until_worker_exit_under_timeo
     let d_clone = draft.clone();
     let same_id_out = temp.as_ref().join("blocked_worker_0_replacement.png");
     let same_id_res = {
-        let mut c = DuplexMcpClient::new(s_clone).await;
-        c.call_tool(
+        let mut c = OperationsHarness::new(s_clone).await;
+        c.execute(
             "tinixcut_template_preview",
             serde_json::json!({
                 "draft": d_clone,
@@ -3486,8 +3323,8 @@ async fn test_p35_ac30_p1_worker_capacity_retained_until_worker_exit_under_timeo
         let jid = format!("replacement_worker_{}", i);
         let out_path = temp.as_ref().join(format!("replacement_worker_{}.png", i));
         let handle = tokio::spawn(async move {
-            let mut c = DuplexMcpClient::new(s_clone).await;
-            c.call_tool(
+            let mut c = OperationsHarness::new(s_clone).await;
+            c.execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3558,7 +3395,7 @@ async fn test_p35_ac30_p1_worker_capacity_retained_until_worker_exit_under_timeo
 
 #[tokio::test]
 async fn test_p35_ac31_p1_detached_worker_temp_file_cleanup_on_drop_and_final_publication_check() {
-    let server = TinixCutMcpServer::new();
+    let server = AutomationOperations::new();
     let temp = test_dir("detached_worker_temp_cleanup");
     let draft = create_vietnamese_title_draft_v1();
 
@@ -3590,13 +3427,13 @@ async fn test_p35_ac31_p1_detached_worker_temp_file_cleanup_on_drop_and_final_pu
         }
     })));
 
-    // 3. Call template preview through MCP with bounded timeout
-    let mut client = DuplexMcpClient::new(server.clone()).await;
+    // 3. Call template preview through shared operations with bounded timeout
+    let mut client = OperationsHarness::new(server.clone()).await;
     let s_path_str = sentinel_path.to_str().unwrap().to_string();
     let d_clone = draft.clone();
     let handle = tokio::spawn(async move {
         client
-            .call_tool(
+            .execute(
                 "tinixcut_template_preview",
                 serde_json::json!({
                     "draft": d_clone,
@@ -3629,12 +3466,12 @@ async fn test_p35_ac31_p1_detached_worker_temp_file_cleanup_on_drop_and_final_pu
         recorded_temp_path
     );
 
-    // 5. Await the MCP response: outer timeout must fire and report error
+    // 5. Await the shared operations response: outer timeout must fire and report error
     let res = handle.await.unwrap();
     assert_eq!(
         res["result"]["isError"].as_bool(),
         Some(true),
-        "Outer MCP call must return error on timeout"
+        "Outer shared operations call must return error on timeout"
     );
     let err_msg = res["result"]["content"][0]["text"].as_str().unwrap_or("");
     assert!(

@@ -2352,10 +2352,10 @@ mod tests {
         let initial = Project::new("Initial".to_string());
         save_project_atomic(&initial, &path).unwrap();
 
-        let mut mcp_update = initial.clone();
-        mcp_update.revision = 1;
-        mcp_update.name = "MCP update".to_string();
-        save_project_atomic_if_revision(&mcp_update, &path, Some(0)).unwrap();
+        let mut external_update = initial.clone();
+        external_update.revision = 1;
+        external_update.name = "External update".to_string();
+        save_project_atomic_if_revision(&external_update, &path, Some(0)).unwrap();
 
         let mut stale_ui_update = initial;
         stale_ui_update.revision = 1;
@@ -2372,7 +2372,7 @@ mod tests {
 
         let saved = load_project(&path).unwrap();
         assert_eq!(saved.revision, 1);
-        assert_eq!(saved.name, "MCP update");
+        assert_eq!(saved.name, "External update");
         fs::remove_dir_all(dir).unwrap();
     }
 
