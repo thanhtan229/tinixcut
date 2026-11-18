@@ -51,15 +51,22 @@ impl TemplateCatalog {
     }
 
     pub fn default_catalog() -> Self {
-        if let Some(override_dir) = std::env::var_os("TINIX_TEMPLATE_CATALOG_DIR") {
-            return Self::new(PathBuf::from(override_dir));
+        #[cfg(feature = "qualification-isolation")]
+        {
+            return Self::new(crate::qualification_root().join("catalog"));
         }
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("TinixCut")
-            .join("templates");
-        Self::new(base)
+        #[cfg(not(feature = "qualification-isolation"))]
+        {
+            if let Some(override_dir) = std::env::var_os("TINIX_TEMPLATE_CATALOG_DIR") {
+                return Self::new(PathBuf::from(override_dir));
+            }
+            let base = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("TinixCut")
+                .join("templates");
+            Self::new(base)
+        }
     }
 
     pub fn definitions_dir(&self) -> PathBuf {

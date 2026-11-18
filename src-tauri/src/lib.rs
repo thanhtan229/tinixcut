@@ -97,7 +97,7 @@ pub struct EditorEngine {
 
 impl EditorEngine {
     pub fn new(project: Project) -> Self {
-        let cache_dir = std::env::temp_dir().join("tinixcut_cache");
+        let cache_dir = crate::modules::media::cache::application_cache_root();
         Self {
             service: CommandService::new(project),
             history: HistoryManager::new(100),
@@ -532,6 +532,10 @@ fn qualification_root() -> PathBuf {
         path.join("local"),
         path.join("local/recovery"),
         path.join("local/recovery/unsaved"),
+        path.join("cache"),
+        path.join("catalog"),
+        path.join("catalog/definitions"),
+        path.join("catalog/resources"),
         path.join("plugin"),
         path.join("plugin/.persisted-scope"),
         path.join("plugin/.persisted-scope-asset"),
@@ -565,12 +569,19 @@ mod qualification_guard_tests {
     fn qualification_root_guards() {
         if std::env::var_os("TINIXCUT_GUARD_TEST_CHILD").is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "qualification_guard_tests::qualification_root_guards"])
+                .args([
+                    "--exact",
+                    "qualification_guard_tests::qualification_root_guards",
+                ])
                 .env("TINIXCUT_GUARD_TEST_CHILD", "1")
                 .creation_flags(0x08000000)
                 .output()
                 .unwrap();
-            assert!(output.status.success(), "isolated guard test failed: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "isolated guard test failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return;
         }
         let root = std::env::temp_dir().join(format!(
@@ -581,23 +592,42 @@ mod qualification_guard_tests {
         let previous = std::env::var_os("TINIXCUT_QUALIFICATION_DATA_ROOT");
         std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", &root);
         assert_eq!(qualification_root(), root);
+        std::env::set_var("TINIX_TEMPLATE_CATALOG_DIR", root.join("control-catalog"));
+        assert_eq!(
+            crate::modules::media::cache::application_cache_root(),
+            root.join("cache")
+        );
+        assert_eq!(
+            crate::modules::templates::catalog::TemplateCatalog::default_catalog().library_dir,
+            root.join("catalog")
+        );
         std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", std::env::temp_dir());
         assert!(std::panic::catch_unwind(qualification_root).is_err());
-        std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", &root);
-        let target = root.join("target");
-        std::fs::create_dir(&target).unwrap();
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:TINIXCUT_TEST_JUNCTION -Target $env:TINIXCUT_TEST_TARGET | Out-Null"])
-            .env("TINIXCUT_TEST_JUNCTION", root.join("plugin"))
-            .env("TINIXCUT_TEST_TARGET", &target)
-            .creation_flags(0x08000000)
-            .output().unwrap();
-        assert!(
-            output.status.success(),
-            "junction creation failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(std::panic::catch_unwind(qualification_root).is_err());
+        for component in ["plugin", "cache", "catalog"] {
+            let link_root = std::env::temp_dir().join(format!(
+                "tinixcut-isolated-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir(&link_root).unwrap();
+            let target = link_root.join("target");
+            std::fs::create_dir(&target).unwrap();
+            let output = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:TINIXCUT_TEST_JUNCTION -Target $env:TINIXCUT_TEST_TARGET | Out-Null"])
+                .env("TINIXCUT_TEST_JUNCTION", link_root.join(component))
+                .env("TINIXCUT_TEST_TARGET", &target)
+                .creation_flags(0x08000000)
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "junction creation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", &link_root);
+            assert!(
+                std::panic::catch_unwind(qualification_root).is_err(),
+                "{component} junction was accepted"
+            );
+        }
         match previous {
             Some(value) => std::env::set_var("TINIXCUT_QUALIFICATION_DATA_ROOT", value),
             None => std::env::remove_var("TINIXCUT_QUALIFICATION_DATA_ROOT"),

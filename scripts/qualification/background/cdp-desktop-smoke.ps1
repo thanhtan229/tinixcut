@@ -132,6 +132,10 @@ Save-Session
  if(-not [DesktopProbe]::HasWindow($desktop,$pi.processId)){throw 'App window not on isolated desktop'}
  & node scripts/qualification/background/cdp-identity.mjs
  if($LASTEXITCODE -ne 0){throw 'Qualification window identity mismatch'}
+ if($scopeRoot -and $stage -eq 'prepare') {
+  & node scripts/qualification/background/cdp-isolation-storage.mjs
+  if($LASTEXITCODE -ne 0){throw 'Qualification storage check failed'}
+ }
  $script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
  $nodeArgs=@(('scripts/qualification/background/'+$script),$stage)
  $nodeInfo=New-Object Diagnostics.ProcessStartInfo
