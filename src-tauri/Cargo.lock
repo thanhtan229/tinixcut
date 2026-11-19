@@ -4166,6 +4166,20 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-persisted-scope"
 version = "2.4.0"
+dependencies = [
+ "aho-corasick",
+ "bincode",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin-fs",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "tauri-plugin-persisted-scope"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3af0a68a2e145c33032f5367625bbb75d05715c1801a5ef0e0f40c5df712c5"
 dependencies = [
@@ -4389,7 +4403,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-opener",
- "tauri-plugin-persisted-scope",
+ "tauri-plugin-persisted-scope 2.4.0",
+ "tauri-plugin-persisted-scope 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
