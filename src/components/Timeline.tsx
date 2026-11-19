@@ -63,6 +63,8 @@ interface TimelineProps {
   onAddMarker?: (label: string, positionFrame: number) => void;
   onRenameMarker?: (markerId: string, label: string) => void;
   onDeleteMarker?: (markerId: string) => void;
+  markerQuery: string;
+  onMarkerQueryChange: (query: string) => void;
   clipBoundaryScope?: "all" | "selected_tracks";
   onClipBoundaryScopeChange?: (scope: "all" | "selected_tracks") => void;
   navigationRef?: React.Ref<TimelineNavigationHandle>;
@@ -111,6 +113,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   onAddMarker,
   onRenameMarker,
   onDeleteMarker,
+  markerQuery,
+  onMarkerQueryChange,
   clipBoundaryScope = "all",
   onClipBoundaryScopeChange,
   navigationRef,
@@ -125,8 +129,6 @@ export const Timeline: React.FC<TimelineProps> = ({
   const effectivePrimarySelectedItemId = primarySelectedItemId ?? selectedItemId ?? null;
 
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
-  const [markerQuery, setMarkerQuery] = useState("");
-  React.useEffect(() => setMarkerQuery(""), [project?.project_id]);
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [trackNameDraft, setTrackNameDraft] = useState("");
   const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
@@ -697,8 +699,8 @@ export const Timeline: React.FC<TimelineProps> = ({
             ◆ Marker
           </button>
           {([-1,1] as const).map(direction=>{
-            const frame=adjacentMarkerFrame(project,playheadFrame,direction);
-            return <button key={direction} type="button" className="btn-action" disabled={frame===null} title={direction===-1?"Go to previous marker":"Go to next marker"} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Marker":"Marker ▶"}</button>;
+            const frame=adjacentMarkerFrame(project,playheadFrame,direction,markerQuery);
+            return <button key={direction} type="button" className="btn-action" disabled={frame===null} title={`Go to ${direction===-1?"previous":"next"} ${markerQuery.trim()?"matching ":""}marker`} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Marker":"Marker ▶"}</button>;
           })}
           {onClipBoundaryScopeChange && <select aria-label="Clip boundary scope" value={clipBoundaryScope} onChange={event=>onClipBoundaryScopeChange(event.target.value as "all" | "selected_tracks")}>
             <option value="all">All tracks</option><option value="selected_tracks">Selected clips' tracks</option>
@@ -708,10 +710,10 @@ export const Timeline: React.FC<TimelineProps> = ({
             const frame=adjacentClipBoundary(project,playheadFrame,direction,clipBoundaryScope === "selected_tracks" ? effectiveSelectedItemIds : undefined);
             return <button key={`boundary-${direction}`} type="button" className="btn-action" disabled={frame===null} title={`${direction===-1?"Previous":"Next"} clip start or exclusive end on ${clipBoundaryScope === "all" ? "all tracks" : "selected clips' tracks"}`} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Clip boundary":"Clip boundary ▶"}</button>;
           })}
-          <input aria-label="Find marker" type="search" placeholder="Find marker…" value={markerQuery} disabled={!project?.markers?.length} onChange={event=>setMarkerQuery(event.target.value)} style={{width:120}} />
+          <input aria-label="Find marker" type="search" placeholder="Find marker…" value={markerQuery} disabled={!project?.markers?.length} onChange={event=>onMarkerQueryChange(event.target.value)} style={{width:120}} />
           {markerQuery && <>
             <span role="status" style={{fontSize:11,color:"var(--text-muted)"}}>{markerMatches.length} of {project?.markers?.length ?? 0} markers</span>
-            <button type="button" className="btn-action" aria-label="Clear marker search" onClick={()=>setMarkerQuery("")}>Clear</button>
+            <button type="button" className="btn-action" aria-label="Clear marker search" onClick={()=>onMarkerQueryChange("")}>Clear</button>
           </>}
           <select
             className="btn-action"

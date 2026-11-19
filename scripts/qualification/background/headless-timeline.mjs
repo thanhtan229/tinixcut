@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import { resolve,join,sep } from 'node:path';
 import { build } from 'vite';
 import { chromium } from 'playwright';
-const directory=resolve('artifacts/background/timeline-navigation',new Date().toISOString().replaceAll(':','-'));mkdirSync(directory,{recursive:true});
+const outputRoot=resolve(process.env.TINIXCUT_TIMELINE_REPORT_DIR ?? 'artifacts/background');
+const directory=resolve(outputRoot,'timeline-navigation',new Date().toISOString().replaceAll(':','-'));mkdirSync(directory,{recursive:true});
 const site=join(directory,'site');let browser,server;
 const report={startedAt:new Date().toISOString(),scope:'Production React Timeline and shortcut hook in headless Chromium; asset-free fixtures, no native/app/picker/audio claim',steps:[],errors:[]};
 try{
@@ -34,6 +35,8 @@ try{
  const searchBaseline=await state();await markerSearch.fill('tWo');
  assert.equal(await page.getByRole('status').textContent(),'1 of 2 markers');
  assert.deepEqual(await markerList.locator('option').allTextContents(),['Go to marker…','Two — 00:03 (90f)']);
+ assert.equal(await page.getByRole('button',{name:'◀ Marker',exact:true}).isDisabled(),true);
+ await page.locator('[data-timeline-clip]').first().focus();await page.keyboard.press('Alt+,');await settled();assert.equal((await state()).playhead,90);
  await markerSearch.fill('not found');assert.equal(await markerList.isDisabled(),true);assert.equal(await markerList.locator('option').first().textContent(),'No matching markers');
  assert.equal(await page.getByRole('status').textContent(),'0 of 2 markers');
  assert.equal((await state()).project,searchBaseline.project);assert.equal((await state()).playhead,searchBaseline.playhead);
@@ -43,6 +46,12 @@ try{
  await markerSearch.fill(' SAME ');assert.equal(await markerList.locator('option').count(),3);
  const listBaseline=await state();await markerList.selectOption('m1');await settled();assert.equal((await state()).playhead,30);assert.equal(await markerList.inputValue(),'');
  await markerList.selectOption('m2');await settled();assert.equal((await state()).playhead,90);await markerList.selectOption('m1');await settled();assert.equal((await state()).playhead,30);
+ await page.getByRole('button',{name:'Marker ▶',exact:true}).click();await settled();assert.equal((await state()).playhead,90);
+ await page.locator('[data-timeline-clip]').first().focus();await page.keyboard.press('Alt+,');await settled();assert.equal((await state()).playhead,30);
+ await markerSearch.fill('not found');assert.equal(await page.getByRole('button',{name:'Marker ▶',exact:true}).isDisabled(),true);assert.equal(await page.getByRole('button',{name:'◀ Marker',exact:true}).isDisabled(),true);
+ await page.locator('[data-timeline-clip]').first().focus();await page.keyboard.press('Alt+.');await settled();assert.equal((await state()).playhead,30);
+ await page.getByRole('button',{name:'Clear marker search'}).click();await page.locator('[data-timeline-clip]').first().focus();await page.keyboard.press('Alt+.');await settled();assert.equal((await state()).playhead,90);
+ await page.keyboard.press('Alt+,');await settled();assert.equal((await state()).playhead,30);
  assert.equal((await state()).project,listBaseline.project);assert.deepEqual((await state()).selected,listBaseline.selected);assert.equal((await state()).mutations,listBaseline.mutations);
  report.steps.push({case:'direct marker navigation sorts duplicate labels and preserves project and selection'});
  const boundaryBaseline=await state();
@@ -108,4 +117,4 @@ try{
  assert.equal((await state()).mutations,0);assert.equal(report.errors.length,0,JSON.stringify(report.errors));
  report.steps.push({case:'10-minute fit, reduced timebase clip, stale selection, single-frame/empty project, zero edit calls and zero page errors'});report.status='passed';console.log('PASS: headless timeline navigation and shortcut integration');
 }catch(error){report.status='failed';report.error=String(error);console.error(error);process.exitCode=1;}
-finally{if(browser)await browser.close();if(server?.listening)await new Promise(r=>server.close(r));report.finishedAt=new Date().toISOString();writeFileSync(join(directory,'report.json'),JSON.stringify(report,null,2));writeFileSync('artifacts/background/timeline-navigation-latest.json',JSON.stringify({...report,directory},null,2));}
+finally{if(browser)await browser.close();if(server?.listening)await new Promise(r=>server.close(r));report.finishedAt=new Date().toISOString();writeFileSync(join(directory,'report.json'),JSON.stringify(report,null,2));writeFileSync(join(outputRoot,'timeline-navigation-latest.json'),JSON.stringify({...report,directory},null,2));}

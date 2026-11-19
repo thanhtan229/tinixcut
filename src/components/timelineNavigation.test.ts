@@ -103,6 +103,9 @@ describe("marker navigation",()=>{
   expect(adjacentMarkerFrame(marked,60,-1)).toBe(15);
   expect(adjacentMarkerFrame(marked,60,1)).toBeNull();
   expect(adjacentMarkerFrame(marked,15,-1)).toBeNull();
+  expect(adjacentMarkerFrame(marked,0,1," c ")).toBe(60);
+  expect(adjacentMarkerFrame(marked,0,1,"missing")).toBeNull();
+  expect(adjacentMarkerFrame(marked,0,1,"  ")).toBe(15);
   expect(adjacentMarkerFrame(null,0,1)).toBeNull();
   expect(JSON.stringify(marked)).toBe(before);
  });

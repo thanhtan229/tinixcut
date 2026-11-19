@@ -255,7 +255,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
                   }} style={{ width: "100%" }} />
                 </label>
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{trackName}{locked ? " · locked" : ""}{timingReview.notices[item.item_id] && <><br /><span style={{color:"var(--text-warning, #f59e0b)"}}>{timingReview.notices[item.item_id].kind === "gap" ? "Gap before" : "Overlap with earlier captions"}: {timingReview.notices[item.item_id].frames} frames</span></>}</span>
-                <textarea aria-label={`Caption text ${formatTime(item)}`} rows={2} disabled={locked} value={drafts[item.item_id] ?? item.text_content ?? ""} onChange={(event) => {
+                <textarea aria-label={`Caption text ${formatTime(item)}`} rows={2} disabled={locked} readOnly={busy} value={drafts[item.item_id] ?? item.text_content ?? ""} onChange={(event) => {
                   const value = event.currentTarget.value;
                   setDrafts((current) => ({ ...current, [item.item_id]: value }));
                 }} />
