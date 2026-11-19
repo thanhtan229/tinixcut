@@ -27,6 +27,11 @@ const options = {
 };
 
 describe("reviewed audio mix plan", () => {
+  it("supports standalone audio as voice and rejects assigning one clip to both roles", () => {
+    const p=fixture();p.tracks[0].items[0].kind="Audio";
+    expect(buildAudioMixPlan(p,options).plan.operations.some(({operation})=>operation.type==="ClipKeyframeAdd")).toBe(true);
+    expect(()=>buildAudioMixPlan(p,{...options,voiceItemIds:["music"]})).toThrow("both voice and music");
+  });
   it("rejects locked music and stale selections while allowing locked voice as read-only reference",()=>{
     const p=fixture();p.tracks[1].name="Music";p.tracks[1].locked=true;
     expect(()=>buildAudioMixPlan(p,options)).toThrow("Unlock track Music");

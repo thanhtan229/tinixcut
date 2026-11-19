@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 const timer = setTimeout(() => process.exit(124), 10000);
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 3000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 3000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   assert.ok(page);

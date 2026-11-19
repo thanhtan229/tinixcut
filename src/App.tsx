@@ -1,7 +1,7 @@
 import { mediaUsageCounts, nextMediaOccurrence, selectedMediaOccurrence } from "./components/mediaLibrary";
 import { SilenceCutDialog } from "./components/SilenceCutDialog";
 import { terminalExportResult, type ActiveExport, type ExportResult } from "./components/exportResult";
-import { adjacentMarkerFrame } from "./components/timelineNavigation";
+import { adjacentMarkerFrame, adjacentClipBoundary } from "./components/timelineNavigation";
 import { buildSilenceCutOperations, type SilenceJobReport } from "./components/silenceCuts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -166,6 +166,7 @@ export function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [marks, setMarks] = useState<InOutMarks>({ markIn: null, markOut: null });
   const [loopInOut, setLoopInOut] = useState(false);
+  const [clipBoundaryScope, setClipBoundaryScope] = useState<"all" | "selected_tracks">("all");
   const [exportInOutOnly, setExportInOutOnly] = useState(false);
   const [shuttle, setShuttle] = useState<ShuttleState>(SHUTTLE_IDLE);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -196,6 +197,11 @@ export function App() {
   const [silenceAsset, setSilenceAsset] = useState<Asset | null>(null);
   const [sourceViewerAsset, setSourceViewerAsset] = useState<Asset | null>(null);
   const [sourceViewerSeekSeconds, setSourceViewerSeekSeconds] = useState(0);
+  useEffect(() => {
+    if (sourceViewerAsset && !project?.assets.some(asset => asset.asset_id === sourceViewerAsset.asset_id)) {
+      setSourceViewerAsset(null);
+    }
+  }, [project, sourceViewerAsset]);
   const [mediaImportProgress, setMediaImportProgress] = useState<string | null>(null);
   const mediaImportCancelRef = useRef(false);
   const [isBulkRelinkOpen, setIsBulkRelinkOpen] = useState(false);
@@ -957,11 +963,16 @@ export function App() {
 
   const handleRelinkAsset = async (asset: Asset) => {
     try {
-      const selected = await open({
-        title: `Relink ${asset.name}`,
-        filters: [{ name: "Media Files", extensions: [...MEDIA_FILE_EXTENSIONS] }],
-        multiple: false,
-      });
+      const qualificationPicker = import.meta.env.DEV || import.meta.env.MODE === "qualification"
+        ? (window as Window & { __TINIXCUT_QUALIFICATION_PICKER__?: (asset: Asset) => Promise<string | null> }).__TINIXCUT_QUALIFICATION_PICKER__
+        : undefined;
+      const selected = qualificationPicker
+        ? await qualificationPicker(asset)
+        : await open({
+            title: `Relink ${asset.name}`,
+            filters: [{ name: "Media Files", extensions: [...MEDIA_FILE_EXTENSIONS] }],
+            multiple: false,
+          });
       if (!selected) return;
       const path = Array.isArray(selected) ? selected[0] : selected;
       await executeCommandEnvelope(
@@ -1059,16 +1070,20 @@ export function App() {
     }
   };
 
-  const handleApplyCaptionEdits = async (textDrafts: CaptionDraft[], timingDrafts: CaptionTimingDraft[]) => {
+  const handleApplyCaptionEdits = async (textDrafts: CaptionDraft[], timingDrafts: CaptionTimingDraft[], expectedProject: {projectId:string; revision:number}) => {
     if (!project || (textDrafts.length === 0 && timingDrafts.length === 0)) return;
     const textOperations = textDrafts.map(({ item_id, text }) => ({
         operation_id: `op_caption_${item_id}_${Date.now()}`,
         operation: { type: "ClipTextSet" as const, payload: { item_id, text } },
       }));
-    const timingOperations = buildCaptionTimingOperations(project, timingDrafts);
-    const operations = [...textOperations, ...timingOperations];
-    if (operations.length === 0) return;
-    await executeCommandEnvelope(operations, `Update ${textDrafts.length} caption text(s) and ${timingOperations.length} timing(s)`);
+    await executeCommandEnvelope(current => {
+      if (current.project_id !== expectedProject.projectId || current.revision !== expectedProject.revision) {
+        setProject(current);
+        setSelection(previous => reconcileSelection(previous, current));
+        throw new Error("Project changed; caption draft was not applied.");
+      }
+      return [...textOperations, ...buildCaptionTimingOperations(current, timingDrafts)];
+    }, `Update ${textDrafts.length} caption text(s) and ${timingDrafts.length} timing(s)`);
   };
 
   const handleBuildSilenceCut = async (report: SilenceJobReport, selected: Set<number>) => {
@@ -3010,6 +3025,12 @@ export function App() {
       setPlayheadFrame(frame);
       timelineNavigationRef.current?.locateFrame(frame);
     },
+    onClipBoundaryNavigation: direction => {
+      const frame=adjacentClipBoundary(project,playheadFrame,direction,clipBoundaryScope === "selected_tracks" ? selection.selectedItemIds : undefined);
+      if (frame===null) return;
+      setPlayheadFrame(frame);
+      timelineNavigationRef.current?.locateFrame(frame);
+    },
     onToggleSnapping: () => setSnapEnabled((s) => !s),
     shortcuts: shortcutMap,
     onShuttle: handleShuttleKey,
@@ -3256,6 +3277,8 @@ export function App() {
 
           <Timeline
             project={project}
+            clipBoundaryScope={clipBoundaryScope}
+            onClipBoundaryScopeChange={setClipBoundaryScope}
             selectedItemId={selectedItemId}
             selectedItemIds={selection.selectedItemIds}
             primarySelectedItemId={selection.primarySelectedItemId}
@@ -3547,7 +3570,8 @@ export function App() {
       />
 
       <SourceViewerDialog
-        asset={sourceViewerAsset}
+        asset={sourceViewerAsset ? project?.assets.find(asset => asset.asset_id === sourceViewerAsset.asset_id) ?? null : null}
+        frameRate={project?.settings.frame_rate}
         initialSeekSeconds={sourceViewerSeekSeconds}
         onClose={() => setSourceViewerAsset(null)}
         onAddRange={(asset, sourceIn, sourceOut) => {

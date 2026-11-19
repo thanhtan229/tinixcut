@@ -8,7 +8,7 @@ const ffmpeg=resolve('src-tauri/resources/bin/ffmpeg.exe');
 const video=path+'.mp4',audio=path+'.wav';
 execFileSync(ffmpeg,['-v','error','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=30:duration=16','-f','lavfi','-i','sine=frequency=440:duration=16','-c:v','libx264','-preset','ultrafast','-c:a','aac',video],{windowsHide:true,timeout:30000});
 execFileSync(ffmpeg,['-v','error','-y','-f','lavfi','-i','sine=frequency=880:duration=16',audio],{windowsHide:true,timeout:10000});
-const browser=await chromium.connectOverCDP('http://127.0.0.1:9444',{timeout:10000});
+const browser=await chromium.connectOverCDP('http://127.0.0.1:9445',{timeout:10000});
 const report={scope:'Real WebView UI transition/mixer; command fixture/persistence',steps:[],meters:[]};
 const timer=setTimeout(()=>process.exit(124),90000);
 try{

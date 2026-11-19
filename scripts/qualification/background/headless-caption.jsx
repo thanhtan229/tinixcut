@@ -31,8 +31,14 @@ function Harness() {
     }
     return initial;
   });
+  window.changeCaptionProject = (mode) => setProject(current => {
+    const next=structuredClone(current);next.revision++;
+    if(mode==='delete')next.tracks[0].items.shift();
+    if(mode==='edit')next.tracks[0].items[0].text_content='External change';
+    return next;
+  });
   return <CaptionEditorDialog project={project} playheadFrame={0} isOpen={true}
-    onClose={() => {}} onSeek={() => {}}
+    onClose={() => {window.captionCloseCount=(window.captionCloseCount ?? 0)+1;}} onSeek={frame => {window.captionSeekFrame=frame;}}
     onApplyEdits={async (text,timing) => { const scenario=new URLSearchParams(location.search).get("scenario"); if(!["tracks", "long", "long-valid"].includes(scenario)) throw new Error("Not implemented in this test harness"); await window.captureCaptionDrafts(text,timing); if(scenario === "long-valid") await window.captureCaptionCommand({project,operations:[...text.map(({item_id,text},i)=>({operation_id:`caption-text-${i}`,operation:{type:"ClipTextSet",payload:{item_id,text}}})),...buildCaptionTimingOperations(project,timing,1)]}); }}
     onSplit={async () => { throw new Error("Not implemented in this test harness"); }}
     onMerge={async (left, right) => {

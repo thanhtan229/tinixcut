@@ -58,7 +58,7 @@ function Get-CdpSnapshot($Session, [string]$SnapshotLabel) {
   $p.Dispose()
  }
  $appState=if($Session -and $Session.processId){[CdpReadOnlyProbe]::State([uint32]$Session.processId)}elseif($Session){'unknown'}else{'not-started'}
- $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 9444 -ErrorAction SilentlyContinue | ForEach-Object {[ordered]@{address=[string]$_.LocalAddress;processId=[int]$_.OwningProcess}})
+ $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 9445 -ErrorAction SilentlyContinue | ForEach-Object {[ordered]@{address=[string]$_.LocalAddress;processId=[int]$_.OwningProcess}})
  $locks=@()
  if($profile){
   foreach($relative in @('EBWebView\lockfile','EBWebView\Default\Extension Rules\000003.log')){

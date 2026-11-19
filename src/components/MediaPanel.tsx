@@ -52,8 +52,14 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
   const [audioLevels, setAudioLevels] = useState<Record<string, AudioLevelReport>>({});
   const [audioAnalysisBusy, setAudioAnalysisBusy] = useState<string | null>(null);
   const [audioAnalysisError, setAudioAnalysisError] = useState<Record<string, string>>({});
+  const usedAssetCount = usageCounts ? assets.filter(asset => (usageCounts[asset.asset_id] ?? 0) > 0).length : 0;
+  const typeCounts = assets.reduce((counts, asset) => {
+    if (asset.media_kind === "Video" || asset.media_kind === "Audio" || asset.media_kind === "Image") counts[asset.media_kind]++;
+    return counts;
+  }, { Video: 0, Audio: 0, Image: 0 });
+  const offlineAssetCount = assets.filter(asset => !!offlineMedia[asset.asset_id]).length;
   const visibleAssets = useMemo(
-    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort).filter(asset => !usageCounts || usageFilter === "all" || (usageFilter === "used" ? (usageCounts[asset.asset_id] ?? 0) > 0 : !usageCounts[asset.asset_id])),
+    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort, usageCounts).filter(asset => !usageCounts || usageFilter === "all" || (usageFilter === "used" ? (usageCounts[asset.asset_id] ?? 0) > 0 : !usageCounts[asset.asset_id])),
     [assets, offlineMedia, query, kindFilter, statusFilter, sort, usageCounts, usageFilter],
   );
 
@@ -84,22 +90,22 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search media…"
+            placeholder="Search name or path…"
           />
           <div className="media-library-filter-row">
             {usageCounts && <select aria-label="Filter media usage" value={usageFilter} onChange={event=>setUsageFilter(event.target.value)}>
-              <option value="all">All usage</option><option value="used">Used</option><option value="unused">Unused</option>
+              <option value="all">All usage ({assets.length})</option><option value="used">Used ({usedAssetCount})</option><option value="unused">Unused ({assets.length - usedAssetCount})</option>
             </select>}
             <select aria-label="Filter media type" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as MediaLibraryKindFilter)}>
-              <option value="all">All types</option>
-              <option value="Video">Video</option>
-              <option value="Audio">Audio</option>
-              <option value="Image">Image</option>
+              <option value="all">All types ({assets.length})</option>
+              <option value="Video">Video ({typeCounts.Video})</option>
+              <option value="Audio">Audio ({typeCounts.Audio})</option>
+              <option value="Image">Image ({typeCounts.Image})</option>
             </select>
             <select aria-label="Filter media status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as MediaLibraryStatusFilter)}>
-              <option value="all">All status</option>
-              <option value="online">Online</option>
-              <option value="offline">Offline</option>
+              <option value="all">All status ({assets.length})</option>
+              <option value="online">Online ({assets.length - offlineAssetCount})</option>
+              <option value="offline">Offline ({offlineAssetCount})</option>
             </select>
             <select aria-label="Sort media" value={sort} onChange={(event) => setSort(event.target.value as MediaLibrarySort)}>
               <option value="name">Name</option>
@@ -107,11 +113,13 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
               <option value="size">Size</option>
               <option value="duration-asc">Duration: shortest first</option>
               <option value="duration-desc">Duration: longest first</option>
+              {(usageCounts || sort === "usage-desc") && <option value="usage-desc" disabled={!usageCounts}>Most used first</option>}
             </select>
           </div>
           {(query !== "" || kindFilter !== "all" || statusFilter !== "all" || (usageCounts && usageFilter !== "all")) && <button type="button" className="btn-action" onClick={() => {
             setQuery(""); setKindFilter("all"); setStatusFilter("all"); setUsageFilter("all");
           }}>Clear filters</button>}
+          <div aria-label="Media results" aria-live="polite" style={{fontSize:11,color:"var(--text-muted)"}}>{visibleAssets.length} of {assets.length} sources shown</div>
         </div>
       )}
       {importProgress && <div role="status" className="media-import-progress">{importProgress}</div>}
@@ -155,6 +163,7 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
                 <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--text-main)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {a.media_kind === "Audio" ? "♫" : a.media_kind === "Image" ? "▧" : "▶"} {a.name}
                 </div>
+                <div aria-label={`Source path for ${a.name}`} title={a.path} style={{fontSize:10,color:"var(--text-muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.path}</div>
                 {usageCounts && <span style={{fontSize:11,color:"var(--text-muted)"}}>{usageCounts[a.asset_id] ? `Used in ${usageCounts[a.asset_id]} timeline clip${usageCounts[a.asset_id] === 1 ? "" : "s"}` : "Unused in timeline"}</span>}
                 {onLocateAsset && !!usageCounts?.[a.asset_id] && <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                   <button type="button" className="btn-action" title="Select the previous clip using this source, wrapping to the last" onClick={()=>onLocateAsset(a,-1)}>Previous use</button>

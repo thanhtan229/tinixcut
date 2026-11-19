@@ -3,7 +3,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 const path=process.env.TINIXCUT_CDP_PROJECT;
 const report={startedAt:new Date().toISOString(),scope:'Qualification WebView branch replacement on saved/unsaved projects; not installed recovery UI',cases:[]};
-const browser=await chromium.connectOverCDP('http://127.0.0.1:9444');
+const browser=await chromium.connectOverCDP('http://127.0.0.1:9445');
 try{
  const page=browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri|localhost/.test(p.url()));
  const invoke=(command,args={})=>page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});

@@ -369,5 +369,28 @@ fn mock_tauri_ipc_silence_job_scope_staleness_apply_history_and_persistence() {
         assert_eq!(fs::read(&path).unwrap(), bytes);
         println!("MULTI_CUT_UI_COMMAND_HISTORY_PERSISTENCE_PASS");
     }
+    if let Ok(report_path) = std::env::var("TINIX_TRANSCRIPT_SELECTION_REPORT") {
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        assert_eq!(report["ranges"], json!([{"sourceInSeconds":2,"sourceOutSeconds":3}]));
+        let operations = report["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 2);
+        let baseline = invoke("project_get_current", json!({})).unwrap();
+        invoke("project_execute_command", json!({"envelope":{"schema_version":baseline["schema_version"],"project_id":baseline["project_id"],"base_revision":baseline["revision"],"transaction_id":"transcript-selected-subset","operations":operations}})).unwrap();
+        let applied = invoke("project_get_current", json!({})).unwrap();
+        let track = applied["tracks"].as_array().unwrap().iter().find(|track| track["track_id"] == "trk_transcript_cut_42").unwrap();
+        let items = track["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["asset_id"], "source");
+        assert_eq!(items[0]["source_range"]["start"]["value"], 60);
+        assert_eq!(items[0]["source_range"]["duration"]["value"], 30);
+        assert_eq!(items[0]["timeline_range"]["start"]["value"], 60);
+        invoke("project_undo", json!({})).unwrap();
+        assert_eq!(invoke("project_get_current", json!({})).unwrap()["tracks"], baseline["tracks"]);
+        invoke("project_redo", json!({})).unwrap();
+        assert_eq!(invoke("project_get_current", json!({})).unwrap()["tracks"], applied["tracks"]);
+        invoke("project_save", json!({"path":saved})).unwrap();
+        assert_eq!(invoke("project_open", json!({"path":saved})).unwrap()["tracks"], applied["tracks"]);
+        println!("TRANSCRIPT_SELECTION_UI_COMMAND_HISTORY_PERSISTENCE_PASS");
+    }
     fs::remove_dir_all(dir).unwrap();
 }

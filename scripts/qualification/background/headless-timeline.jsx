@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { adjacentMarkerFrame } from '../../../src/components/timelineNavigation';
+import { adjacentMarkerFrame, adjacentClipBoundary } from '../../../src/components/timelineNavigation';
 import { setMark } from '../../../src/hooks/inOutRange';
 import { Timeline } from '../../../src/components/Timeline';
 import { useTimelineShortcuts } from '../../../src/hooks/useTimelineShortcuts';
@@ -25,8 +25,8 @@ let mutations=0;
 window.markerActions=[];
 const rejectEdit=()=>{mutations++;throw new Error('Navigation must not edit the project');};
 function Harness(){
- const [marks,setMarks]=useState({markIn:null,markOut:null});const [project,setProject]=useState(()=>fixture(30,300));const [selected,setSelected]=useState(new Set());const [playhead,setPlayhead]=useState(0);const ref=useRef(null);
- useTimelineShortcuts({enabled:true,project,selectedItemIds:selected,primarySelectedItemId:[...selected][0]??null,playheadFrame:playhead,onMarkIn:()=>setMarks(m=>setMark(m,"in",playhead)),onMarkOut:()=>setMarks(m=>setMark(m,"out",playhead)),onClearIn:()=>setMarks(m=>({...m,markIn:null})),onClearOut:()=>setMarks(m=>({...m,markOut:null})),onMarkerNavigation:direction=>{const frame=adjacentMarkerFrame(project,playhead,direction);if(frame!==null){setPlayhead(frame);ref.current?.locateFrame(frame);}},onZoomIn:()=>ref.current?.zoomIn(),onZoomOut:()=>ref.current?.zoomOut()});
+ const [marks,setMarks]=useState({markIn:null,markOut:null});const [project,setProject]=useState(()=>fixture(30,300));const [selected,setSelected]=useState(new Set());const [playhead,setPlayhead]=useState(0);const [scope,setScope]=useState('all');const ref=useRef(null);
+ useTimelineShortcuts({enabled:true,project,selectedItemIds:selected,primarySelectedItemId:[...selected][0]??null,playheadFrame:playhead,onMarkIn:()=>setMarks(m=>setMark(m,"in",playhead)),onMarkOut:()=>setMarks(m=>setMark(m,"out",playhead)),onClearIn:()=>setMarks(m=>({...m,markIn:null})),onClearOut:()=>setMarks(m=>({...m,markOut:null})),onMarkerNavigation:direction=>{const frame=adjacentMarkerFrame(project,playhead,direction);if(frame!==null){setPlayhead(frame);ref.current?.locateFrame(frame);}},onClipBoundaryNavigation:direction=>{const frame=adjacentClipBoundary(project,playhead,direction,scope==='selected_tracks'?selected:undefined);if(frame!==null){setPlayhead(frame);ref.current?.locateFrame(frame);}},onZoomIn:()=>ref.current?.zoomIn(),onZoomOut:()=>ref.current?.zoomOut()});
  window.timelineTest={snapshot:()=>({project:JSON.stringify(project),selected:[...selected],playhead,marks,mutations})};
  return <><div><button onClick={()=>{setProject(fixture(10,100));setSelected(new Set());}}>Ten minutes</button>
  <button onClick={()=>{setProject(fixture(30,300));setSelected(new Set());}}>Thirty minutes</button>
@@ -35,10 +35,11 @@ function Harness(){
  <button onClick={()=>{const p=fixture(0,0);p.markers=[];setProject(p);setSelected(new Set());}}>Empty project</button>
  <button onClick={()=>{const p=fixture(30,300);p.markers=[{...p.markers[1],label:'Same'},{...p.markers[0],label:'Same'}];setProject(p);}}>Duplicate markers</button>
  <button onClick={()=>{const p=fixture(1,1);p.project_id='single-frame';p.tracks[0].items[0].timeline_range.duration={value:1,rate:p.settings.frame_rate};setProject(p);setSelected(new Set(['c0']));}}>Single frame</button>
+ <button onClick={()=>{const p=fixture(1,4);for(const [item,start,duration] of [[p.tracks[0].items[0],0,30],[p.tracks[0].items[1],90,30],[p.tracks[1].items[0],45,15],[p.tracks[1].items[1],150,30]]){item.timeline_range={start:{value:start,rate:p.settings.frame_rate},duration:{value:duration,rate:p.settings.frame_rate}};}setProject(p);setSelected(new Set(['c0']));setPlayhead(30);setScope('all');}}>Boundary scope fixture</button>
  <button onClick={()=>setPlayhead(53800)}>Late playhead</button><button onClick={()=>setPlayhead(0)}>Reset test playhead</button>
  <button onClick={()=>setMarks({markIn:30000,markOut:36000})}>Set test marks</button><button onClick={()=>setMarks({markIn:null,markOut:null})}>Clear test marks</button>
  <input aria-label="Typing guard" /></div>
- <Timeline project={project} markIn={marks.markIn} markOut={marks.markOut} playheadFrame={playhead} selectedItemIds={selected} navigationRef={ref}
+ <Timeline project={project} markIn={marks.markIn} markOut={marks.markOut} playheadFrame={playhead} selectedItemIds={selected} clipBoundaryScope={scope} onClipBoundaryScopeChange={setScope} navigationRef={ref}
  onSelectItem={(id,ctrl)=>setSelected(s=>ctrl?new Set([...s,id]):new Set(id?[id]:[]))} onClearSelection={()=>setSelected(new Set())}
  onPlayheadChange={setPlayhead} onMoveClip={rejectEdit} onTrimClip={rejectEdit} onSplitClip={rejectEdit} onDeleteClip={rejectEdit} onDuplicateClip={rejectEdit} onRenameMarker={(id,label)=>window.markerActions.push(['rename',id,label])} onDeleteMarker={id=>window.markerActions.push(['delete',id])}/></>;
 }

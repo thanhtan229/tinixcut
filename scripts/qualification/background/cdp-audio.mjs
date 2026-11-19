@@ -13,7 +13,7 @@ for (const [index, source] of sources.entries()) execFileSync(ffmpeg, [
 ], { windowsHide: true, timeout: 15000 });
 const report = { startedAt: new Date().toISOString(), scope: 'Real isolated WebView: paired DOM/native clock and meter observations; no audible-output or calibrated clock acceptance', steps: [], samples: [] };
 const watchdog = setTimeout(() => process.exit(124), 150000);
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 10000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 10000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   assert.ok(page, 'Qualification WebView missing');

@@ -43,6 +43,8 @@ describe("shortcut map", () => {
     expect(resolveShortcut(key("+", { shiftKey: true }), DEFAULT_SHORTCUTS)).toBe("zoom_in");
     expect(resolveShortcut(key("="), DEFAULT_SHORTCUTS)).toBe("zoom_in");
     expect(resolveShortcut(key("-"), DEFAULT_SHORTCUTS)).toBe("zoom_out");
+    expect(resolveShortcut(key(",", {ctrlKey:true,altKey:true}), DEFAULT_SHORTCUTS)).toBe("previous_clip_boundary");
+    expect(resolveShortcut(key(".", {ctrlKey:true,altKey:true}), DEFAULT_SHORTCUTS)).toBe("next_clip_boundary");
     expect(resolveShortcut(key("s"), DEFAULT_SHORTCUTS)).toBe("toggle_snapping");
   });
 
@@ -63,6 +65,9 @@ describe("shortcut map", () => {
     expect(overridesFromMap(map)).toEqual({ shuttle_forward: ["Ctrl+Alt+L"] });
     expect(overridesFromMap(DEFAULT_SHORTCUTS)).toEqual({});
     expect(SHORTCUT_ACTIONS.every((action) => map[action].length > 0)).toBe(true);
+    const boundaryMap = effectiveShortcuts({next_clip_boundary:["Ctrl+Alt+B"]});
+    expect(resolveShortcut(key("b",{ctrlKey:true,altKey:true}),boundaryMap)).toBe("next_clip_boundary");
+    expect(overridesFromMap(boundaryMap)).toEqual({next_clip_boundary:["Ctrl+Alt+B"]});
   });
 
   it("rejects conflicts and reserved chords when remapping", () => {

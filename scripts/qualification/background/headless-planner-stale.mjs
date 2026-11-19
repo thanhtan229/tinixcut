@@ -32,7 +32,12 @@ try {
   for (const test of cases) for (const change of ['Change revision', 'Offline a']) {
     await page.goto(`http://127.0.0.1:${server.address().port}/scripts/qualification/background/headless-planner-stale.html?mode=${test.mode}`);
     if (test.mode === 'reorder') await page.getByRole('button', {name:'Move b up'}).click();
-    if (test.mode === 'mix') await page.getByRole('checkbox', {name:'Normalize music from source audio levels'}).uncheck();
+    if (test.mode === 'mix') {
+      await page.getByText('a · Video · 0.00–3.00 s',{exact:true}).waitFor();
+      await page.getByText('b · Video · 3.00–6.00 s',{exact:true}).waitFor();
+      await page.getByText('music · Music · 0.00–3.00 s',{exact:true}).waitFor();
+      await page.getByRole('checkbox', {name:'Normalize music from source audio levels'}).uncheck();
+    }
     pending = undefined;
     await page.getByRole('button', {name:test.submit, exact:true}).click();
     for (let i = 0; !pending && i < 500; i++) await new Promise(resolve => setTimeout(resolve, 10));

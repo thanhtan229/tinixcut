@@ -16,7 +16,7 @@ const outputCode = transpile(readFileSync('src/components/previewAudioOutput.ts'
 execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=20', '-ac', '2', source.replace('.gain.wav', '.gain-b.wav')], { windowsHide: true, timeout: 15000 });
 const report = { startedAt: new Date().toISOString(), scope: 'Qualification-only Web Audio output experiment; captured graph PCM versus native export, no physical-speaker claim', comparisons: [] };
 const timer = setTimeout(() => process.exit(124), 120000);
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 10000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 10000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   assert.ok(page);

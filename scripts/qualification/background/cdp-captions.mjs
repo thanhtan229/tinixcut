@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 const path = process.env.TINIXCUT_CDP_PROJECT;
 const report = { startedAt: new Date().toISOString(), scope: 'Real isolated WebView caption edits/transcript; scoped native subtitle file commands, native dialogs excluded', steps: [] };
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444');
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445');
 const timer = setTimeout(() => process.exit(124), 180000);
 try {
  const page = browser.contexts().flatMap(c=>c.pages()).find(p=>/tauri|localhost/.test(p.url()));
@@ -104,18 +104,26 @@ try {
  const sourceDialog=page.locator('.source-viewer-dialog');await sourceDialog.getByRole('button',{name:'Cancel',exact:true}).click();
  await sourceDialog.waitFor({state:'hidden'});assert.deepEqual((await get()).tracks,previewBefore.tracks);
  await page.getByRole('button',{name:/Auto captions/}).click();
- await segments.first().check();await dialog.getByRole('button',{name:'Create rough cut track',exact:true}).click();
+ assert.equal(await segments.count(),1,'the recorded Whisper fixture contains one segment');
+ await dialog.getByRole('button',{name:/^Select 1 visible segment from /}).click();
+ assert.equal(await segments.first().isChecked(),true,'bulk select marks the visible transcript segment');
+ await dialog.getByLabel('Search source transcript').fill('no matching transcript 73941');
+ await dialog.getByText(/1 selected · 1 hidden by search/).waitFor();
+ assert.equal(await segments.count(),0);
+ await dialog.getByRole('button',{name:'Create rough cut track',exact:true}).click();
  p=await poll(p=>p.tracks.length>beforeAnalysis.tracks.length);
+ const roughCutTracks=structuredClone(p.tracks);
  report.roughCut=p.tracks.at(-1).items.map(i=>({assetId:i.asset_id,source:i.source_range,timeline:i.timeline_range}));assert.ok(report.roughCut.every(i=>i.assetId===asset.asset_id));
  const seconds=t=>t.value*t.rate.denominator/t.rate.numerator;
  const actual=report.roughCut[0].source;const expectedStart=Math.round(seconds(selected.sourceStart)*30)/30;const expectedEnd=Math.round((seconds(selected.sourceStart)+seconds(selected.sourceDuration))*30)/30;
  assert.equal(seconds(actual.start),expectedStart);assert.equal(seconds(actual.duration),expectedEnd-expectedStart);
  report.selectedTranscript=selected;report.transcriptUi=transcriptUi;
  await dialog.getByRole('button',{name:'Close',exact:true}).last().click();
- await page.getByRole('button',{name:/Undo/}).first().click();await poll(p=>p.tracks.length===beforeAnalysis.tracks.length);
+ await page.getByRole('button',{name:/Undo/}).first().click();p=await poll(p=>p.tracks.length===beforeAnalysis.tracks.length);assert.deepEqual(p.tracks,beforeAnalysis.tracks);
  await page.getByRole('button',{name:/Redo/}).first().click();p=await poll(p=>p.tracks.length>beforeAnalysis.tracks.length);
+ assert.deepEqual(p.tracks,roughCutTracks);
  await invoke('project_save',{path});assert.deepEqual((await invoke('project_open',{path})).tracks,p.tracks);
- report.steps.push('Real Whisper source transcript -> UI selected-range rough cut -> Undo/Redo -> native save/reopen');
+ report.steps.push('Real Whisper single-segment transcript -> select visible -> hide by search -> UI rough cut -> Undo/Redo -> native save/reopen');
  await invoke('app_settings_save',{settings:originalSettings});
  report.status='passed';console.log('PASS: extended real WebView caption/subtitle/transcript workflow');
 }catch(error){report.status='failed';report.error=String(error);throw error;}finally{

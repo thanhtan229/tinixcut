@@ -33,7 +33,7 @@ export function mediaUsageCounts(tracks: Project["tracks"]): Record<string, numb
 
 export type MediaLibraryKindFilter = "all" | Asset["media_kind"];
 export type MediaLibraryStatusFilter = "all" | "online" | "offline";
-export type MediaLibrarySort = "name" | "kind" | "size" | "duration-asc" | "duration-desc";
+export type MediaLibrarySort = "name" | "kind" | "size" | "duration-asc" | "duration-desc" | "usage-desc";
 
 export function sourceRangeSecondsToFrames(sourceIn: number, sourceOut: number, rate: FrameRate): { start: number; duration: number } | null {
   if (!Number.isFinite(sourceIn) || !Number.isFinite(sourceOut) || sourceIn < 0 || sourceOut <= sourceIn || rate.numerator <= 0 || rate.denominator <= 0) return null;
@@ -51,6 +51,7 @@ export function filterAndSortMediaAssets(
   kind: MediaLibraryKindFilter,
   status: MediaLibraryStatusFilter,
   sort: MediaLibrarySort,
+  usageCounts?: Readonly<Record<string, number>>,
 ): Asset[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filtered = assets.filter((asset) => {
@@ -58,10 +59,11 @@ export function filterAndSortMediaAssets(
     const isOffline = offlineAssetIds.has(asset.asset_id);
     if (status === "offline" && !isOffline) return false;
     if (status === "online" && isOffline) return false;
-    return !normalizedQuery || asset.name.toLocaleLowerCase().includes(normalizedQuery);
+    return !normalizedQuery || asset.name.toLocaleLowerCase().includes(normalizedQuery) || asset.path.toLocaleLowerCase().includes(normalizedQuery);
   });
 
   return filtered.sort((left, right) => {
+    if (sort === "usage-desc") return (usageCounts?.[right.asset_id] ?? 0) - (usageCounts?.[left.asset_id] ?? 0) || left.name.localeCompare(right.name) || left.asset_id.localeCompare(right.asset_id);
     if (sort === "duration-asc" || sort === "duration-desc") {
       const duration = (asset: Asset) => {
         const time = asset.duration;

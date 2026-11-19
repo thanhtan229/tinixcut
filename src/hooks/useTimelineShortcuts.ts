@@ -20,6 +20,7 @@ export interface TimelineShortcutsCallbacks {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onMarkerNavigation?: (direction: 1 | -1) => void;
+  onClipBoundaryNavigation?: (direction: 1 | -1) => void;
   onToggleSnapping: () => void;
   /** Effective shortcut map (built-in chords plus the user's overrides). */
   shortcuts?: ShortcutMap;
@@ -111,7 +112,7 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
 
       const action = resolveShortcut(e, callbacksRef.current.shortcuts ?? DEFAULT_SHORTCUTS);
       if (action === null) return;
-      const isClipAllowedShortcut = action === "copy" || action === "paste" || action === "previous_marker" || action === "next_marker";
+      const isClipAllowedShortcut = action === "copy" || action === "paste" || action === "previous_marker" || action === "next_marker" || action === "previous_clip_boundary" || action === "next_clip_boundary";
       const dialogIsOpen = typeof document !== "undefined" &&
         Boolean(document.querySelector(".dialog-backdrop, [role='dialog']"));
 
@@ -130,6 +131,11 @@ export function useTimelineShortcuts(callbacks: TimelineShortcutsCallbacks) {
       if (action === "previous_marker" || action === "next_marker") {
         e.preventDefault();
         cb.onMarkerNavigation?.(action === "previous_marker" ? -1 : 1);
+        return;
+      }
+      if (action === "previous_clip_boundary" || action === "next_clip_boundary") {
+        e.preventDefault();
+        cb.onClipBoundaryNavigation?.(action === "previous_clip_boundary" ? -1 : 1);
         return;
       }
 

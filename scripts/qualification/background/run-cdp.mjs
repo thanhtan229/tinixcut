@@ -9,6 +9,8 @@ const cases = [
   ['recovery', 'Recovery', 'cdp-recovery.json'],
   ['saved-recovery', 'SavedRecovery', 'cdp-saved-recovery.json'],
   ['pointer', 'Pointer', 'cdp-pointer.json'],
+  ['clip-boundary-scope', 'ClipBoundaryScope', 'cdp-clip-boundary-scope.json'],
+  ['marker-search', 'MarkerSearch', 'cdp-marker-search.json'],
   ['controls', 'Controls', 'cdp-controls.json'],
   ['audio', 'Audio', 'cdp-audio.json'],
   ['workflow', 'Workflow', 'cdp-workflow.json'],

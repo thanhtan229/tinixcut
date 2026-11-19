@@ -9,7 +9,7 @@ const ffmpeg=resolve('src-tauri/resources/bin/ffmpeg.exe');
 const ffprobe=resolve('src-tauri/resources/bin/ffprobe.exe');
 const source=path+'.mp4';
 execFileSync(ffmpeg,['-v','error','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=30:duration=8','-f','lavfi','-i','sine=frequency=1000:sample_rate=48000:duration=8','-c:v','libx264','-preset','ultrafast','-g','30','-c:a','aac',source],{windowsHide:true,timeout:30000});
-const browser=await chromium.connectOverCDP('http://127.0.0.1:9444',{timeout:10000});
+const browser=await chromium.connectOverCDP('http://127.0.0.1:9445',{timeout:10000});
 const report={scope:'Real WebView on isolated desktop; command fixture/export; UI keyboard edits/playback',steps:[]};
 const watchdog=setTimeout(()=>{console.error('Workflow exceeded 240-second timeout');process.exit(124);},240000);
 try {

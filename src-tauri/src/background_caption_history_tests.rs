@@ -399,6 +399,44 @@ fn mock_tauri_ipc_caption_merge_undo_redo() {
     fs::remove_dir_all(dir).unwrap();
 }
 #[test]
+fn caption_text_and_timing_one_transaction_history_and_reopen() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../scripts/qualification/background/caption-merge.tcproj");
+    let initial = load_project(&fixture).expect("load caption fixture");
+    let range = serde_json::json!({"start":{"value":0,"rate":initial.settings.frame_rate},"duration":{"value":29,"rate":initial.settings.frame_rate}});
+    let envelope: CommandEnvelope = serde_json::from_value(serde_json::json!({
+        "schema_version":initial.schema_version,"project_id":initial.project_id,"base_revision":initial.revision,
+        "transaction_id":"combined-caption-draft","operations":[
+            {"operation_id":"text","operation":{"type":"ClipTextSet","payload":{"item_id":"caption_left","text":"Combined draft"}}},
+            {"operation_id":"timing","operation":{"type":"ClipTrim","payload":{"item_id":"caption_left","new_timeline_range":range,"new_source_range":range}}}
+        ]
+    })).unwrap();
+    let mut service = CommandService::new(initial.clone());
+    let receipt = service.execute(envelope).expect("apply combined draft");
+    assert_eq!(receipt.operations_applied, 2);
+    let applied = service.project().clone();
+    assert_eq!(applied.tracks[0].items[0].text_content.as_deref(), Some("Combined draft"));
+    assert_eq!(applied.tracks[0].items[0].timeline_range.duration.value, 29);
+    assert_eq!(applied.tracks[0].items[1], initial.tracks[0].items[1]);
+    let mut history = HistoryManager::new(20);
+    history.record_edit(HistoryEntry { description: "Caption edits".into(), transaction_id: receipt.transaction_id, prior_snapshot: initial.clone(), resulting_snapshot: applied.clone() });
+    let mut current = applied.clone();
+    assert_eq!(history.undo_stack_depth(), 1);
+    assert!(history.undo(&mut current).is_some());
+    assert_eq!(current.tracks, initial.tracks);
+    assert!(history.redo(&mut current).is_some());
+    assert_eq!(current.tracks, applied.tracks);
+    let dir = std::env::temp_dir().join(format!("tinixcut-caption-combined-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("caption.tcproj");
+    save_project_atomic(&current, &path).unwrap();
+    let reopened = load_project(&path).unwrap();
+    assert_eq!(reopened.tracks, applied.tracks);
+    assert_eq!(reopened.revision, current.revision);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn caption_merge_is_one_history_entry_and_survives_save_reopen() {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../scripts/qualification/background/caption-merge.tcproj");
