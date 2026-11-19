@@ -7,9 +7,10 @@ export function nextMarkerLabel(markers: readonly { label: string }[]): string {
   return `Marker ${index}`;
 }
 
-export function adjacentMarkerFrame(project: Project | null, playhead: number, direction: 1 | -1): number | null {
+export function adjacentMarkerFrame(project: Project | null, playhead: number, direction: 1 | -1, query = ""): number | null {
   if (!project) return null;
-  const frames=(project.markers ?? []).map(marker=>rationalTimeToFrames(marker.position,project.settings.frame_rate));
+  const search = query.trim().toLocaleLowerCase();
+  const frames=(project.markers ?? []).filter(marker=>marker.label.toLocaleLowerCase().includes(search)).map(marker=>rationalTimeToFrames(marker.position,project.settings.frame_rate));
   const eligible=frames.filter(frame=>direction===1 ? frame>playhead : frame<playhead);
   return eligible.length ? (direction===1 ? Math.min(...eligible) : Math.max(...eligible)) : null;
 }

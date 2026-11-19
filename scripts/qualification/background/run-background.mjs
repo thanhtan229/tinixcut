@@ -8,6 +8,7 @@ if (!existsSync(binary)) throw new Error(`Native CLI missing: ${binary}. Run car
 const steps = [
   ["CDP continuation and report guards", process.execPath, ["--test", "scripts/qualification/background/cdp-report-policy.node-test.mjs"]],
   ["Caption component + CLI command paths", process.execPath, ["scripts/qualification/background/headless-caption.mjs"]],
+  ["Caption pending apply protects drafts", process.execPath, ["scripts/qualification/background/caption-pending-apply.mjs"]],
   ["Transcript search selection", process.execPath, ["scripts/qualification/background/headless-transcript-selection.mjs"]],
   ["App mocked IPC + native save/reopen", process.execPath, ["scripts/qualification/background/headless-app.mjs"]],
   ["Draft delayed response guards", process.execPath, ["scripts/qualification/background/headless-draft-stale.mjs"]],

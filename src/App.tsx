@@ -167,6 +167,8 @@ export function App() {
   const [marks, setMarks] = useState<InOutMarks>({ markIn: null, markOut: null });
   const [loopInOut, setLoopInOut] = useState(false);
   const [clipBoundaryScope, setClipBoundaryScope] = useState<"all" | "selected_tracks">("all");
+  const [markerQuery, setMarkerQuery] = useState("");
+  useEffect(() => setMarkerQuery(""), [project?.project_id]);
   const [exportInOutOnly, setExportInOutOnly] = useState(false);
   const [shuttle, setShuttle] = useState<ShuttleState>(SHUTTLE_IDLE);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -3020,7 +3022,7 @@ export function App() {
     onZoomIn: () => timelineNavigationRef.current?.zoomIn(),
     onZoomOut: () => timelineNavigationRef.current?.zoomOut(),
     onMarkerNavigation: direction => {
-      const frame=adjacentMarkerFrame(project,playheadFrame,direction);
+      const frame=adjacentMarkerFrame(project,playheadFrame,direction,markerQuery);
       if (frame===null) return;
       setPlayheadFrame(frame);
       timelineNavigationRef.current?.locateFrame(frame);
@@ -3277,6 +3279,8 @@ export function App() {
 
           <Timeline
             project={project}
+            markerQuery={markerQuery}
+            onMarkerQueryChange={setMarkerQuery}
             clipBoundaryScope={clipBoundaryScope}
             onClipBoundaryScopeChange={setClipBoundaryScope}
             selectedItemId={selectedItemId}
