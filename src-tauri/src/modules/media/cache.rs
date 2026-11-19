@@ -25,6 +25,18 @@ pub struct MediaCacheStatus {
 /// Bump when proxy encoding changes so older cache entries are not reused.
 pub const PREVIEW_PROXY_PROFILE: &str = "seek05";
 
+/// Root for disposable media caches used by the current build.
+pub fn application_cache_root() -> PathBuf {
+    #[cfg(feature = "qualification-isolation")]
+    {
+        return crate::qualification_root().join("cache");
+    }
+    #[cfg(not(feature = "qualification-isolation"))]
+    {
+        std::env::temp_dir().join("tinixcut_cache")
+    }
+}
+
 pub struct CacheManager {
     root_dir: PathBuf,
 }

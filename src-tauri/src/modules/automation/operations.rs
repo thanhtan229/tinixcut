@@ -2710,7 +2710,7 @@ impl AutomationOperations {
             max_candidates,
         );
         let cache = crate::modules::media::cache::CacheManager::new(
-            std::env::temp_dir().join("tinixcut_cache"),
+            crate::modules::media::cache::application_cache_root(),
         );
         if let Some(report) = cache.load_scene_analysis(&source_fingerprint, &config_fingerprint) {
             return Ok(tool_ok(&report));
@@ -2796,7 +2796,7 @@ impl AutomationOperations {
             max_scenes,
         );
         let cache = crate::modules::media::cache::CacheManager::new(
-            std::env::temp_dir().join("tinixcut_cache"),
+            crate::modules::media::cache::application_cache_root(),
         );
         if let Some(report) =
             cache.load_visual_scene_analysis(&source_fingerprint, &config_fingerprint)
@@ -2912,7 +2912,7 @@ impl AutomationOperations {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let cache = crate::modules::media::cache::CacheManager::new(
-            std::env::temp_dir().join("tinixcut_cache"),
+            crate::modules::media::cache::application_cache_root(),
         );
         if let Some(report) =
             cache.load_transcript_analysis(&source_fingerprint, &config_fingerprint)
