@@ -97,6 +97,9 @@ function duckOperations(
 }
 
 export function buildAudioMixPlan(project: Project, options: AudioMixPlanOptions): EditPlanDraftReceipt {
+  if (options.voiceItemIds.some(id => options.musicItemIds.includes(id))) {
+    throw new Error("A clip cannot be both voice and music in the same mix plan.");
+  }
   const items = audioItems(project);
   const itemById = new Map(items.map(({ item }) => [item.item_id, item]));
   const voiceItems = options.voiceItemIds.map((id) => itemById.get(id));

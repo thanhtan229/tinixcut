@@ -10,7 +10,7 @@ import { peakMeterPercent } from "./audioMeter";
 import { adjacentRollItems, timelineArrowDelta, TimelineClipEdge, trimRangeByKeyboard } from "./timelineKeyboard";
 
 import { useTimelineNavigation, TimelineNavigationHandle } from "../hooks/useTimelineNavigation";
-import { TIMELINE_HEADER_WIDTH, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, timelineViewRange, timelineRulerTicks, adjacentMarkerFrame } from "./timelineNavigation";
+import { TIMELINE_HEADER_WIDTH, MIN_TIMELINE_ZOOM, MAX_TIMELINE_ZOOM, timelineViewRange, timelineRulerTicks, adjacentMarkerFrame, adjacentClipBoundary, nextMarkerLabel, markerTimeLabel } from "./timelineNavigation";
 export type { TimelineNavigationHandle } from "../hooks/useTimelineNavigation";
 
 interface TimelineProps {
@@ -63,6 +63,8 @@ interface TimelineProps {
   onAddMarker?: (label: string, positionFrame: number) => void;
   onRenameMarker?: (markerId: string, label: string) => void;
   onDeleteMarker?: (markerId: string) => void;
+  clipBoundaryScope?: "all" | "selected_tracks";
+  onClipBoundaryScopeChange?: (scope: "all" | "selected_tracks") => void;
   navigationRef?: React.Ref<TimelineNavigationHandle>;
 }
 
@@ -109,6 +111,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   onAddMarker,
   onRenameMarker,
   onDeleteMarker,
+  clipBoundaryScope = "all",
+  onClipBoundaryScopeChange,
   navigationRef,
 }) => {
 
@@ -121,6 +125,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   const effectivePrimarySelectedItemId = primarySelectedItemId ?? selectedItemId ?? null;
 
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [markerQuery, setMarkerQuery] = useState("");
+  React.useEffect(() => setMarkerQuery(""), [project?.project_id]);
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [trackNameDraft, setTrackNameDraft] = useState("");
   const [waveforms, setWaveforms] = useState<Record<string, WaveformData>>({});
@@ -639,6 +645,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     }
   };
 
+  const markerMatches = (project?.markers ?? []).filter(marker => marker.label.toLocaleLowerCase().includes(markerQuery.trim().toLocaleLowerCase()));
   return (
     <div
       className="timeline-panel"
@@ -684,7 +691,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           <button
             className="btn-action"
             disabled={!project}
-            onClick={() => onAddMarker?.(`Marker ${(project?.markers?.length ?? 0) + 1}`, playheadFrame)}
+            onClick={() => onAddMarker?.(nextMarkerLabel(project?.markers ?? []), playheadFrame)}
             title="Add a project marker at the playhead"
           >
             ◆ Marker
@@ -693,12 +700,25 @@ export const Timeline: React.FC<TimelineProps> = ({
             const frame=adjacentMarkerFrame(project,playheadFrame,direction);
             return <button key={direction} type="button" className="btn-action" disabled={frame===null} title={direction===-1?"Go to previous marker":"Go to next marker"} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Marker":"Marker ▶"}</button>;
           })}
+          {onClipBoundaryScopeChange && <select aria-label="Clip boundary scope" value={clipBoundaryScope} onChange={event=>onClipBoundaryScopeChange(event.target.value as "all" | "selected_tracks")}>
+            <option value="all">All tracks</option><option value="selected_tracks">Selected clips' tracks</option>
+          </select>}
+          {clipBoundaryScope === "selected_tracks" && !project?.tracks.some(track=>track.items.some(item=>effectiveSelectedItemIds.has(item.item_id))) && <span style={{fontSize:11,color:"var(--text-muted)"}}>Select a clip to navigate its track</span>}
+          {([-1,1] as const).map(direction=>{
+            const frame=adjacentClipBoundary(project,playheadFrame,direction,clipBoundaryScope === "selected_tracks" ? effectiveSelectedItemIds : undefined);
+            return <button key={`boundary-${direction}`} type="button" className="btn-action" disabled={frame===null} title={`${direction===-1?"Previous":"Next"} clip start or exclusive end on ${clipBoundaryScope === "all" ? "all tracks" : "selected clips' tracks"}`} onClick={()=>{if(frame!==null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>{direction===-1?"◀ Clip boundary":"Clip boundary ▶"}</button>;
+          })}
+          <input aria-label="Find marker" type="search" placeholder="Find marker…" value={markerQuery} disabled={!project?.markers?.length} onChange={event=>setMarkerQuery(event.target.value)} style={{width:120}} />
+          {markerQuery && <>
+            <span role="status" style={{fontSize:11,color:"var(--text-muted)"}}>{markerMatches.length} of {project?.markers?.length ?? 0} markers</span>
+            <button type="button" className="btn-action" aria-label="Clear marker search" onClick={()=>setMarkerQuery("")}>Clear</button>
+          </>}
           <select
             className="btn-action"
             aria-label="Go to marker"
             title="Go to a marker"
             value=""
-            disabled={!project?.markers?.length}
+            disabled={!markerMatches.length}
             onChange={(event) => {
               const marker = project?.markers?.find((candidate) => candidate.marker_id === event.target.value);
               if (!marker || !project) return;
@@ -708,10 +728,10 @@ export const Timeline: React.FC<TimelineProps> = ({
               navigation.locateFrame(frame);
             }}
           >
-            <option value="">Go to marker…</option>
-            {[...(project?.markers ?? [])]
+            <option value="">{markerQuery.trim() && !markerMatches.length ? "No matching markers" : "Go to marker…"}</option>
+            {[...markerMatches]
               .sort((a, b) => rationalTimeToFrames(a.position, project!.settings.frame_rate) - rationalTimeToFrames(b.position, project!.settings.frame_rate))
-              .map((marker) => <option key={marker.marker_id} value={marker.marker_id}>{marker.label} — frame {rationalTimeToFrames(marker.position, project!.settings.frame_rate)}</option>)}
+              .map((marker) => <option key={marker.marker_id} value={marker.marker_id}>{marker.label} — {markerTimeLabel(rationalTimeToFrames(marker.position, project!.settings.frame_rate), project!.settings.frame_rate)}</option>)}
           </select>
           <button
             className="btn-action"

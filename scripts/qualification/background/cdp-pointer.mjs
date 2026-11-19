@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-const browser=await chromium.connectOverCDP('http://127.0.0.1:9444',{timeout:10000});
+const browser=await chromium.connectOverCDP('http://127.0.0.1:9445',{timeout:10000});
 const report={scope:'CDP pointer events in isolated real WebView',steps:[]};
 const timer=setTimeout(()=>process.exit(124),60000);
 try {
@@ -62,23 +62,103 @@ try {
  await page.getByRole('button',{name:/Redo/}).first().click();
  const redone=await poll(p=>p.markers?.length===0);assert.deepEqual(redone.tracks[0].items,clipsBefore);
  report.steps.push('Marker F2 rename and Delete with selected clip; Undo/Redo preserve clips');
+ const addMarker=()=>page.getByRole('button',{name:'◆ Marker',exact:true}).click();
+ const hasLabels=(...labels)=>p=>p.markers.length===labels.length&&labels.every(label=>p.markers.some(m=>m.label===label));
+ await addMarker();await poll(hasLabels('Marker 1'));await addMarker();await poll(hasLabels('Marker 1','Marker 2'));
+ await marker('Marker 1').focus();await page.keyboard.press('Delete');await poll(hasLabels('Marker 2'));
+ await addMarker();await poll(hasLabels('Marker 1','Marker 2'));
+ await page.getByRole('button',{name:/Undo/}).first().click();await poll(hasLabels('Marker 2'));
+ await page.getByRole('button',{name:/Redo/}).first().click();await poll(hasLabels('Marker 1','Marker 2'));
+ await marker('Marker 2').focus();page.once('dialog',dialog=>dialog.accept('Scene'));await page.keyboard.press('F2');await poll(hasLabels('Marker 1','Scene'));
+ await addMarker();await poll(hasLabels('Marker 1','Marker 2','Scene'));
+ await page.getByRole('button',{name:/Undo/}).first().click();await poll(hasLabels('Marker 1','Scene'));
+ await page.getByRole('button',{name:/Redo/}).first().click();const checkedMarkers=await poll(hasLabels('Marker 1','Marker 2','Scene'));assert.deepEqual(checkedMarkers.tracks[0].items,clipsBefore);
+ const cleanupOps=checkedMarkers.markers.map((m,i)=>({operation_id:`marker_cleanup_${i}`,operation:{type:'ProjectMarkerDelete',payload:{marker_id:m.marker_id}}}));
+ await invoke('project_execute_command',{envelope:{schema_version:checkedMarkers.schema_version,project_id:checkedMarkers.project_id,base_revision:checkedMarkers.revision,transaction_id:'marker_cleanup',operations:cleanupOps}});
+ report.steps.push('Default marker names reuse missing number after deletion/rename; UI Undo/Redo and clips preserved');
  await invoke('project_save',{path:process.env.TINIXCUT_CDP_PROJECT});
  const reopened=await invoke('project_open',{path:process.env.TINIXCUT_CDP_PROJECT});assert.deepEqual(reopened.tracks,trimmed.tracks);
- const markers=Array.from({length:30},(_,n)=>({operation_id:`marker_nav_${n}`,operation:{type:'ProjectMarkerSet',payload:{marker_id:`marker_nav_${n}`,label:`Review ${String(n).padStart(2,'0')}`,position:t(n*300)}}}));
+ const markers=Array.from({length:30},(_,n)=>({operation_id:`marker_nav_${n}`,operation:{type:'ProjectMarkerSet',payload:{marker_id:`marker_nav_${n}`,label:`Review ${String(n===28?29:n).padStart(2,'0')}`,position:t(n*300)}}}));
  await invoke('project_execute_command',{envelope:{schema_version:reopened.schema_version,project_id:reopened.project_id,base_revision:reopened.revision,transaction_id:'marker_nav_seed',operations:markers}});
  await invoke('project_save',{path:process.env.TINIXCUT_CDP_PROJECT});await page.reload();
  try{await later.waitFor({timeout:2000});await later.click();}catch(error){if(error.name!=='TimeoutError')throw error;}
  const picker=page.getByLabel('Go to marker',{exact:true});await picker.waitFor();
  assert.equal(await picker.locator('option').count(),31);
+ assert.equal(await picker.locator('option[value="marker_nav_29"]').textContent(),'Review 29 — 04:50 (8700f)');
  await clip(0).click();assert.match(await clip(0).getAttribute('aria-label'),/selected/);
  const beforeNavigation=await get();
+ const search=page.getByLabel('Find marker');await search.fill(' REVIEW 29 ');
+ assert.deepEqual(await picker.locator('option').allTextContents(),['Go to marker…','Review 29 — 04:40 (8400f)','Review 29 — 04:50 (8700f)']);
+ await picker.selectOption('marker_nav_28');await page.waitForFunction(()=>document.querySelector('#preview-frame-seek')?.value==='8400');
  await picker.selectOption('marker_nav_29');
  await page.waitForFunction(()=>document.querySelector('#preview-frame-seek')?.value==='8700');
  const far=page.getByRole('button',{name:'Marker Review 29 at frame 8700',exact:true});
  await page.waitForFunction(()=>{const v=document.querySelector('.timeline-scroll-viewport');const m=document.querySelector('[aria-label="Marker Review 29 at frame 8700"]');if(!v||!m)return false;const a=v.getBoundingClientRect(),b=m.getBoundingClientRect();return v.scrollLeft>0&&b.left>=a.left+155&&b.right<=a.right;});
  const position=await page.evaluate(()=>{const v=document.querySelector('.timeline-scroll-viewport'),m=document.querySelector('[aria-label="Marker Review 29 at frame 8700"]'),a=v.getBoundingClientRect(),b=m.getBoundingClientRect();return {scrollLeft:v.scrollLeft,viewportWidth:a.width,markerLeft:b.left-a.left,markerRight:b.right-a.left};});
  assert.deepEqual(await get(),beforeNavigation);assert.match(await clip(0).getAttribute('aria-label'),/selected/);
+ await search.fill('no match');assert.equal(await picker.isDisabled(),true);assert.equal(await picker.locator('option').first().textContent(),'No matching markers');
+ assert.deepEqual(await get(),beforeNavigation);assert.match(await clip(0).getAttribute('aria-label'),/selected/);
+ await search.clear();assert.equal(await picker.locator('option').count(),31);
  assert.equal(await far.count(),1);report.markerNavigation=position;
- report.steps.push('30 real markers: direct navigation to frame 8700 scrolls marker into timeline viewport without project or selection change');
+ report.steps.push('30 real markers: case-insensitive search, duplicate labels, no match and direct navigation to 8400/8700 preserve project and selection');
+ const fractionalPath=process.env.TINIXCUT_CDP_PROJECT+'.fractional.tcproj';
+ const fractional=JSON.parse(readFileSync(process.env.TINIXCUT_CDP_PROJECT,'utf8'));
+ fractional.settings.frame_rate={numerator:30000,denominator:1001};
+ fractional.markers.forEach((marker,n)=>{marker.position={value:n*300,rate:fractional.settings.frame_rate};});
+ writeFileSync(fractionalPath,JSON.stringify(fractional));
+ const fractionalOpened=await invoke('project_open',{path:fractionalPath});
+ assert.deepEqual(fractionalOpened.settings.frame_rate,{numerator:30000,denominator:1001});
+ await page.reload();
+ try{await later.waitFor({timeout:2000});await later.click();}catch(error){if(error.name!=='TimeoutError')throw error;}
+ await picker.waitFor();assert.equal(await picker.locator('option').count(),31);
+ assert.equal(await picker.locator('option[value="marker_nav_29"]').textContent(),'Review 29 — 04:50.29 (8700f)');
+ const fractionalBefore=await get();
+ await picker.selectOption('marker_nav_29');
+ await page.waitForFunction(()=>document.querySelector('#preview-frame-seek')?.value==='8700');
+ await page.waitForFunction(()=>{const v=document.querySelector('.timeline-scroll-viewport');const m=document.querySelector('[aria-label="Marker Review 29 at frame 8700"]');if(!v||!m)return false;const a=v.getBoundingClientRect(),b=m.getBoundingClientRect();return v.scrollLeft>0&&b.left>=a.left+155&&b.right<=a.right;});
+ assert.deepEqual(await get(),fractionalBefore);
+ report.steps.push('30000/1001 project: 30-marker list, far-marker label and seek/scroll verified without project mutation');
+ const seed=await get();const at=value=>({value,rate:seed.settings.frame_rate});
+ const boundaryOps=[
+  {operation_id:'boundary_track_a',operation:{type:'TrackCreate',payload:{track_id:'boundary_a',name:'Boundary A',kind:'Video'}}},
+  {operation_id:'boundary_track_b',operation:{type:'TrackCreate',payload:{track_id:'boundary_b',name:'Boundary B',kind:'Video'}}},
+  ...[['boundary_first','Boundary first','boundary_a',1000],['boundary_second','Boundary second','boundary_a',1060],['boundary_locked','Boundary locked','boundary_b',1030]].map(([id,name,track_id,start])=>({operation_id:`create_${id}`,operation:{type:'ClipCreate',payload:{track_id,item_id:id,name,kind:'Text',timeline_start:at(start),duration:at(60)}}})),
+  {operation_id:'lock_boundary',operation:{type:'TrackLockSet',payload:{track_id:'boundary_b',locked:true}}}
+ ];
+ await invoke('project_execute_command',{envelope:{schema_version:seed.schema_version,project_id:seed.project_id,base_revision:seed.revision,transaction_id:'boundary_seed',operations:boundaryOps}});
+ await page.reload();try{await later.waitFor({timeout:2000});await later.click();}catch(error){if(error.name!=='TimeoutError')throw error;}
+ const firstBoundary=page.getByRole('group',{name:/^Boundary first, Text clip/});
+ const secondBoundary=page.getByRole('group',{name:/^Boundary second, Text clip/});
+ await firstBoundary.click();assert.match(await firstBoundary.getAttribute('aria-label'),/selected/);
+ const goTo=async frame=>{await page.getByLabel('Go to frame',{exact:true}).fill(String(frame));await page.getByRole('button',{name:'Go',exact:true}).click();await page.waitForFunction(frame=>document.querySelector('#preview-frame-seek')?.value===String(frame),frame);};
+ const next=page.getByRole('button',{name:'Clip boundary ▶',exact:true});const previous=page.getByRole('button',{name:'◀ Clip boundary',exact:true});
+ const checkBoundary=async(button,frame)=>{await button.click();await page.waitForFunction(frame=>document.querySelector('#preview-frame-seek')?.value===String(frame),frame);};
+ const boundaryProject=await get();await goTo(999);
+ const pressBoundary=async(target,chord,frame)=>{await target.focus();await page.keyboard.press(chord);await page.waitForFunction(frame=>document.querySelector('#preview-frame-seek')?.value===String(frame),frame);};
+ await pressBoundary(firstBoundary,'Control+Alt+.',1000);await pressBoundary(firstBoundary,'Control+Alt+.',1030);await pressBoundary(firstBoundary,'Control+Alt+,',1000);
+ await page.getByLabel('Find marker').focus();await page.keyboard.press('Control+Alt+.');assert.equal(await page.locator('#preview-frame-seek').inputValue(),'1000','search input blocks boundary shortcut');
+ await page.getByRole('button',{name:/Caption editor/}).click();
+ const captionDialog=page.getByRole('dialog',{name:'Caption editor'});await captionDialog.waitFor();
+ await captionDialog.evaluate(el=>{el.tabIndex=-1;el.focus();});await page.keyboard.press('Control+Alt+.');
+ assert.equal(await page.locator('#preview-frame-seek').inputValue(),'1000','dialog blocks boundary shortcut');
+ await captionDialog.getByRole('button',{name:'Close caption editor'}).click();await goTo(999);
+ for(const frame of [1000,1030,1060,1090,1120])await checkBoundary(next,frame);
+ for(const frame of [1090,1060,1030,1000])await checkBoundary(previous,frame);
+ assert.deepEqual(await get(),boundaryProject);assert.match(await firstBoundary.getAttribute('aria-label'),/selected/);
+ await secondBoundary.click();await secondBoundary.press('Shift+ArrowRight');
+ await poll(p=>p.tracks.find(t=>t.track_id==='boundary_a').items.find(i=>i.item_id==='boundary_second').timeline_range.start.value===1070);
+ const movedBoundaries=await get();await goTo(1060);await pressBoundary(secondBoundary,'Control+Alt+.',1070);
+ await pressBoundary(secondBoundary,'Control+Alt+,',1060);
+ assert.deepEqual(await get(),movedBoundaries);assert.match(await secondBoundary.getAttribute('aria-label'),/selected/);
+ await page.getByRole('button',{name:/Undo/}).first().click();await poll(p=>p.tracks.find(t=>t.track_id==='boundary_a').items.find(i=>i.item_id==='boundary_second').timeline_range.start.value===1060);
+ const afterBoundaryUndo=await get();
+ await goTo(1060);await pressBoundary(secondBoundary,'Control+Alt+.',1090);await pressBoundary(secondBoundary,'Control+Alt+,',1060);
+ assert.deepEqual(await get(),afterBoundaryUndo);assert.match(await secondBoundary.getAttribute('aria-label'),/selected/);
+ await page.getByRole('button',{name:/Redo/}).first().click();await poll(p=>p.tracks.find(t=>t.track_id==='boundary_a').items.find(i=>i.item_id==='boundary_second').timeline_range.start.value===1070);
+ const afterBoundaryRedo=await get();
+ await goTo(1060);await pressBoundary(secondBoundary,'Control+Alt+.',1070);await pressBoundary(secondBoundary,'Control+Alt+,',1060);
+ assert.deepEqual(await get(),afterBoundaryRedo);assert.match(await secondBoundary.getAttribute('aria-label'),/selected/);
+ report.steps.push('Clip boundary navigation on adjacent clips and overlapping locked track; moving by 10 frames and Undo/Redo updates boundaries without navigation edits');
+ report.steps.push('Ctrl+Alt comma/period on focused clip, blocked in marker search/dialog, and after clip move Undo/Redo preserve project and selection');
  report.status='passed';console.log('PASS: isolated WebView pointer move/group/trim and command persistence');
 }catch(error){report.status='failed';report.error=String(error);throw error;}finally{clearTimeout(timer);writeFileSync('artifacts/background/cdp-pointer.json',JSON.stringify(report,null,2));await browser.close();}

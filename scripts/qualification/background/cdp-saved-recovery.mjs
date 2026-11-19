@@ -5,7 +5,7 @@ const path = process.env.TINIXCUT_CDP_PROJECT;
 if (!path) throw new Error('Missing scoped temporary project path');
 const recoveryPath = path.replace(/\.tcproj$/, '.tcproj.recovery');
 const meta = path + '.test.json';
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 10000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 10000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   const invoke = (command, args = {}) => page.evaluate(({command,args}) => window.__TAURI_INTERNALS__.invoke(command,args), {command,args});

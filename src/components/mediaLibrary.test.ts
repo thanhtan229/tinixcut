@@ -20,6 +20,14 @@ const assets: Asset[] = [
 ];
 
 describe("filterAndSortMediaAssets", () => {
+  it("sorts by usage count with stable name and identity ties and respects filters", () => {
+    const duplicate={...assets[0],asset_id:"video-a"};
+    const list=[assets[0],assets[1],duplicate,assets[2]];
+    const sort=(counts:Record<string,number>)=>filterAndSortMediaAssets(list,new Set(),"","all","all","usage-desc",counts).map(a=>a.asset_id);
+    expect(sort({"video-z":2,"video-a":2,"image-b":1})).toEqual(["video-a","video-z","image-b","audio-a"]);
+    expect(sort({"audio-a":3})).toEqual(["audio-a","image-b","video-a","video-z"]);
+    expect(filterAndSortMediaAssets(list,new Set(),"zebra","Video","all","usage-desc",{"video-z":2,"video-a":3}).map(a=>a.asset_id)).toEqual(["video-a","video-z"]);
+  });
   it("sorts durations across timebases and keeps unknown or invalid values last in both directions", () => {
     const timed: Asset[] = [
       {...assets[0], asset_id:"short", duration:{value:30,rate:{numerator:30,denominator:1}}},

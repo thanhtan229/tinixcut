@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 const stage = process.argv[2];
 const path = process.env.TINIXCUT_CDP_PROJECT;
 const meta = path + '.test.json';
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 10000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 10000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   if (!page) throw new Error('Missing qualification page');

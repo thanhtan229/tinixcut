@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Project, TimelineItem, rationalTimeToFrames, rationalTimeToSeconds } from "../types/project";
 import { buildCaptionTimingOperations, canMergeCaptions, canSplitCaptionAtFrame, captionMatchesSearch, collectCaptionRows, getCaptionTimingNotices, isValidCaptionDurationFrames, isValidCaptionStartFrame, type CaptionTimingDraft } from "./captionEditor";
 
@@ -13,7 +13,7 @@ interface CaptionEditorDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onSeek: (frame: number) => void;
-  onApplyEdits: (textDrafts: CaptionDraft[], timingDrafts: CaptionTimingDraft[]) => Promise<unknown>;
+  onApplyEdits: (textDrafts: CaptionDraft[], timingDrafts: CaptionTimingDraft[], expectedProject: { projectId: string; revision: number }) => Promise<unknown>;
   onMerge: (leftId: string, rightId: string) => Promise<unknown>;
   onSplit: (itemId: string, frame: number) => Promise<unknown>;
 }
@@ -25,7 +25,7 @@ function formatTime(item: TimelineItem): string {
 }
 
 export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
-  project,
+  project: incomingProject,
   playheadFrame,
   isOpen,
   onClose,
@@ -34,6 +34,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   onMerge,
   onSplit,
 }) => {
+  const [project, setDraftProject] = useState(incomingProject);
   const captions = useMemo(() => collectCaptionRows(project), [project]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [timingDrafts, setTimingDrafts] = useState<Record<string, { start_frame: number; duration_frames: number }>>({});
@@ -46,18 +47,37 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   const [replaceTo, setReplaceTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const closeFocusRef = useRef<HTMLElement | null>(null);
   const [mergeSelection, setMergeSelection] = useState<string[]>([]);
+  const applySucceeded = useRef(false);
+  const wasOpen = useRef(false);
+  const resetDrafts = (nextProject: Project | null) => {
+    const nextRows=collectCaptionRows(nextProject);
+    const nextRate=nextProject?.settings.frame_rate ?? {numerator:30,denominator:1};
+    setDraftProject(nextProject);
+    setDrafts(Object.fromEntries(nextRows.map(({item})=>[item.item_id,item.text_content ?? ""])));
+    setTimingDrafts(Object.fromEntries(nextRows.map(({item})=>[item.item_id,{start_frame:rationalTimeToFrames(item.timeline_range.start,nextRate),duration_frames:rationalTimeToFrames(item.timeline_range.duration,nextRate)}])));
+  };
 
   useEffect(() => {
-    setDrafts(Object.fromEntries(captions.map(({ item }) => [item.item_id, item.text_content ?? ""])))
-    const rate = project?.settings.frame_rate ?? { numerator: 30, denominator: 1 };
-    setTimingDrafts(Object.fromEntries(captions.map(({ item }) => [item.item_id, {
-      start_frame: rationalTimeToFrames(item.timeline_range.start, rate),
-      duration_frames: rationalTimeToFrames(item.timeline_range.duration, rate),
-    }])))
-  }, [project?.project_id, project?.revision]);
+    const opening = isOpen && !wasOpen.current;
+    wasOpen.current = isOpen;
+    if (!isOpen || busy) return;
+    const rate = project?.settings.frame_rate;
+    const hasDrafts = !!rate && captions.some(({item}) => {
+      const timing=timingDrafts[item.item_id];
+      return (drafts[item.item_id] ?? item.text_content ?? "") !== (item.text_content ?? "") || !!timing && (timing.start_frame !== rationalTimeToFrames(item.timeline_range.start,rate) || timing.duration_frames !== rationalTimeToFrames(item.timeline_range.duration,rate));
+    });
+    const revisionChanged = incomingProject?.project_id !== project?.project_id || incomingProject?.revision !== project?.revision;
+    const committedRevision = applySucceeded.current && revisionChanged;
+    if (!opening && hasDrafts && !committedRevision) { applySucceeded.current = false; return; }
+    applySucceeded.current = false;
+    resetDrafts(incomingProject);
+  }, [incomingProject?.project_id, incomingProject?.revision, isOpen, busy]);
 
   if (!isOpen || !project) return null;
+  const stale = !incomingProject || incomingProject.project_id !== project.project_id || incomingProject.revision !== project.revision;
 
   const scopedCaptions = captions.filter(row=>!trackFilter || row.trackId===trackFilter);
   const timingReview = getCaptionTimingNotices(scopedCaptions, project.settings.frame_rate, timingDrafts);
@@ -70,7 +90,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   });
   const invalidTimingTracks = [...timingReview.invalidTrackIds].map(id => project.tracks.find(track => track.track_id === id)?.name ?? id);
   const dirtyDrafts = captions
-    .filter(({ item }) => (drafts[item.item_id] ?? "") !== (item.text_content ?? ""))
+    .filter(({ item }) => (drafts[item.item_id] ?? item.text_content ?? "") !== (item.text_content ?? ""))
     .map(({ item }) => ({ item_id: item.item_id, text: drafts[item.item_id] ?? "" }));
   const dirtyTimingDrafts = captions.flatMap(({ item }) => {
     const draft = timingDrafts[item.item_id];
@@ -80,6 +100,18 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
     const originalDuration = rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate);
     return startFrame === originalStart && durationFrames === originalDuration ? [] : [{ item_id: item.item_id, start_frame: startFrame, duration_frames: durationFrames }];
   });
+  const pendingIds = new Set([...dirtyDrafts.map(draft => draft.item_id), ...dirtyTimingDrafts.map(draft => draft.item_id)]);
+  const visibleIds = new Set(filtered.map(({ item }) => item.item_id));
+  const hiddenPendingCount = [...pendingIds].filter(id => !visibleIds.has(id)).length;
+  const closeEditor = () => {
+    if (busy) return;
+    if (pendingIds.size > 0) { closeFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setConfirmClose(true); return; }
+    onClose();
+  };
+  const keepEditing = () => {
+    setConfirmClose(false);
+    requestAnimationFrame(() => closeFocusRef.current?.focus());
+  };
   let timingDraftsValid = dirtyTimingDrafts.every(({ start_frame, duration_frames }) => isValidCaptionStartFrame(start_frame) && isValidCaptionDurationFrames(duration_frames));
   if (timingDraftsValid && dirtyTimingDrafts.length > 0) {
     try { buildCaptionTimingOperations(project, dirtyTimingDrafts); } catch { timingDraftsValid = false; }
@@ -87,7 +119,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   const mergeReady = mergeSelection.length === 2
     && dirtyDrafts.length === 0
     && dirtyTimingDrafts.length === 0
-    && canMergeCaptions(project, mergeSelection[0], mergeSelection[1]);
+    && !stale && canMergeCaptions(project, mergeSelection[0], mergeSelection[1]);
 
   const applyReplace = () => {
     if (!replaceFrom) return;
@@ -103,11 +135,12 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   };
 
   const applyEdits = async () => {
-    if (dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0) return;
+    if (stale || dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0) return;
     setBusy(true);
     setActionError(null);
     try {
-      await onApplyEdits(dirtyDrafts, dirtyTimingDrafts);
+      await onApplyEdits(dirtyDrafts, dirtyTimingDrafts, {projectId:project.project_id,revision:project.revision});
+      applySucceeded.current = true;
     } catch (error) {
       setActionError(String(error));
     } finally {
@@ -140,14 +173,14 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
   };
 
   return (
-    <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,.68)", display: "grid", placeItems: "center", padding: 20 }}>
+    <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditor(); }} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,.68)", display: "grid", placeItems: "center", padding: 20 }}>
       <section role="dialog" aria-modal="true" aria-labelledby="caption-editor-title" style={{ width: "min(960px, 96vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", gap: 12, padding: 18, borderRadius: 10, background: "var(--bg-primary)", color: "var(--text-primary)", border: "1px solid var(--border-color)" }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <h2 id="caption-editor-title" style={{ margin: 0, fontSize: 18 }}>Caption editor</h2>
             <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{captions.length} text clips · edit captions before applying one undoable change</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close caption editor">Close</button>
+          <button type="button" onClick={closeEditor} disabled={busy} aria-label="Close caption editor">Close</button>
         </header>
 
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
@@ -173,13 +206,30 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
         </div>
 
         {actionError && <p role="alert" style={{ color: "var(--danger, #f66)" }}>{actionError}</p>}
+        {stale && <p role="alert">Project changed while editing. Your draft is preserved for copying; discard edits to load the current project before applying.</p>}
+        {confirmClose && <div role="alertdialog" aria-modal="true" aria-labelledby="caption-discard-title" onKeyDown={event => {
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); keepEditing(); }
+          if (event.key === "Tab") { const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>("button"); if (buttons.length === 2) { event.preventDefault(); (document.activeElement === buttons[0] ? buttons[1] : buttons[0]).focus(); } }
+        }} style={{position:"absolute",inset:0,zIndex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,background:"var(--bg-primary)"}}>
+          <p id="caption-discard-title">Discard pending edits in {pendingIds.size} caption{pendingIds.size === 1 ? "" : "s"}?</p>
+          <button type="button" autoFocus onClick={keepEditing}>Keep editing</button>{" "}
+          <button type="button" onClick={() => { setConfirmClose(false); resetDrafts(incomingProject); onClose(); }}>Discard and close</button>
+        </div>}
         <p style={{fontSize:12,color:"var(--text-muted)"}}>{filtered.length} shown · Replace affects {trackFilter ? "the selected track" : "all tracks"}, including captions hidden by search or timing filters. Apply includes pending edits from every track.</p>
+        {hiddenPendingCount > 0 && <p aria-live="polite" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>{hiddenPendingCount} {hiddenPendingCount === 1 ? "caption has" : "captions have"} pending edits hidden by filters.</p>}
         <p style={{fontSize:12,color:"var(--text-muted)"}}>Timing notices compare captions within each track, including rows hidden by search and valid pending edits. Gaps can be intentional.</p>
         {invalidTimingTracks.length > 0 && <p role="status" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>Timing notices unavailable for {invalidTimingTracks.join(", ")}: enter valid start and duration frames for every caption on that track. Select Invalid timing to find invalid entries.</p>}
 
         <div style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(({ item, trackName, locked }) => {
             const startFrame = rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate);
+            const draftStart = timingDrafts[item.item_id]?.start_frame ?? startFrame;
+            const originalDuration = rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate);
+            const draftDuration = timingDrafts[item.item_id]?.duration_frames ?? originalDuration;
+            const validDraftStart = isValidCaptionStartFrame(draftStart);
+            const lastFrame = draftStart + draftDuration - 1;
+            const validLastFrame = validDraftStart && isValidCaptionDurationFrames(draftDuration) && Number.isSafeInteger(draftStart + draftDuration);
+            const hasDraftTiming = draftStart !== startFrame || draftDuration !== originalDuration;
             const canSplit = canSplitCaptionAtFrame(item, playheadFrame, project.settings.frame_rate);
             const hasPendingEdits = dirtyDrafts.some(draft => draft.item_id === item.item_id) || dirtyTimingDrafts.some(draft => draft.item_id === item.item_id);
             return (
@@ -188,7 +238,8 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
                   const checked = event.currentTarget.checked;
                   setMergeSelection((current) => checked ? [...current, item.item_id] : current.filter((id) => id !== item.item_id));
                 }} />
-                <button type="button" onClick={() => onSeek(startFrame)} title="Seek to caption start" style={{ textAlign: "left" }}>{formatTime(item)}</button>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}><button type="button" disabled={stale || !validDraftStart} onClick={() => onSeek(draftStart)} title={!validDraftStart ? "Enter a valid start frame to seek" : draftStart !== startFrame ? "Seek to draft caption start; edits are not applied yet" : "Seek to caption start"} style={{ textAlign: "left" }}>{formatTime(item)}{draftStart !== startFrame && validDraftStart && <><br />Draft: {draftStart}f</>}</button>
+                <button type="button" aria-label={`Go to last frame of caption ${item.item_id}`} disabled={stale || !validLastFrame} onClick={() => onSeek(lastFrame)} title={!validLastFrame ? "Enter valid start and duration frames to seek" : hasDraftTiming ? "Seek to draft caption last frame; edits are not applied yet" : "Seek to caption last frame"}>Last frame</button></div>
                 <label style={{ fontSize: 11, color: "var(--text-muted)" }}>Start frame
                   <input aria-label={`Start frame ${item.item_id}`} type="number" min={0} step={1} disabled={locked || busy} value={timingDrafts[item.item_id]?.start_frame ?? startFrame} onChange={(event) => {
                     const value = event.currentTarget.value === "" ? Number.NaN : Number(event.currentTarget.value);
@@ -204,11 +255,11 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
                   }} style={{ width: "100%" }} />
                 </label>
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{trackName}{locked ? " · locked" : ""}{timingReview.notices[item.item_id] && <><br /><span style={{color:"var(--text-warning, #f59e0b)"}}>{timingReview.notices[item.item_id].kind === "gap" ? "Gap before" : "Overlap with earlier captions"}: {timingReview.notices[item.item_id].frames} frames</span></>}</span>
-                <textarea aria-label={`Caption text ${formatTime(item)}`} rows={2} disabled={locked} value={drafts[item.item_id] ?? ""} onChange={(event) => {
+                <textarea aria-label={`Caption text ${formatTime(item)}`} rows={2} disabled={locked} value={drafts[item.item_id] ?? item.text_content ?? ""} onChange={(event) => {
                   const value = event.currentTarget.value;
                   setDrafts((current) => ({ ...current, [item.item_id]: value }));
                 }} />
-                <div style={{display:"flex", flexDirection:"column", gap:4}}><button type="button" disabled={locked || !canSplit || busy || dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0} onClick={() => void splitAtPlayhead(item.item_id)} title={locked ? "Unlock this track before editing" : dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0 ? "Apply caption edits before splitting" : "Split this caption at the playhead"}>Split here</button>
+                <div style={{display:"flex", flexDirection:"column", gap:4}}><button type="button" disabled={stale || locked || !canSplit || busy || dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0} onClick={() => void splitAtPlayhead(item.item_id)} title={locked ? "Unlock this track before editing" : dirtyDrafts.length > 0 || dirtyTimingDrafts.length > 0 ? "Apply caption edits before splitting" : "Split this caption at the playhead"}>Split here</button>
                 <button type="button" aria-label={`Discard caption edits ${item.item_id}`} disabled={locked || busy || !hasPendingEdits} onClick={() => {
                   setDrafts(current => ({...current, [item.item_id]: item.text_content ?? ""}));
                   setTimingDrafts(current => ({...current, [item.item_id]: {start_frame: startFrame, duration_frames: rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate)}}));
@@ -223,14 +274,10 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
           <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{dirtyDrafts.length} text edits · {dirtyTimingDrafts.length} timing edits</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" onClick={() => {
-              setDrafts(Object.fromEntries(captions.map(({ item }) => [item.item_id, item.text_content ?? ""])));
-              setTimingDrafts(Object.fromEntries(captions.map(({ item }) => [item.item_id, {
-                start_frame: rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate),
-                duration_frames: rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate),
-              }])));
+              resetDrafts(incomingProject);
               setActionError(null);
-            }} disabled={dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0 || busy}>Discard edits</button>
-            <button type="button" onClick={() => void applyEdits()} disabled={dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0 || !timingDraftsValid || busy}>{busy ? "Applying…" : "Apply edits"}</button>
+            }} disabled={!stale && dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0 || busy}>Discard edits</button>
+            <button type="button" onClick={() => void applyEdits()} disabled={stale || dirtyDrafts.length === 0 && dirtyTimingDrafts.length === 0 || !timingDraftsValid || busy}>{busy ? "Applying…" : "Apply edits"}</button>
             <button type="button" onClick={() => void mergeSelected()} disabled={!mergeReady || busy}>{busy ? "Applying…" : "Merge adjacent"}</button>
           </div>
         </footer>

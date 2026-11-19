@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjacentMarkerFrame, anchoredTimelineScroll, fitTimelineRange, stepTimelineZoom, timelineRulerTicks, timelineViewRange, TIMELINE_HEADER_WIDTH } from "./timelineNavigation";
+import { adjacentMarkerFrame, adjacentClipBoundary, anchoredTimelineScroll, fitTimelineRange, stepTimelineZoom, timelineRulerTicks, timelineViewRange, nextMarkerLabel, markerTimeLabel, TIMELINE_HEADER_WIDTH } from "./timelineNavigation";
 import { Project } from "../types/project";
 
 const project = { settings: { frame_rate: { numerator: 30, denominator: 1 } }, tracks: [
@@ -8,6 +8,26 @@ const project = { settings: { frame_rate: { numerator: 30, denominator: 1 } }, t
 ] } as Project;
 
 describe("timeline view geometry", () => {
+  it("navigates distinct clip boundaries across locked tracks and timebases", () => {
+    const before=JSON.stringify(project);
+    expect(adjacentClipBoundary(project,0,1)).toBe(60);
+    expect(adjacentClipBoundary(project,60,1)).toBe(150);
+    expect(adjacentClipBoundary(project,150,1)).toBe(18000);
+    expect(adjacentClipBoundary(project,18000,-1)).toBe(150);
+    expect(adjacentClipBoundary(project,18060,1)).toBeNull();
+    expect(adjacentClipBoundary(project,60,-1)).toBeNull();
+    expect(adjacentClipBoundary(project,150,1,new Set(["a"]))).toBeNull();
+    expect(adjacentClipBoundary(project,0,1,new Set(["b"]))).toBe(18000);
+    expect(adjacentClipBoundary(project,60,1,new Set(["a","b"]))).toBe(150);
+    expect(adjacentClipBoundary(project,0,1,new Set(["missing"]))).toBeNull();
+    expect(adjacentClipBoundary(project,0,1,new Set())).toBeNull();
+    expect(adjacentClipBoundary(null,0,1)).toBeNull();
+    expect(JSON.stringify(project)).toBe(before);
+  });
+  it("labels markers with elapsed time and the exact frame at integer and fractional rates", () => {
+    expect(markerTimeLabel(8700, { numerator: 30, denominator: 1 })).toBe("04:50 (8700f)");
+    expect(markerTimeLabel(30, { numerator: 30000, denominator: 1001 })).toBe("00:01.001 (30f)");
+  });
   it("uses actual frame grids across locked tracks and ignores stale selected IDs without mutation", () => {
     const before = JSON.stringify(project);
     expect(timelineViewRange(project)).toEqual({ start: 0, end: 18060 });
@@ -71,6 +91,11 @@ describe("visible adaptive ruler", () => {
 
 
 describe("marker navigation",()=>{
+ it("chooses an unused default label after deletion or rename",()=>{
+  expect(nextMarkerLabel([])).toBe("Marker 1");
+  expect(nextMarkerLabel([{label:"Marker 2"},{label:" marker 1 "},{label:"Custom"}])).toBe("Marker 3");
+  expect(nextMarkerLabel([{label:"Marker 1"},{label:"Marker 3"}])).toBe("Marker 2");
+ });
  it("uses nearest strictly earlier or later marker on the project frame grid without wrapping or mutation",()=>{
   const marked={...project,markers:[{marker_id:"a",label:"A",position:{value:2,rate:{numerator:1,denominator:1}}},{marker_id:"b",label:"B",position:{value:15,rate:{numerator:30,denominator:1}}},{marker_id:"c",label:"C",position:{value:60,rate:{numerator:30,denominator:1}}}]};
   const before=JSON.stringify(marked);

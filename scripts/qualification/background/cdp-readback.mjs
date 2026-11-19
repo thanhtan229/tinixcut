@@ -1,7 +1,9 @@
 import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 10000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 10000 });
 try {
   const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
   if (!page) throw new Error('No qualification page');
@@ -28,6 +30,95 @@ try {
   await page.reload();
   await dismissRecovery();
   await page.getByRole('button', { name: /Caption editor/ }).click();
+  const beforeExternal=await invoke('project_get_current');
+  const staleText=page.getByRole('textbox',{name:'Caption text 0.00–1.00s'});
+  await staleText.fill('Keep this draft');await page.getByLabel('Start frame cdp_left').fill('5');
+  await invoke('project_execute_command',{envelope:{schema_version:beforeExternal.schema_version,project_id:beforeExternal.project_id,base_revision:beforeExternal.revision,transaction_id:'external_marker_change',operations:[{operation_id:'external_marker',operation:{type:'ProjectMarkerSet',payload:{marker_id:'external_marker',label:'External',position:time(0)}}}]}});
+  await page.getByRole('button',{name:/Undo/}).first().evaluate(button=>button.click());
+  await page.getByText(/Project changed while editing/).waitFor();
+  assert.equal(await staleText.inputValue(),'Keep this draft');assert.equal(await page.getByLabel('Start frame cdp_left').inputValue(),'5');
+  assert.equal(await page.getByRole('button',{name:'Apply edits',exact:true}).isDisabled(),true);
+  await page.getByRole('button',{name:'Discard edits',exact:true}).click();
+  assert.equal(await staleText.inputValue(),'Xin chào');assert.equal(await page.getByLabel('Start frame cdp_left').inputValue(),'0');
+  await staleText.fill('Queued draft');
+  const beforeRace=await invoke('project_get_current');
+  await invoke('project_execute_command',{envelope:{schema_version:beforeRace.schema_version,project_id:beforeRace.project_id,base_revision:beforeRace.revision,transaction_id:'external_marker_race',operations:[{operation_id:'external_marker_race',operation:{type:'ProjectMarkerSet',payload:{marker_id:'external_marker_race',label:'External race',position:time(0)}}}]}});
+  await page.getByRole('button',{name:'Apply edits',exact:true}).click();
+  await page.getByText(/Project changed; caption draft was not applied/).waitFor();
+  await page.getByText(/Project changed while editing/).waitFor();
+  assert.equal(await staleText.inputValue(),'Queued draft');assert.equal((await invoke('project_get_current')).tracks[0].items[0].text_content,'Xin chào');
+  await page.getByRole('button',{name:/Undo/}).first().evaluate(button=>button.click());
+  await page.getByText(/Project changed while editing/).waitFor();
+  await page.getByRole('button',{name:'Discard edits',exact:true}).click();
+  const lastLeft=page.getByRole('button',{name:'Go to last frame of caption cdp_left'});
+  const lastRight=page.getByRole('button',{name:'Go to last frame of caption cdp_right'});
+  const seekLast=async (button, frame)=>{await button.click();await page.waitForFunction(frame=>document.querySelector('#preview-frame-seek')?.value===String(frame),frame);};
+  await seekLast(lastLeft,29);await seekLast(lastRight,59);
+  const beforeTiming=await invoke('project_get_current');
+  await page.getByLabel('Duration frames cdp_left').fill('25');
+  await page.getByLabel('Duration frames cdp_right').fill('28');
+  await seekLast(lastLeft,24);await seekLast(lastRight,57);
+  assert.deepEqual(await invoke('project_get_current'),beforeTiming,'draft seek leaves project unchanged');
+  await page.getByLabel('Duration frames cdp_left').fill('');assert.equal(await lastLeft.isDisabled(),true);
+  await page.getByLabel('Duration frames cdp_left').fill('25');
+  await page.getByRole('button',{name:'Apply edits',exact:true}).click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items[0].timeline_range.duration.value===25&&p.tracks[0].items[1].timeline_range.duration.value===28));
+  await seekLast(lastLeft,24);await seekLast(lastRight,57);
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items.every(i=>i.timeline_range.duration.value===30)));
+  await page.getByRole('button',{name:/Caption editor/}).click();await seekLast(lastLeft,29);await seekLast(lastRight,59);
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items[0].timeline_range.duration.value===25));
+  await page.getByRole('button',{name:/Caption editor/}).click();await seekLast(lastLeft,24);await seekLast(lastRight,57);
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items.every(i=>i.timeline_range.duration.value===30)));
+  await page.getByRole('button',{name:/Caption editor/}).click();
+  const leftText=page.getByRole('textbox',{name:'Caption text 0.00–1.00s'});
+  const rightText=page.getByRole('textbox',{name:'Caption text 1.00–2.00s'});
+  await leftText.fill('Bản nháp trái');await rightText.fill('Bản nháp phải');
+  await page.getByLabel('Search captions').fill('trái');
+  await page.getByText('1 caption has pending edits hidden by filters.').waitFor();
+  const cancelClose = async () => {
+    await page.getByRole('button',{name:'Close caption editor'}).click();
+    const confirmation=page.getByRole('alertdialog',{name:'Discard pending edits in 2 captions?'});
+    await confirmation.waitFor();
+    const keep=confirmation.getByRole('button',{name:'Keep editing'});
+    const discard=confirmation.getByRole('button',{name:'Discard and close'});
+    assert.equal(await keep.evaluate(el=>document.activeElement===el),true,'focus begins on safe choice');
+    await page.keyboard.press('Tab');assert.equal(await discard.evaluate(el=>document.activeElement===el),true);
+    await page.keyboard.press('Tab');assert.equal(await keep.evaluate(el=>document.activeElement===el),true);
+    await page.keyboard.press('Shift+Tab');assert.equal(await discard.evaluate(el=>document.activeElement===el),true);
+    await page.keyboard.press('Escape');await confirmation.waitFor({state:'detached'});
+    await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Close caption editor');
+  };
+  await cancelClose();
+  assert.equal(await leftText.inputValue(),'Bản nháp trái');
+  await page.getByRole('button',{name:'Apply edits',exact:true}).click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items[0].text_content==='Bản nháp trái'&&p.tracks[0].items[1].text_content==='Bản nháp phải'));
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks[0].items[0].text_content==='Xin chào'&&p.tracks[0].items[1].text_content==='Việt Nam'));
+  await page.getByRole('button',{name:/Caption editor/}).click();
+  await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+  await leftText.fill('Bỏ trái');await rightText.fill('Bỏ phải');
+  await page.getByLabel('Filter caption timing').selectOption('edited');
+  await page.getByLabel('Search captions').fill('trái');
+  await cancelClose();
+  await page.getByRole('button',{name:'Discard edits',exact:true}).click();
+  await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+  assert.equal(await leftText.inputValue(),'Xin chào');assert.equal(await rightText.inputValue(),'Việt Nam');
+  assert.equal(await page.getByRole('button',{name:'Apply edits',exact:true}).isDisabled(),true);
+  await leftText.fill('Không lưu');
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  const closeConfirmation=page.getByRole('alertdialog',{name:'Discard pending edits in 1 caption?'});
+  await closeConfirmation.waitFor();await page.keyboard.press('Tab');await page.keyboard.press('Enter');
+  await page.getByRole('dialog',{name:'Caption editor'}).waitFor({state:'detached'});
+  assert.equal((await invoke('project_get_current')).tracks[0].items[0].text_content,'Xin chào');
+  await page.getByRole('button',{name:/Caption editor/}).click();
+  assert.equal(await leftText.inputValue(),'Xin chào','discard and close clears drafts on reopen');
   await page.getByRole('checkbox', { name: 'Select caption cdp_left to merge' }).check();
   await page.getByRole('checkbox', { name: 'Select caption cdp_right to merge' }).check();
   const draft = page.getByRole('textbox', { name: 'Caption text 0.00–1.00s' });
@@ -76,8 +167,16 @@ try {
   const asset = await invoke('media_import', { filePath: wavPath });
   await page.reload();
   await dismissRecovery();
+  const usageOptions = page.getByLabel('Filter media usage').locator('option');
+  const expectUsage = async (used, unused) => {
+    await page.waitForFunction(([used, unused]) => {
+      const options = document.querySelector('[aria-label="Filter media usage"]')?.options;
+      return options?.[1]?.textContent === `Used (${used})` && options?.[2]?.textContent === `Unused (${unused})`;
+    }, [used, unused]);
+  };
+  await expectUsage(0, 1);
   await page.getByRole('button', { name: 'Preview', exact: true }).click();
-  const beforeReset = await invoke('project_get_current');
+  let beforeReset = await invoke('project_get_current');
   await page.getByLabel('Source In seconds').fill('0.2');
   await page.getByLabel('Source Out seconds').fill('0.7');
   await page.getByRole('button', { name: 'Reset source range', exact: true }).click();
@@ -85,6 +184,25 @@ try {
   assert.equal(await page.getByLabel('Source Out seconds').inputValue(), '1');
   assert.deepEqual(await invoke('project_get_current'), beforeReset);
   const addRange = page.getByRole('button', { name: 'Add range to timeline', exact: true });
+  await page.getByLabel('Source Out seconds').fill('0.0166');
+  assert.equal(await addRange.isDisabled(),true);await page.getByText('Select at least one project frame').waitFor();
+  await page.getByLabel('Source Out seconds').fill('0.0167');assert.equal(await addRange.isEnabled(),true);
+  const beforeBoundary=await invoke('project_get_current');await addRange.click();
+  let boundaryClip;for(let n=0;n<50;n++){const p=await invoke('project_get_current');boundaryClip=p.tracks.flatMap(t=>t.items).find(i=>i.asset_id===asset.asset_id);if(boundaryClip)break;await new Promise(r=>setTimeout(r,100));}
+  assert.ok(boundaryClip);assert.equal(boundaryClip.source_range.start.value,0);assert.equal(boundaryClip.timeline_range.duration.value,1);
+  await expectUsage(1, 0);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  for(let n=0;n<50;n++){const p=await invoke('project_get_current');if(!p.tracks.flatMap(t=>t.items).some(i=>i.item_id===boundaryClip.item_id))break;await new Promise(r=>setTimeout(r,100));}
+  assert.deepEqual((await invoke('project_get_current')).tracks,beforeBoundary.tracks);
+  await expectUsage(0, 1);
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  let restored;for(let n=0;n<50;n++){const p=await invoke('project_get_current');restored=p.tracks.flatMap(t=>t.items).find(i=>i.item_id===boundaryClip.item_id);if(restored)break;await new Promise(r=>setTimeout(r,100));}assert.deepEqual(restored,boundaryClip);
+  await expectUsage(1, 0);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  for(let n=0;n<50;n++){const p=await invoke('project_get_current');if(!p.tracks.flatMap(t=>t.items).some(i=>i.item_id===boundaryClip.item_id))break;await new Promise(r=>setTimeout(r,100));}
+  assert.deepEqual((await invoke('project_get_current')).tracks,beforeBoundary.tracks);
+  await page.getByRole('button',{name:'Preview',exact:true}).click();
+  beforeReset=await invoke('project_get_current');
   await page.getByLabel('Source In seconds').fill('');
   assert.equal(await addRange.isDisabled(), true);
   await page.getByText('Enter a valid source range', { exact: true }).waitFor();
@@ -95,10 +213,34 @@ try {
   await page.getByLabel('Source Out seconds').fill('0.5');
   assert.equal(await addRange.isEnabled(), true);
   assert.deepEqual(await invoke('project_get_current'), beforeReset);
+  await page.getByRole('button', { name: 'Go to source end', exact: true }).click();
+  await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && Math.abs(a.currentTime-1)<0.001; });
+  assert.equal(await page.getByRole('button', { name: 'Go to source end', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Go to source start', exact: true }).click();
+  await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && a.currentTime===0; });
+  assert.equal(await page.getByRole('button', { name: 'Go to source start', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel('Source In seconds').inputValue(), '0.1');
+  assert.equal(await page.getByLabel('Source Out seconds').inputValue(), '0.5');
+  assert.deepEqual(await invoke('project_get_current'), beforeReset);
   await page.getByRole('button', { name: 'Go to source Out', exact: true }).click();
   await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && Math.abs(a.currentTime-0.5)<0.04; });
   await page.getByRole('button', { name: 'Go to source In', exact: true }).click();
   await page.waitForFunction(() => { const a=document.querySelector('audio'); return a && a.paused && Math.abs(a.currentTime-0.1)<0.04; });
+  await page.getByRole('button', { name: 'Next project frame', exact: true }).click();
+  await page.waitForFunction(() => Math.abs(document.querySelector('audio').currentTime - 4/30) < 0.001);
+  await page.getByRole('button', { name: 'Previous project frame', exact: true }).click();
+  await page.waitForFunction(() => Math.abs(document.querySelector('audio').currentTime - 0.1) < 0.001);
+  await page.getByLabel('Source In seconds').fill('0.2');
+  await page.getByLabel('Source In seconds').focus();await page.keyboard.press('i');
+  assert.equal(await page.getByLabel('Source In seconds').inputValue(),'0.2','I does not change In while typing');
+  await page.getByRole('dialog',{name:'Source viewer'}).focus();await page.keyboard.press('i');
+  assert.equal(await page.getByLabel('Source In seconds').inputValue(),'0.1');
+  await page.getByRole('button', { name: 'Go to source Out', exact: true }).click();
+  await page.getByLabel('Source Out seconds').fill('0.8');
+  await page.getByLabel('Source Out seconds').focus();await page.keyboard.press('o');
+  assert.equal(await page.getByLabel('Source Out seconds').inputValue(),'0.8','O does not change Out while typing');
+  await page.getByRole('dialog',{name:'Source viewer'}).focus();await page.keyboard.press('o');
+  assert.equal(await page.getByLabel('Source Out seconds').inputValue(),'0.5');
   const beforeInsert = await invoke('project_get_current');
   await addRange.click();
   let added;
@@ -118,9 +260,142 @@ try {
   await page.getByRole('button',{name:/Redo/}).first().click();
   let redone;for(let n=0;n<50;n++){redone=await invoke('project_get_current');if(redone.tracks.flatMap(t=>t.items).some(i=>i.item_id===added.item_id))break;await new Promise(r=>setTimeout(r,100));}
   assert.deepEqual(redone.tracks.flatMap(t=>t.items).find(i=>i.item_id===added.item_id),added);
+  await expectUsage(1, 0);
+  const clip = page.locator('[data-timeline-clip="true"]').filter({hasText: added.name});
+  await clip.click();
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(id => window.__TAURI_INTERNALS__.invoke('project_get_current').then(p => !p.tracks.flatMap(t => t.items).some(i => i.item_id === id)), added.item_id);
+  await expectUsage(0, 1);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await expectUsage(1, 0);
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  await expectUsage(0, 1);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await expectUsage(1, 0);
+  assert.deepEqual(await usageOptions.allTextContents(), ['All usage (1)', 'Used (1)', 'Unused (0)']);
   await invoke('project_save', { path });
   const rangeReopened = await invoke('project_open', { path });
   assert.ok(rangeReopened.tracks.flatMap(t => t.items).some(i => i.asset_id === asset.asset_id));
-  writeFileSync('artifacts/background/cdp-smoke.json', JSON.stringify({ health, url: page.url(), domLength: dom.length, caption: 'UI draft guard/merge/Undo/Redo/timing/split; command save/reopen', sourceViewer: 'Native WAV import; UI changed range, reset, reselect 0.1–0.5 s, seek boundaries, insert, Undo/Redo and save/reopen', revision: rangeReopened.revision, preview: 'Text fixture screenshot; playback unqualified' }, null, 2));
+  const secondPath=path+'.z.wav';writeFileSync(secondPath,wav);
+  const secondAsset=await invoke('media_import',{filePath:secondPath});
+  await page.reload();await dismissRecovery();
+  await page.getByLabel('Sort media').selectOption('usage-desc');
+  const rows=page.locator('.panel-content > div > div');
+  const expectFirst=async name=>page.waitForFunction(name=>document.querySelector('.panel-content > div > div')?.textContent.includes(name),name);
+  await expectFirst(asset.name);
+  const secondRow=rows.filter({has:page.getByLabel(`Source path for ${secondAsset.name}`)});
+  const countSecond=async()=> (await invoke('project_get_current')).tracks.flatMap(t=>t.items).filter(i=>i.asset_id===secondAsset.asset_id);
+  for(let n=1;n<=2;n++){
+    await secondRow.getByRole('button',{name:'+ Timeline',exact:true}).click();
+    await page.waitForFunction(({assetId,n})=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks.flatMap(t=>t.items).filter(i=>i.asset_id===assetId).length===n),{assetId:secondAsset.asset_id,n});
+  }
+  await expectFirst(secondAsset.name);
+  await page.getByRole('button',{name:/Undo/}).first().click();await expectFirst(asset.name);
+  assert.equal((await countSecond()).length,1);
+  await page.getByRole('button',{name:/Redo/}).first().click();await expectFirst(secondAsset.name);
+  const secondItems=await countSecond();assert.equal(secondItems.length,2);
+  await page.getByRole('group',{name:new RegExp(`^${secondAsset.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}, Audio clip`)}).last().click();
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(assetId=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks.flatMap(t=>t.items).filter(i=>i.asset_id===assetId).length===1),secondAsset.asset_id);
+  await expectFirst(asset.name);
+  await page.getByRole('button',{name:/Undo/}).first().click();await expectFirst(secondAsset.name);
+  await page.getByRole('button',{name:/Redo/}).first().click();await expectFirst(asset.name);
+  assert.equal((await countSecond()).length,1);
+  const multiSeed=await invoke('project_get_current');
+  await invoke('project_execute_command',{envelope:{schema_version:multiSeed.schema_version,project_id:multiSeed.project_id,base_revision:multiSeed.revision,transaction_id:'multi_draft_seed',operations:[
+    {operation_id:'extra_track',operation:{type:'TrackCreate',payload:{track_id:'extra_captions',name:'Second captions',kind:'Video'}}},
+    {operation_id:'extra_clip',operation:{type:'ClipCreate',payload:{track_id:'extra_captions',item_id:'extra_caption',name:'Extra caption',kind:'Text',timeline_start:time(0),duration:time(30)}}},
+    {operation_id:'extra_text',operation:{type:'ClipTextSet',payload:{item_id:'extra_caption',text:'Second original'}}}
+  ]}});
+  await page.reload();await dismissRecovery();await page.getByRole('button',{name:/Caption editor/}).click();
+  const draftRow=id=>page.locator('article').filter({has:page.getByLabel(`Start frame ${id}`)});
+  const firstDraft=draftRow('cdp_left').locator('textarea');const secondDraft=draftRow('extra_caption').locator('textarea');
+  await firstDraft.fill('Bản nháp track một');await secondDraft.fill('Bản nháp track hai');
+  await page.getByLabel('Start frame extra_caption').fill('3');
+  const beforeDeletion=await invoke('project_get_current');
+  await invoke('project_execute_command',{envelope:{schema_version:beforeDeletion.schema_version,project_id:beforeDeletion.project_id,base_revision:beforeDeletion.revision,transaction_id:'multi_draft_external_delete',operations:[{operation_id:'remove_extra',operation:{type:'ClipDelete',payload:{item_id:'extra_caption'}}}]}});
+  await page.getByRole('button',{name:'Apply edits',exact:true}).click();
+  await page.getByText(/Project changed while editing/).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Apply edits',exact:true}).isDisabled(),true);
+  for(const [field,expected] of [[firstDraft,'Bản nháp track một'],[secondDraft,'Bản nháp track hai']]){
+    const selected=await field.evaluate(el=>{el.focus();el.select();return el.value.slice(el.selectionStart,el.selectionEnd);});
+    assert.equal(selected,expected,'stale draft remains selectable for copying');
+  }
+  assert.equal(await page.getByLabel('Start frame extra_caption').inputValue(),'3');
+  await page.getByRole('button',{name:'Discard edits',exact:true}).click();
+  assert.equal(await page.getByLabel('Start frame extra_caption').count(),0);
+  assert.notEqual(await firstDraft.inputValue(),'Bản nháp track một');
+  assert.equal(await page.getByRole('button',{name:'Apply edits',exact:true}).isDisabled(),true);
+  await page.getByRole('button',{name:'Close caption editor'}).click();
+  const mixVideo=path+'.mix.mp4',mixAudio=path+'.mix.wav';
+  execFileSync(resolve('src-tauri/resources/bin/ffmpeg.exe'),['-v','error','-y','-f','lavfi','-i','color=c=black:s=64x64:r=30:d=4','-an','-c:v','libx264','-preset','ultrafast',mixVideo],{windowsHide:true,timeout:30000});
+  execFileSync(resolve('src-tauri/resources/bin/ffmpeg.exe'),['-v','error','-y','-f','lavfi','-i','anullsrc=r=8000:cl=mono','-t','6','-c:a','pcm_s16le',mixAudio],{windowsHide:true,timeout:10000});
+  const mixV=await invoke('media_import',{filePath:mixVideo}),mixA=await invoke('media_import',{filePath:mixAudio});
+  const rt=(value,numerator,denominator=1)=>({value,rate:{numerator,denominator}});
+  const mixSeed=await invoke('project_get_current');
+  const mixOps=[
+    {operation_id:'mix_v_track',operation:{type:'TrackCreate',payload:{track_id:'mix_v',name:'Voice test',kind:'Video'}}},
+    {operation_id:'mix_a_track',operation:{type:'TrackCreate',payload:{track_id:'mix_a',name:'Music test',kind:'Audio'}}},
+    {operation_id:'mix_voice',operation:{type:'ClipCreate',payload:{track_id:'mix_v',item_id:'mix_voice',name:'Voice fixture',kind:'Video',asset_id:mixV.asset_id,timeline_start:rt(1000,1000),duration:rt(2,1),source_start:rt(0,30)}}},
+    {operation_id:'mix_music',operation:{type:'ClipCreate',payload:{track_id:'mix_a',item_id:'mix_music',name:'Music fixture',kind:'Audio',asset_id:mixA.asset_id,timeline_start:rt(0,25),duration:rt(150,25),source_start:rt(0,30)}}}
+  ];
+  await invoke('project_execute_command',{envelope:{schema_version:mixSeed.schema_version,project_id:mixSeed.project_id,base_revision:mixSeed.revision,transaction_id:'mix_timebase_seed',operations:mixOps}});
+  await page.reload();await dismissRecovery();
+  const openMix=async()=>{await page.getByRole('button',{name:'Audio mix',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Review audio mix plan'});await dialog.waitFor();return dialog;};
+  const checkMix=async(start,end,expectedFrames)=>{
+    const dialog=await openMix();
+    await dialog.getByText(`Voice fixture · Voice test · ${start.toFixed(2)}–${end.toFixed(2)} s`,{exact:true}).waitFor();
+    await dialog.getByText('Music fixture · Music test · 0.00–6.00 s',{exact:true}).waitFor();
+    await dialog.getByRole('button',{name:'Clear music selection'}).click();
+    await dialog.getByRole('group',{name:'Music clips'}).getByRole('checkbox',{name:/Music fixture · Music test/}).check();
+    await dialog.getByRole('checkbox',{name:'Normalize music from source audio levels'}).uncheck();
+    await dialog.getByRole('button',{name:'Build review plan'}).click();
+    await dialog.getByRole('button',{name:'Apply reviewed mix'}).or(dialog.getByRole('alert')).first().waitFor();
+    if(await dialog.getByRole('alert').count())throw new Error(`Audio mix review failed: ${await dialog.getByRole('alert').allTextContents()}`);
+    await dialog.getByRole('button',{name:'Apply reviewed mix'}).waitFor();
+    await dialog.getByRole('button',{name:'Apply reviewed mix'}).click();await dialog.waitFor({state:'detached'});
+    let applied;for(let n=0;n<60;n++){applied=await invoke('project_get_current');if(applied.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music')?.keyframes?.length)break;await new Promise(r=>setTimeout(r,100));}
+    const music=applied.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music');
+    assert.deepEqual(music.keyframes.map(k=>Math.round(k.offset.value*k.offset.rate.denominator/k.offset.rate.numerator*30)),expectedFrames);
+    await page.getByRole('button',{name:/Undo/}).first().click();
+    await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>!p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music')?.keyframes?.length));
+  };
+  await checkMix(1,3,[0,23,30,90,113]);
+  const beforeMove=await invoke('project_get_current');
+  await invoke('project_execute_command',{envelope:{schema_version:beforeMove.schema_version,project_id:beforeMove.project_id,base_revision:beforeMove.revision,transaction_id:'mix_move_voice',operations:[{operation_id:'move_voice',operation:{type:'ClipMove',payload:{item_id:'mix_voice',target_start:rt(3000,1000)}}}]}});
+  await page.reload();await dismissRecovery();
+  let mixDialog=await openMix();await mixDialog.getByText('Voice fixture · Voice test · 3.00–5.00 s',{exact:true}).waitFor();await mixDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_voice')?.timeline_range.start.value===1000));
+  mixDialog=await openMix();await mixDialog.getByText('Voice fixture · Voice test · 1.00–3.00 s',{exact:true}).waitFor();await mixDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>{const t=p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_voice')?.timeline_range.start;return t&&t.value*t.rate.denominator/t.rate.numerator===3;}));
+  await checkMix(3,5,[0,83,90,150,173]);
+  const voiceoverSeed=await invoke('project_get_current');
+  await invoke('project_execute_command',{envelope:{schema_version:voiceoverSeed.schema_version,project_id:voiceoverSeed.project_id,base_revision:voiceoverSeed.revision,transaction_id:'mix_voiceover_seed',operations:[
+    {operation_id:'voiceover_track',operation:{type:'TrackCreate',payload:{track_id:'mix_voiceover_track',name:'Narration test',kind:'Audio'}}},
+    {operation_id:'voiceover_clip',operation:{type:'ClipCreate',payload:{track_id:'mix_voiceover_track',item_id:'mix_voiceover',name:'Narration fixture',kind:'Audio',asset_id:mixA.asset_id,timeline_start:rt(1000,1000),duration:rt(2,1),source_start:rt(0,30)}}}
+  ]}});
+  await page.reload();await dismissRecovery();
+  mixDialog=await openMix();const voiceGroup=mixDialog.getByRole('group',{name:'Voice clips'}),musicGroup=mixDialog.getByRole('group',{name:'Music clips'});
+  const voiceover=voiceGroup.getByRole('checkbox',{name:/Narration fixture · Narration test/});
+  const musicRole=musicGroup.getByRole('checkbox',{name:/Narration fixture · Narration test/});
+  await page.waitForFunction(()=>{const group=[...document.querySelectorAll('fieldset')].find(f=>f.querySelector('legend')?.textContent==='Music clips');return [...(group?.querySelectorAll('label')??[])].some(l=>l.textContent.includes('Narration fixture · Narration test')&&l.querySelector('input')?.checked);});
+  assert.equal(await musicRole.isChecked(),true);await mixDialog.getByRole('button',{name:'Clear voice selection'}).click();
+  await voiceover.check();assert.equal(await musicRole.isChecked(),false);
+  await musicRole.check();assert.equal(await voiceover.isChecked(),false);
+  await voiceover.check();assert.equal(await musicRole.isChecked(),false);
+  await mixDialog.getByRole('button',{name:'Clear music selection'}).click();
+  await musicGroup.getByRole('checkbox',{name:/Music fixture · Music test/}).check();
+  await mixDialog.getByRole('checkbox',{name:'Normalize music from source audio levels'}).uncheck();
+  await mixDialog.getByRole('button',{name:'Build review plan'}).click();await mixDialog.getByRole('button',{name:'Apply reviewed mix'}).click();await mixDialog.waitFor({state:'detached'});
+  await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music')?.keyframes?.length===5));
+  const voiceoverApplied=await invoke('project_get_current');
+  const mixedItems=voiceoverApplied.tracks.flatMap(t=>t.items);
+  assert.deepEqual(mixedItems.find(i=>i.item_id==='mix_music').keyframes.map(k=>Math.round(k.offset.value*k.offset.rate.denominator/k.offset.rate.numerator*30)),[0,23,30,90,113]);
+  assert.equal(mixedItems.find(i=>i.item_id==='mix_voiceover').keyframes.length,0);
+  await page.getByRole('button',{name:/Undo/}).first().click();await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>!p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music')?.keyframes?.length));
+  await page.getByRole('button',{name:/Redo/}).first().click();await page.waitForFunction(()=>window.__TAURI_INTERNALS__.invoke('project_get_current').then(p=>p.tracks.flatMap(t=>t.items).find(i=>i.item_id==='mix_music')?.keyframes?.length===5));
+  writeFileSync('artifacts/background/cdp-smoke.json', JSON.stringify({ health, url: page.url(), domLength: dom.length, caption: 'Close confirmation with two drafts and hidden filter, dismiss then Apply/Undo or Discard; merge/Undo/Redo/timing/split; command save/reopen', sourceViewer: 'Native WAV import; UI changed range, reset, reselect 0.1–0.5 s, seek source start/end and In/Out, insert, Undo/Redo and save/reopen', audioMix: 'Mixed-timebase labels, move/Undo/Redo and two distinct reviewed plans; applied ducking keyframes checked without playback', revision: rangeReopened.revision, preview: 'Text fixture screenshot; playback unqualified' }, null, 2));
   console.log('PASS: real WebView caption workflow, draft guard and Source Viewer range insertion; save/reopen verified');
 } finally { await browser.close(); }

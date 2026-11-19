@@ -10,7 +10,7 @@ const cacheFile = join(expectedRoot, 'cache', 'thumbnails', 'qualification-senti
 writeFileSync(cacheFile, 'qualification cache fixture');
 const draft = JSON.parse(readFileSync('artifacts/animated-text-templates/phase-35/draft_vietnamese_v1.json', 'utf8'));
 const timer = setTimeout(() => process.exit(124), 30000);
-const browser = await chromium.connectOverCDP('http://127.0.0.1:9444', { timeout: 3000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout: 3000 });
 try {
   const page = browser.contexts().flatMap(context => context.pages()).find(candidate => /tauri|localhost/.test(candidate.url()));
   assert.ok(page, 'qualification page not found');

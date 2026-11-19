@@ -14,9 +14,11 @@ interface Props {
   onApply: (receipt: EditPlanDraftReceipt) => Promise<void>;
 }
 
-function startSeconds(item: TimelineItem): number {
+function timelineRangeLabel(item: TimelineItem): string {
   const range = item.timeline_range;
-  return (range.start.value * range.start.rate.denominator / range.start.rate.numerator);
+  const start = range.start.value * range.start.rate.denominator / range.start.rate.numerator;
+  const duration = range.duration.value * range.duration.rate.denominator / range.duration.rate.numerator;
+  return `${start.toFixed(2)}–${(start + duration).toFixed(2)} s`;
 }
 
 export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, onApply }: Props) {
@@ -78,6 +80,8 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
         releaseSeconds: release,
         levelsByAssetId,
       });
+      const reviewId = crypto.randomUUID();
+      proposal.plan.operations = proposal.plan.operations.map((entry, index) => ({...entry, operationId:`audio_mix_${reviewId}_${index}`}));
       const envelope: CommandEnvelope = {
         schema_version: project.schema_version,
         project_id: project.project_id,
@@ -133,23 +137,23 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Voice clips</legend>
             <div className="draft-subtitle-picker">
-              <button type="button" className="btn-action" onClick={() => setVoiceIds(candidates.filter(({item}) => item.kind === "Video").map(({item}) => item.item_id))}>Select all voice clips</button>
+              <button type="button" className="btn-action" onClick={() => setVoiceIds(candidates.filter(({item}) => !musicIds.includes(item.item_id)).map(({item}) => item.item_id))} title="Select all clips not currently assigned to music">Select all voice clips</button>
               <button type="button" className="btn-action" onClick={() => setVoiceIds([])}>Clear voice selection</button>
             </div>
-            {candidates.filter(({ item }) => item.kind === "Video").length === 0 ? <p className="draft-muted">No video clips with embedded audio are available.</p> : candidates.filter(({ item }) => item.kind === "Video").map(({ item, trackName }) => (
-              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={voiceIds.includes(item.item_id)} onChange={(event) => toggle(setVoiceIds, item.item_id, event.target.checked)} />
-                <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s</span></label>
+            {candidates.length === 0 ? <p className="draft-muted">No audio or video clips with audio are available.</p> : candidates.map(({ item, trackName }) => (
+              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={voiceIds.includes(item.item_id)} onChange={(event) => {const checked=event.target.checked;if(checked)setMusicIds(current=>current.filter(id=>id!==item.item_id));toggle(setVoiceIds,item.item_id,checked);}} />
+                <span>{item.name} · {trackName} · {timelineRangeLabel(item)}{musicIds.includes(item.item_id) ? " · assigned to music" : ""}</span></label>
             ))}
           </fieldset>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Music clips</legend>
             <div className="draft-subtitle-picker">
-              <button type="button" className="btn-action" onClick={() => setMusicIds(candidates.filter(({item,locked}) => item.kind === "Audio" && !locked).map(({item}) => item.item_id))}>Select all music clips</button>
+              <button type="button" className="btn-action" onClick={() => setMusicIds(candidates.filter(({item,locked}) => item.kind === "Audio" && !locked && !voiceIds.includes(item.item_id)).map(({item}) => item.item_id))} title="Select all unlocked audio clips not currently assigned to voice">Select all music clips</button>
               <button type="button" className="btn-action" onClick={() => setMusicIds([])}>Clear music selection</button>
             </div>
             {candidates.filter(({ item }) => item.kind === "Audio").length === 0 ? <p className="draft-muted">No standalone audio clips are available.</p> : candidates.filter(({ item }) => item.kind === "Audio").map(({ item, trackName, locked }) => (
-              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={musicIds.includes(item.item_id)} disabled={locked} onChange={(event) => toggle(setMusicIds, item.item_id, event.target.checked)} />
-                <span>{item.name} · {trackName} · starts {startSeconds(item).toFixed(2)} s{locked ? " · locked track" : ""}</span></label>
+              <label className="draft-media-row" key={item.item_id}><input type="checkbox" checked={musicIds.includes(item.item_id)} disabled={locked} onChange={(event) => {const checked=event.target.checked;if(checked)setVoiceIds(current=>current.filter(id=>id!==item.item_id));toggle(setMusicIds,item.item_id,checked);}} />
+                <span>{item.name} · {trackName} · {timelineRangeLabel(item)}{locked ? " · locked track" : voiceIds.includes(item.item_id) ? " · assigned to voice" : ""}</span></label>
             ))}
           </fieldset>
           <label className="draft-media-row"><input type="checkbox" checked={normalize} disabled={busy || !!receipt} onChange={(event) => { setNormalize(event.target.checked); setReceipt(null); }} /> Normalize music from source audio levels</label>

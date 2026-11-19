@@ -70,7 +70,7 @@ export function SilenceCutDialog({ asset, projectId, revision, rate, onClose, on
     {stale&&<p role="alert">Project or source changed. Analyze again before applying.</p>}
     {changed&&<p role="alert">Settings changed. Analyze again to update the draft.</p>}
     {report?.analysis&&<>
-      <p>{report.analysis.cuts.length} proposed cuts · removes {((draft?.removedFrames??0)*rate.denominator/rate.numerator).toFixed(2)} s · keeps {(((draft?.totalFrames??0)-(draft?.removedFrames??0))*rate.denominator/rate.numerator).toFixed(2)} s after frame alignment</p>
+      <p aria-live="polite" aria-label="Silence cut selection summary">{selected.size} of {report.analysis.cuts.length} proposed cuts selected · removes {((draft?.removedFrames??0)*rate.denominator/rate.numerator).toFixed(2)} s · keeps {(((draft?.totalFrames??0)-(draft?.removedFrames??0))*rate.denominator/rate.numerator).toFixed(2)} s after frame alignment</p>
       {!report.analysis.cuts.length&&<p>No silence intervals meet these settings. The project is unchanged.</p>}
       <p>Quiet speech may be removed. Background noise or music may hide pauses; review the source before applying.</p>
       {draft && <div aria-label="Source review timeline">

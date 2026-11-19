@@ -75,13 +75,15 @@ export function AutoCaptionDialog({
   const availableAssetsById = new Map(availableTranscriptAssets.map((asset) => [asset.asset_id, asset]));
   const validTranscriptSources = Object.values(transcriptLibrary).filter((source) =>
     availableAssetsById.get(source.assetId)?.path === source.sourcePath);
-  const transcriptRows = validTranscriptSources.flatMap((source) => source.segments.map((segment, index) => ({
+  const allTranscriptRows = validTranscriptSources.flatMap((source) => source.segments.map((segment, index) => ({
     ...source, segment, index,
-  }))).filter(({ segment }) => captionMatchesSearch(segment.text, transcriptQuery));
-  const selectedTranscriptRanges = transcriptRows.filter(({ assetId, segment, index }) => selectedTranscriptKeys.has(
-    `${assetId}:${segment.sourceStart.value}/${segment.sourceStart.rate.numerator}/${segment.sourceStart.rate.denominator}:${segment.sourceDuration.value}/${segment.sourceDuration.rate.numerator}/${segment.sourceDuration.rate.denominator}:${index}`,
-  ));
+  })));
+  const transcriptKey = ({assetId, segment, index}: Pick<typeof allTranscriptRows[number], "assetId" | "segment" | "index">) =>
+    `${assetId}:${segment.sourceStart.value}/${segment.sourceStart.rate.numerator}/${segment.sourceStart.rate.denominator}:${segment.sourceDuration.value}/${segment.sourceDuration.rate.numerator}/${segment.sourceDuration.rate.denominator}:${index}`;
+  const transcriptRows = allTranscriptRows.filter(({ segment }) => captionMatchesSearch(segment.text, transcriptQuery));
+  const selectedTranscriptRanges = allTranscriptRows.filter(row => selectedTranscriptKeys.has(transcriptKey(row)));
   const selectedSourceIds = new Set(selectedTranscriptRanges.map(({ assetId }) => assetId));
+  const hiddenSelectedCount = selectedTranscriptRanges.filter(({ segment }) => !captionMatchesSearch(segment.text, transcriptQuery)).length;
 
   useEffect(() => {
     setSelectedTranscriptKeys(new Set());
@@ -298,13 +300,23 @@ export function AutoCaptionDialog({
             <section aria-label="Source transcript" style={{ maxHeight: 240, overflow: "auto", border: "1px solid var(--border-color)", borderRadius: 6, padding: 8 }}>
               <strong>Analyzed source transcripts · {validTranscriptSources.length} asset(s) · {transcriptRows.length} match(es)</strong>
               <input aria-label="Search source transcript" placeholder="Find in source transcript" value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.currentTarget.value)} />
+              {validTranscriptSources.map(source => {
+                const visible = transcriptRows.filter(row => row.assetId === source.assetId);
+                if (!visible.length) return null;
+                const visibleKeys=visible.map(transcriptKey);
+                const selectedVisible=visibleKeys.filter(key=>selectedTranscriptKeys.has(key)).length;
+                return <div key={source.assetId}>
+                  <button type="button" disabled={isRunning || isSubmitting || selectedSourceIds.size > 0 && !selectedSourceIds.has(source.assetId)} onClick={() => setSelectedTranscriptKeys(current => new Set([...current, ...visibleKeys]))}>Select {visible.length} visible segment{visible.length === 1 ? "" : "s"} from {source.assetName}</button>{" "}
+                  <button type="button" disabled={isRunning || isSubmitting || selectedVisible===0} onClick={() => setSelectedTranscriptKeys(current => {const next=new Set(current);visibleKeys.forEach(key=>next.delete(key));return next;})}>Deselect {selectedVisible} visible segment{selectedVisible === 1 ? "" : "s"} from {source.assetName}</button>
+                </div>;
+              })}
               {transcriptRows.map(({ segment, assetId, assetName, index }) => {
-                const selectionKey = `${assetId}:${segment.sourceStart.value}/${segment.sourceStart.rate.numerator}/${segment.sourceStart.rate.denominator}:${segment.sourceDuration.value}/${segment.sourceDuration.rate.numerator}/${segment.sourceDuration.rate.denominator}:${index}`;
+                const selectionKey = transcriptKey({assetId, segment, index});
                 return (
                 <div key={selectionKey} style={{ display: "grid", gridTemplateColumns: "130px minmax(0,1fr)", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--border-color)" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
                     <label style={{ fontSize: 11 }}>
-                      <input type="checkbox" aria-label={`Select transcript segment ${index + 1} from ${assetName}`} checked={selectedTranscriptKeys.has(selectionKey)} disabled={selectedSourceIds.size > 0 && !selectedSourceIds.has(assetId)} onChange={(event) => {
+                      <input type="checkbox" aria-label={`Select transcript segment ${index + 1} from ${assetName}`} checked={selectedTranscriptKeys.has(selectionKey)} disabled={isRunning || isSubmitting || selectedSourceIds.size > 0 && !selectedSourceIds.has(assetId)} onChange={(event) => {
                         const checked = event.currentTarget.checked;
                         setSelectedTranscriptKeys((current) => {
                           const next = new Set(current);
@@ -335,7 +347,8 @@ export function AutoCaptionDialog({
               );})}
               {selectedTranscriptRanges.length > 0 && (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 8 }}>
-                  <span>{selectedTranscriptRanges.length} selected · {selectedTranscriptRanges.reduce((sum, { segment }) => sum + rationalTimeToSeconds(segment.sourceDuration), 0).toFixed(2)} s · {selectedSourceIds.size === 1 ? "one source" : "choose one source for a rough cut"}</span>
+                  <span>{selectedTranscriptRanges.length} selected{hiddenSelectedCount > 0 ? ` · ${hiddenSelectedCount} hidden by search` : ""} · {selectedTranscriptRanges.reduce((sum, { segment }) => sum + rationalTimeToSeconds(segment.sourceDuration), 0).toFixed(2)} s · {selectedSourceIds.size === 1 ? "one source" : "choose one source for a rough cut"}</span>
+                  <button type="button" onClick={() => setSelectedTranscriptKeys(new Set())} disabled={isSubmitting || isRunning}>Clear selection</button>
                   <button className="btn-primary" type="button" disabled={isSubmitting || isRunning || selectedSourceIds.size !== 1} onClick={() => void buildTranscriptCut(selectedTranscriptRanges[0].assetId, selectedTranscriptRanges.map(({ segment }) => {
                     const sourceInSeconds = rationalTimeToSeconds(segment.sourceStart);
                     return { sourceInSeconds, sourceOutSeconds: sourceInSeconds + rationalTimeToSeconds(segment.sourceDuration) };

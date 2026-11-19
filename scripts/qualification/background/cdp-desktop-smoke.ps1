@@ -1,7 +1,7 @@
-param([switch]$Recovery, [switch]$SavedRecovery, [switch]$Workflow, [switch]$Pointer, [switch]$Controls, [switch]$Audio, [switch]$GainPreview, [switch]$Captions, [switch]$Media, [switch]$HistoryBranch, [ValidateRange(1,600)][int]$TimeoutSeconds=300)
+param([switch]$Recovery, [switch]$SavedRecovery, [switch]$Workflow, [switch]$Pointer, [switch]$ClipBoundaryScope, [switch]$MarkerSearch, [switch]$Controls, [switch]$Audio, [switch]$GainPreview, [switch]$Captions, [switch]$Media, [switch]$HistoryBranch, [ValidateRange(1,600)][int]$TimeoutSeconds=300)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'cdp-diagnostics.ps1')
-$chosen=@('Recovery','SavedRecovery','Workflow','Pointer','Controls','Audio','GainPreview','Captions','Media','HistoryBranch' | Where-Object {Get-Variable -Name $_ -ValueOnly})
+$chosen=@('Recovery','SavedRecovery','Workflow','Pointer','ClipBoundaryScope','MarkerSearch','Controls','Audio','GainPreview','Captions','Media','HistoryBranch' | Where-Object {Get-Variable -Name $_ -ValueOnly})
 if($chosen.Count -gt 1){throw 'Select only one CDP mode'}
 $mode=if($chosen.Count){$chosen[0]}else{'Smoke'}
 New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'artifacts/background') -Force | Out-Null
@@ -76,7 +76,7 @@ Write-Output 'CDP desktop interop ready'
 $name='TinixCutCDP-'+[guid]::NewGuid().ToString('N')
 $binary=if($env:TINIXCUT_CDP_BINARY){[IO.Path]::GetFullPath($env:TINIXCUT_CDP_BINARY)}else{Join-Path $PWD.Path 'src-tauri\target-qualification\debug\tinixcut.exe'}
 if($env:TINIXCUT_SCOPE_PROBE_RUN -eq '1' -and (-not $Recovery -or -not $env:TINIXCUT_CDP_BINARY -or $env:TINIXCUT_CDP_WINDOW_TITLE -ne 'TinixCut qualification production identity')) {throw 'Scope qualification requires Recovery mode, explicit binary and qualification window title'}
-if (Get-NetTCPConnection -State Listen -LocalPort 9444 -ErrorAction SilentlyContinue) {throw 'CDP port occupied'}
+if (Get-NetTCPConnection -State Listen -LocalPort 9445 -ErrorAction SilentlyContinue) {throw 'CDP port occupied'}
 if (Get-CimInstance Win32_Process -Filter "Name='tinixcut.exe'" | Where-Object {$_.ExecutablePath -eq $binary}) {throw 'Qualification already running'}
 Write-Output 'CDP port/app ownership checked'
 # The fallback locations must also be disposable: a routing regression must not
@@ -147,11 +147,11 @@ Save-Session
  for($i=0;$i -lt 60;$i++) {
   $input=[DesktopProbe]::OpenInputDesktop(0,$false,1)
   try {if ([DesktopProbe]::Name($input) -ne $before) {throw 'Input desktop changed'}} finally {[void][DesktopProbe]::CloseDesktop($input)}
-  try {$pages=Invoke-RestMethod http://127.0.0.1:9444/json/list -TimeoutSec 1; if($pages){$ready=$true;break}} catch {}
+  try {$pages=Invoke-RestMethod http://127.0.0.1:9445/json/list -TimeoutSec 1; if($pages){$ready=$true;break}} catch {}
   Start-Sleep -Milliseconds 250
  }
  if(-not $ready) {throw 'CDP did not become ready on isolated desktop'}
- $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 9444)
+ $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 9445)
  if($listeners | Where-Object { $_.LocalAddress -notin @('127.0.0.1','::1') }){throw 'CDP is not loopback-only'}
  foreach($listener in $listeners){
    $owner=Get-CimInstance Win32_Process -Filter ("ProcessId="+$listener.OwningProcess)
@@ -161,13 +161,14 @@ Save-Session
  $appOwner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$pi.processId)
  if(-not $appOwner -or [IO.Path]::GetFullPath($appOwner.ExecutablePath) -ne $binary){throw 'Launched process binary mismatch'}
  if(-not [DesktopProbe]::HasWindow($desktop,$pi.processId)){throw 'App window not on isolated desktop'}
+
  & node scripts/qualification/background/cdp-identity.mjs
  if($LASTEXITCODE -ne 0){throw 'Qualification window identity mismatch'}
  if($scopeRoot -and $stage -eq 'prepare') {
   & node scripts/qualification/background/cdp-isolation-storage.mjs
   if($LASTEXITCODE -ne 0){throw 'Qualification storage check failed'}
  }
- $script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
+$script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($ClipBoundaryScope){'cdp-clip-boundary-scope.mjs'}elseif($MarkerSearch){'cdp-marker-search.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
  $nodeArgs=@(('scripts/qualification/background/'+$script),$stage)
  $nodeInfo=New-Object Diagnostics.ProcessStartInfo
  $nodeInfo.FileName=(Get-Command node.exe).Source

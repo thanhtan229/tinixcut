@@ -1,10 +1,36 @@
 import { FrameRate, Project, rationalTimeToFrames } from "../types/project";
 
+export function nextMarkerLabel(markers: readonly { label: string }[]): string {
+  const names = new Set(markers.map(marker => marker.label.trim().toLocaleLowerCase()));
+  let index = 1;
+  while (names.has(`marker ${index}`)) index++;
+  return `Marker ${index}`;
+}
+
 export function adjacentMarkerFrame(project: Project | null, playhead: number, direction: 1 | -1): number | null {
   if (!project) return null;
   const frames=(project.markers ?? []).map(marker=>rationalTimeToFrames(marker.position,project.settings.frame_rate));
   const eligible=frames.filter(frame=>direction===1 ? frame>playhead : frame<playhead);
   return eligible.length ? (direction===1 ? Math.min(...eligible) : Math.max(...eligible)) : null;
+}
+
+/** Clip ends are exclusive timeline boundaries, so adjacent clips share one cut point. */
+export function adjacentClipBoundary(project: Project | null, playhead: number, direction: 1 | -1, selectedItems?: ReadonlySet<string>): number | null {
+  if (!project) return null;
+  let nearest: number | null = null;
+  for (const track of project.tracks) {
+    if (selectedItems && !track.items.some(item => selectedItems.has(item.item_id))) continue;
+    for (const item of track.items) {
+      const start = rationalTimeToFrames(item.timeline_range.start, project.settings.frame_rate);
+      const duration = rationalTimeToFrames(item.timeline_range.duration, project.settings.frame_rate);
+      const end = start + duration;
+      if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(duration) || duration <= 0 || !Number.isSafeInteger(end)) continue;
+      for (const boundary of [start, end]) {
+        if ((direction === 1 ? boundary > playhead : boundary < playhead) && (nearest === null || (direction === 1 ? boundary < nearest : boundary > nearest))) nearest = boundary;
+      }
+    }
+  }
+  return nearest;
 }
 
 export const TIMELINE_HEADER_WIDTH = 160;
@@ -64,6 +90,10 @@ function frameLabel(frame: number, fps: number, showFrames: boolean) {
   const time = `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
     + (fraction ? `.${String(fraction).padStart(3, "0").replace(/0+$/, "")}` : "");
   return showFrames ? `${time} (${frame}f)` : time;
+}
+
+export function markerTimeLabel(frame: number, rate: FrameRate): string {
+  return frameLabel(frame, rate.numerator / rate.denominator, true);
 }
 
 /** Only materialize the visible ruler, with a small overscan on each side. */
