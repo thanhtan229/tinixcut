@@ -3,6 +3,11 @@ import { Asset } from "../types/project";
 import { filterAndSortMediaAssets, MediaLibraryKindFilter, MediaLibrarySort, MediaLibraryStatusFilter } from "./mediaLibrary";
 import { AudioLevelReport } from "../services/editorApi";
 
+function hasUsableDuration(asset: Asset): boolean {
+  const duration = asset.duration;
+  return !!duration && Number.isFinite(duration.value) && duration.value > 0 && Number.isFinite(duration.rate.numerator) && duration.rate.numerator > 0 && Number.isFinite(duration.rate.denominator) && duration.rate.denominator > 0;
+}
+
 interface MediaPanelProps {
   locatedOccurrence?: {assetId:string;index:number;total:number;trackName:string} | null;
   onLocateAsset?: (asset: Asset, direction: 1 | -1) => void;
@@ -48,6 +53,7 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
   const [usageFilter, setUsageFilter] = useState("all");
   const [kindFilter, setKindFilter] = useState<MediaLibraryKindFilter>("all");
   const [statusFilter, setStatusFilter] = useState<MediaLibraryStatusFilter>("all");
+  const [missingDurationOnly, setMissingDurationOnly] = useState(false);
   const [sort, setSort] = useState<MediaLibrarySort>("name");
   const [audioLevels, setAudioLevels] = useState<Record<string, AudioLevelReport>>({});
   const [audioAnalysisBusy, setAudioAnalysisBusy] = useState<string | null>(null);
@@ -59,8 +65,8 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
   }, { Video: 0, Audio: 0, Image: 0 });
   const offlineAssetCount = assets.filter(asset => !!offlineMedia[asset.asset_id]).length;
   const visibleAssets = useMemo(
-    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort, usageCounts).filter(asset => !usageCounts || usageFilter === "all" || (usageFilter === "used" ? (usageCounts[asset.asset_id] ?? 0) > 0 : !usageCounts[asset.asset_id])),
-    [assets, offlineMedia, query, kindFilter, statusFilter, sort, usageCounts, usageFilter],
+    () => filterAndSortMediaAssets(assets, new Set(Object.keys(offlineMedia)), query, kindFilter, statusFilter, sort, usageCounts).filter(asset => (!usageCounts || usageFilter === "all" || (usageFilter === "used" ? (usageCounts[asset.asset_id] ?? 0) > 0 : !usageCounts[asset.asset_id])) && (!missingDurationOnly || asset.media_kind !== "Image" && !hasUsableDuration(asset))),
+    [assets, offlineMedia, query, kindFilter, statusFilter, sort, usageCounts, usageFilter, missingDurationOnly],
   );
 
   return (
@@ -92,6 +98,7 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search name or path…"
           />
+          {query && <button type="button" className="btn-action" onClick={()=>setQuery("")}>Clear media search</button>}
           <div className="media-library-filter-row">
             {usageCounts && <select aria-label="Filter media usage" value={usageFilter} onChange={event=>setUsageFilter(event.target.value)}>
               <option value="all">All usage ({assets.length})</option><option value="used">Used ({usedAssetCount})</option><option value="unused">Unused ({assets.length - usedAssetCount})</option>
@@ -116,8 +123,9 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
               {(usageCounts || sort === "usage-desc") && <option value="usage-desc" disabled={!usageCounts}>Most used first</option>}
             </select>
           </div>
-          {(query !== "" || kindFilter !== "all" || statusFilter !== "all" || (usageCounts && usageFilter !== "all")) && <button type="button" className="btn-action" onClick={() => {
-            setQuery(""); setKindFilter("all"); setStatusFilter("all"); setUsageFilter("all");
+          <label><input type="checkbox" checked={missingDurationOnly} onChange={event=>setMissingDurationOnly(event.target.checked)} /> Missing audio/video duration</label>
+          {(query !== "" || kindFilter !== "all" || statusFilter !== "all" || missingDurationOnly || (usageCounts && usageFilter !== "all")) && <button type="button" className="btn-action" onClick={() => {
+            setQuery(""); setKindFilter("all"); setStatusFilter("all"); setUsageFilter("all"); setMissingDurationOnly(false);
           }}>Clear filters</button>}
           <div aria-label="Media results" aria-live="polite" style={{fontSize:11,color:"var(--text-muted)"}}>{visibleAssets.length} of {assets.length} sources shown</div>
         </div>
@@ -179,7 +187,7 @@ export const MediaPanel: React.FC<MediaPanelProps> = ({
                   <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                     {a.media_kind} • {(a.file_size / (1024 * 1024)).toFixed(1)} MB
                     {a.dimensions ? ` • ${a.dimensions.width}×${a.dimensions.height}` : ""}
-                    {a.duration ? ` • ${(a.duration.value * a.duration.rate.denominator / a.duration.rate.numerator).toFixed(1)} s` : ""}
+                    {hasUsableDuration(a) && a.duration ? ` • ${(a.duration.value * a.duration.rate.denominator / a.duration.rate.numerator).toFixed(1)} s` : ""}
                   </span>
                   <div style={{ display: "flex", gap: "4px" }}>
                   {onViewAsset && !unavailableMedia && (

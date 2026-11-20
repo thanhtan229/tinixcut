@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useImperativeHandle } from "react";
 import { waveformPathD } from "./waveformPath";
 import type { CutTransitionKind } from "../types/project";
 import { getDefaultAudioCrossfadeDurationFrames, isRangeAdjacent, Keyframe, KeyframeProperty, Project, ProjectMarker, rationalTimeToFrames, TimelineItem } from "../types/project";
+import { exportRangeFor } from "../hooks/inOutRange";
 import { WaveformData } from "../types/preview";
 import { editorApi } from "../services/editorApi";
 import { buildSnapTargets, calculateSnap, SnapCandidate } from "../utils/timelineSnapping";
@@ -23,6 +24,7 @@ interface TimelineProps {
   /** Transient In/Out marks in project frames (not persisted). */
   markIn?: number | null;
   markOut?: number | null;
+  exportTimelineFrames?: number;
   snapEnabled?: boolean;
   onToggleSnapping?: () => void;
   onSelectItem: (itemId: string | null, isCtrl?: boolean) => void;
@@ -82,6 +84,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   playheadFrame,
   markIn = null,
   markOut = null,
+  exportTimelineFrames,
   snapEnabled = true,
   onToggleSnapping,
   onSelectItem,
@@ -767,10 +770,18 @@ export const Timeline: React.FC<TimelineProps> = ({
           </button>
           <button className="btn-action" onClick={navigation.fitAll} aria-pressed={navigation.mode === "all"} title="Show the complete edit">Fit all</button>
           <button className="btn-action" onClick={navigation.fitSelection} disabled={!selectedViewRange} aria-pressed={navigation.mode === "selection"} title="Show selected clips across tracks">Fit selection</button>
+          {selectedViewRange && <span aria-label="Selected clip span" title="Span includes gaps between selected clips" style={{fontSize:11,color:"var(--text-muted)"}}>Selection span: {selectedViewRange.start}–{selectedViewRange.end} · {selectedViewRange.end - selectedViewRange.start} frame{selectedViewRange.end - selectedViewRange.start === 1 ? "" : "s"} (includes gaps)</span>}
+          <button type="button" className="btn-action" disabled={!project} onClick={()=>navigation.locateFrame(playheadFrame)} title="Bring the current playhead into view">Show playhead</button>
           <button type="button" className="btn-action" disabled={!selectedViewRange} onClick={() => { if (selectedViewRange) { onPlayheadChange(selectedViewRange.start); navigation.locateFrame(selectedViewRange.start); } }}>Go to selection start</button>
           <button type="button" className="btn-action" disabled={!selectedViewRange} title="Go to the last included frame of the selected clips" onClick={() => { if (selectedViewRange) { const frame=selectedViewRange.end-1; onPlayheadChange(frame); navigation.locateFrame(frame); } }}>Go to selection last frame</button>
           <button className="btn-action" onClick={navigation.fitInOut} disabled={!inOutViewRange} aria-pressed={navigation.mode === "inout"} title="Show the marked In/Out range">Fit In/Out</button>
+          {inOutViewRange && <span aria-label="In/Out duration" style={{fontSize:11,color:"var(--text-muted)"}}>{inOutViewRange.end - inOutViewRange.start} frames · {((inOutViewRange.end - inOutViewRange.start) * rate.denominator / rate.numerator).toFixed(2)} s</span>}
+          {inOutViewRange && exportTimelineFrames !== undefined && inOutViewRange.end > exportTimelineFrames && (() => {
+            const range = exportRangeFor({markIn, markOut}, exportTimelineFrames);
+            return <span role="status" style={{fontSize:11,color:"var(--text-muted)"}}>{range ? `Export limited to frames ${range.start_frame}–${range.end_frame} (end exclusive)` : "In/Out does not overlap the exportable timeline"}</span>;
+          })()}
           {([['In',markIn],['Out',markOut]] as const).map(([label,frame])=><button key={label} type="button" className="btn-action" disabled={frame==null} title={`Move playhead to ${label} point`} onClick={()=>{if(frame!=null){onPlayheadChange(frame);navigation.locateFrame(frame);}}}>Go to {label}</button>)}
+          {(markIn !== null || markOut !== null) && <span aria-label="In/Out points" style={{fontSize:11,color:"var(--text-muted)"}}>In: {markIn ?? "—"} · Out: {markOut ?? "—"} frames</span>}
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Zoom</span>
           <button
             className="btn-action"

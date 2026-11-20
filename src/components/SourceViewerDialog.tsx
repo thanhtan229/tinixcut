@@ -66,6 +66,10 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, frameRate, o
       <section ref={dialogRef} tabIndex={-1} className="modal-dialog source-viewer-dialog" role="dialog" aria-modal="true" aria-labelledby="source-viewer-title" onKeyDown={event => {
         const target = event.target as HTMLElement;
         if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+        if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && (target === event.currentTarget || target.closest(".source-viewer-preview") && !target.closest("video, audio, button"))) {
+          if (canStep) { event.preventDefault(); event.stopPropagation(); stepFrame(event.key === "ArrowLeft" ? -1 : 1); }
+          return;
+        }
         const key = event.key.toLowerCase();
         if (key === "i" || key === "o") {
           event.preventDefault(); event.stopPropagation();
@@ -100,8 +104,8 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, frameRate, o
         </div>
         <div className="source-viewer-range">
           <button type="button" className="btn-action" disabled={!canSeek || playhead <= 0} onClick={() => seekBoundary(0)}>Go to source start</button>
-          <button type="button" className="btn-action" disabled={!canStep || playhead <= 0} onClick={() => stepFrame(-1)}>Previous project frame</button>
-          <button type="button" className="btn-action" disabled={!canStep || playhead >= duration} onClick={() => stepFrame(1)}>Next project frame</button>
+          <button type="button" className="btn-action" title="Left arrow when the viewer has focus" disabled={!canStep || playhead <= 0} onClick={() => stepFrame(-1)}>Previous project frame</button>
+          <button type="button" className="btn-action" title="Right arrow when the viewer has focus" disabled={!canStep || playhead >= duration} onClick={() => stepFrame(1)}>Next project frame</button>
           <button type="button" className="btn-action" disabled={!canSeek || playhead >= duration} onClick={() => seekBoundary(duration)}>Go to source end</button>
           <span>Position: {playhead.toFixed(3)} s{canStep ? ` · project frame ${Math.round(playhead * fps)}` : ""}</span>
           <label>In (seconds)<input aria-label="Source In seconds" type="number" min="0" max={duration} step="0.001" value={Number.isFinite(sourceIn) ? sourceIn : ""} onChange={(event) => setSourceIn(event.target.value === "" ? NaN : Number(event.target.value))} /></label>
@@ -112,6 +116,7 @@ export function SourceViewerDialog({ asset, initialSeekSeconds = 0, frameRate, o
           <button type="button" className="btn-action" disabled={!canSeek || !Number.isFinite(sourceOut) || sourceOut < 0 || sourceOut > duration} onClick={() => seekBoundary(sourceOut)}>Go to source Out</button>
           <button type="button" className="btn-action" onClick={() => { setSourceIn(0); setSourceOut(duration); }}>Reset source range</button>
           <span>{duration <= 0 ? "Source duration unavailable; reimport or relink the source" : !validRange ? "Enter a valid source range" : !canAdd ? "Select at least one project frame" : `${(sourceOut - sourceIn).toFixed(3)} s selected${frameRange ? ` · ${frameRange.duration} project frames` : ""}`}</span>
+          {frameRange && <span aria-label="Frame-aligned source range">Source frames {frameRange.start}–{frameRange.start + frameRange.duration} (end exclusive)</span>}
         </div>
         <footer className="modal-dialog-actions">
           {!reviewControls && <button type="button" className="btn-primary" disabled={!canAdd} onClick={() => onAddRange(asset, sourceIn, sourceOut)}>

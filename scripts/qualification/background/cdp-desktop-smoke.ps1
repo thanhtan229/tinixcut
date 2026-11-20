@@ -1,7 +1,7 @@
-param([switch]$Recovery, [switch]$SavedRecovery, [switch]$Workflow, [switch]$Pointer, [switch]$ClipBoundaryScope, [switch]$MarkerSearch, [switch]$Controls, [switch]$Audio, [switch]$GainPreview, [switch]$Captions, [switch]$Media, [switch]$HistoryBranch, [ValidateRange(1,600)][int]$TimeoutSeconds=300)
+param([switch]$Recovery, [switch]$SavedRecovery, [switch]$Workflow, [switch]$Pointer, [switch]$ClipBoundaryScope, [switch]$MarkerSearch, [switch]$CaptionCount, [switch]$MixCount, [switch]$SourceShortcuts, [switch]$DraftAudio, [switch]$InoutExport, [switch]$MissingDuration, [switch]$MediaClear, [switch]$ShowPlayhead, [switch]$SelectionSpan, [switch]$SilenceFocus, [switch]$Controls, [switch]$Audio, [switch]$GainPreview, [switch]$Captions, [switch]$Media, [switch]$HistoryBranch, [ValidateRange(1,600)][int]$TimeoutSeconds=300)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'cdp-diagnostics.ps1')
-$chosen=@('Recovery','SavedRecovery','Workflow','Pointer','ClipBoundaryScope','MarkerSearch','Controls','Audio','GainPreview','Captions','Media','HistoryBranch' | Where-Object {Get-Variable -Name $_ -ValueOnly})
+$chosen=@('Recovery','SavedRecovery','Workflow','Pointer','ClipBoundaryScope','MarkerSearch','CaptionCount','MixCount','SourceShortcuts','DraftAudio','InoutExport','MissingDuration','MediaClear','ShowPlayhead','SelectionSpan','SilenceFocus','Controls','Audio','GainPreview','Captions','Media','HistoryBranch' | Where-Object {Get-Variable -Name $_ -ValueOnly})
 if($chosen.Count -gt 1){throw 'Select only one CDP mode'}
 $mode=if($chosen.Count){$chosen[0]}else{'Smoke'}
 New-Item -ItemType Directory -Path (Join-Path $PWD.Path 'artifacts/background') -Force | Out-Null
@@ -168,7 +168,7 @@ Save-Session
   & node scripts/qualification/background/cdp-isolation-storage.mjs
   if($LASTEXITCODE -ne 0){throw 'Qualification storage check failed'}
  }
-$script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($ClipBoundaryScope){'cdp-clip-boundary-scope.mjs'}elseif($MarkerSearch){'cdp-marker-search.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
+$script=if($HistoryBranch){'cdp-history-branch.mjs'}elseif($Captions){'cdp-captions.mjs'}elseif($Media){'cdp-media.mjs'}elseif($GainPreview){'cdp-gain-preview.mjs'}elseif($Audio){'cdp-audio.mjs'}elseif($Controls){'cdp-controls.mjs'}elseif($Pointer){'cdp-pointer.mjs'}elseif($ClipBoundaryScope){'cdp-clip-boundary-scope.mjs'}elseif($MarkerSearch){'cdp-marker-search.mjs'}elseif($CaptionCount){'cdp-caption-count.mjs'}elseif($MixCount){'cdp-mix-count.mjs'}elseif($SourceShortcuts){'cdp-source-shortcuts.mjs'}elseif($DraftAudio){'cdp-draft-audio.mjs'}elseif($InoutExport){'cdp-inout-export.mjs'}elseif($MissingDuration){'cdp-missing-duration.mjs'}elseif($MediaClear){'cdp-media-clear.mjs'}elseif($ShowPlayhead){'cdp-show-playhead.mjs'}elseif($SelectionSpan){'cdp-selection-span.mjs'}elseif($SilenceFocus){'cdp-silence-focus.mjs'}elseif($Workflow){'cdp-workflow.mjs'}elseif($SavedRecovery){'cdp-saved-recovery.mjs'}elseif($Recovery){'cdp-recovery.mjs'}else{'cdp-readback.mjs'}
  $nodeArgs=@(('scripts/qualification/background/'+$script),$stage)
  $nodeInfo=New-Object Diagnostics.ProcessStartInfo
  $nodeInfo.FileName=(Get-Command node.exe).Source

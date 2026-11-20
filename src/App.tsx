@@ -3279,6 +3279,7 @@ export function App() {
 
           <Timeline
             project={project}
+            exportTimelineFrames={timelineFrames}
             markerQuery={markerQuery}
             onMarkerQueryChange={setMarkerQuery}
             clipBoundaryScope={clipBoundaryScope}

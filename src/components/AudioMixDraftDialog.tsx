@@ -136,6 +136,7 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
         <form onSubmit={submit}>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Voice clips</legend>
+            <p aria-live="polite" className="draft-muted">{voiceIds.length} voice clip{voiceIds.length === 1 ? "" : "s"} selected</p>
             <div className="draft-subtitle-picker">
               <button type="button" className="btn-action" onClick={() => setVoiceIds(candidates.filter(({item}) => !musicIds.includes(item.item_id)).map(({item}) => item.item_id))} title="Select all clips not currently assigned to music">Select all voice clips</button>
               <button type="button" className="btn-action" onClick={() => setVoiceIds([])}>Clear voice selection</button>
@@ -147,6 +148,7 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
           </fieldset>
           <fieldset className="draft-media-list" disabled={busy || !!receipt}>
             <legend>Music clips</legend>
+            <p aria-live="polite" className="draft-muted">{musicIds.length} music clip{musicIds.length === 1 ? "" : "s"} selected</p>
             <div className="draft-subtitle-picker">
               <button type="button" className="btn-action" onClick={() => setMusicIds(candidates.filter(({item,locked}) => item.kind === "Audio" && !locked && !voiceIds.includes(item.item_id)).map(({item}) => item.item_id))} title="Select all unlocked audio clips not currently assigned to voice">Select all music clips</button>
               <button type="button" className="btn-action" onClick={() => setMusicIds([])}>Clear music selection</button>
@@ -164,6 +166,8 @@ export function AudioMixDraftDialog({ isOpen, project, offlineMedia, onClose, on
           {receipt && <div className="draft-preview" role="status"><strong>{normalizedCount} gain edits · {keyframeCount} ducking keyframes</strong>
             <p>Project revision {receipt.plan.baseRevision}; application will fail if the project changes before Apply.</p>
             <p>Command Service dry-run checked {receipt.validation.diff?.operationsEvaluated ?? operations.length} operations without changing the project.</p>
+            <div aria-label="Voice clips used for ducking"><strong>Voice clips used for ducking</strong>{voiceIds.length ? <ul>{candidates.filter(({item})=>voiceIds.includes(item.item_id)).map(({item,trackName})=><li key={item.item_id}>{item.name} · {trackName} · {timelineRangeLabel(item)}</li>)}</ul> : <p>No voice clips selected.</p>}</div>
+            <div aria-label="Music clips in mix plan"><strong>Music clips in mix plan</strong>{musicIds.length ? <ul>{candidates.filter(({item})=>musicIds.includes(item.item_id)).map(({item,trackName})=><li key={item.item_id}>{item.name} · {trackName} · {timelineRangeLabel(item)}</li>)}</ul> : <p>No music clips selected.</p>}</div>
             {operations.filter(({ operation }) => operation.type === "ClipVolumeSet").map(({ operation }) => operation.type === "ClipVolumeSet" && <p key={operation.payload.item_id}>{candidates.find(({ item }) => item.item_id === operation.payload.item_id)?.item.name ?? operation.payload.item_id}: {formatGainDb(operation.payload.volume)} proposed clip gain</p>)}
             {musicIds.map((itemId) => <p key={`duck-${itemId}`}>{candidates.find(({ item }) => item.item_id === itemId)?.item.name ?? itemId}: {operations.filter(({ operation }) => operation.type === "ClipKeyframeAdd" && operation.payload.item_id === itemId).length} volume keyframes for ducking</p>)}
             {receipt.plan.assumptions.map((assumption) => <p className="draft-muted" key={assumption}>{assumption}</p>)}

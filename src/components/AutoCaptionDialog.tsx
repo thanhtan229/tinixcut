@@ -300,6 +300,7 @@ export function AutoCaptionDialog({
             <section aria-label="Source transcript" style={{ maxHeight: 240, overflow: "auto", border: "1px solid var(--border-color)", borderRadius: 6, padding: 8 }}>
               <strong>Analyzed source transcripts · {validTranscriptSources.length} asset(s) · {transcriptRows.length} match(es)</strong>
               <input aria-label="Search source transcript" placeholder="Find in source transcript" value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.currentTarget.value)} />
+              {transcriptQuery && <button type="button" onClick={() => setTranscriptQuery("")}>Clear transcript search</button>}
               {validTranscriptSources.map(source => {
                 const visible = transcriptRows.filter(row => row.assetId === source.assetId);
                 if (!visible.length) return null;
@@ -342,12 +343,13 @@ export function AutoCaptionDialog({
                       </button>
                     ) : <span style={{ fontSize: 10 }}>outside selected clip</span>}
                   </div>
-                  <span><small style={{ display: "block", color: "var(--text-muted)" }}>{assetName}</small>{segment.text}</span>
+                  <span><small style={{ display: "block", color: "var(--text-muted)" }}>{assetName} · {rationalTimeToSeconds(segment.sourceStart).toFixed(2)}–{(rationalTimeToSeconds(segment.sourceStart) + rationalTimeToSeconds(segment.sourceDuration)).toFixed(2)} s</small>{segment.text}</span>
                 </div>
               );})}
               {selectedTranscriptRanges.length > 0 && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 8 }}>
-                  <span>{selectedTranscriptRanges.length} selected{hiddenSelectedCount > 0 ? ` · ${hiddenSelectedCount} hidden by search` : ""} · {selectedTranscriptRanges.reduce((sum, { segment }) => sum + rationalTimeToSeconds(segment.sourceDuration), 0).toFixed(2)} s · {selectedSourceIds.size === 1 ? "one source" : "choose one source for a rough cut"}</span>
+                <div aria-label="Transcript selection actions" style={{ position: "sticky", bottom: 0, zIndex: 1, background: "var(--bg-panel, #18181c)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 0", borderTop: "1px solid var(--border-color)" }}>
+                  <span>{selectedTranscriptRanges.length} selected{hiddenSelectedCount > 0 ? ` · ${hiddenSelectedCount} hidden by search` : ""} · {selectedTranscriptRanges.reduce((sum, { segment }) => sum + rationalTimeToSeconds(segment.sourceDuration), 0).toFixed(2)} s · {selectedSourceIds.size === 1 ? `source: ${selectedTranscriptRanges[0].assetName}` : "choose one source for a rough cut"}</span>
+                  {hiddenSelectedCount > 0 && <button type="button" onClick={() => setTranscriptQuery("")}>Show hidden selections</button>}
                   <button type="button" onClick={() => setSelectedTranscriptKeys(new Set())} disabled={isSubmitting || isRunning}>Clear selection</button>
                   <button className="btn-primary" type="button" disabled={isSubmitting || isRunning || selectedSourceIds.size !== 1} onClick={() => void buildTranscriptCut(selectedTranscriptRanges[0].assetId, selectedTranscriptRanges.map(({ segment }) => {
                     const sourceInSeconds = rationalTimeToSeconds(segment.sourceStart);

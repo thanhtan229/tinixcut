@@ -5,6 +5,38 @@ use crate::modules::{
 };
 use std::{fs, path::PathBuf};
 
+#[test]
+#[ignore = "requires fresh headless draft review operations"]
+fn draft_review_source_start_apply_undo_redo() {
+    use crate::modules::domain::{Asset, MediaKind, Project, time::{FrameRate, RationalTime}};
+    let evidence = std::env::var_os("TINIX_DRAFT_SOURCE_REPORT").expect("set fresh review evidence");
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(evidence).unwrap()).unwrap();
+    let dir = std::env::temp_dir().join(format!("tinixcut-draft-source-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let mut initial = Project::new("Draft review".into());
+    for id in ["a", "b", "c"] {
+        let path = dir.join(format!("{id}.webm"));
+        fs::write(&path, b"fixture").unwrap();
+        initial.assets.push(Asset { asset_id: id.into(), name: id.into(), path: path.to_string_lossy().into_owned(), media_kind: MediaKind::Video, duration: Some(RationalTime::new(300, FrameRate::FPS_30)), file_size: 7, dimensions: None });
+    }
+    let envelope: CommandEnvelope = serde_json::from_value(serde_json::json!({"schema_version":initial.schema_version,"project_id":initial.project_id,"base_revision":initial.revision,"transaction_id":"draft-source-test","operations":report["operations"]})).unwrap();
+    let mut service = CommandService::new(initial.clone());
+    let result = service.execute(envelope).unwrap();
+    let applied = service.project().clone();
+    let clip = applied.tracks.iter().flat_map(|track| &track.items).find(|item| item.item_id == "draft_r0_clip_1").unwrap();
+    assert_eq!(clip.source_range.start.value, 30);
+    assert_eq!(clip.source_range.duration.value, 150);
+    assert!(report["reviewRows"][1].as_str().unwrap().contains("source start ~1.000 s (30 frames at 30/1 fps)"));
+    let mut history = HistoryManager::new(20);
+    history.record_edit(HistoryEntry { description:"Draft".into(), transaction_id:result.transaction_id, prior_snapshot:initial.clone(), resulting_snapshot:applied.clone() });
+    let mut current = applied.clone();
+    assert!(history.undo(&mut current).is_some()); assert_eq!(current.tracks, initial.tracks);
+    assert!(history.redo(&mut current).is_some()); assert_eq!(current.tracks, applied.tracks);
+    let saved = dir.join("draft.tcproj"); save_project_atomic(&current, &saved).unwrap(); assert_eq!(load_project(&saved).unwrap().tracks, applied.tracks);
+    fs::remove_dir_all(dir).unwrap();
+    println!("DRAFT_REVIEW_SOURCE_START_HISTORY_PASS");
+}
+
 #[cfg(feature = "mock-ipc-tests")]
 #[test]
 fn mock_tauri_ipc_media_import_scope_and_history() {

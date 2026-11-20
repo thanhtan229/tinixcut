@@ -42,13 +42,22 @@ try {
  const voiceNarration=voice.getByRole('checkbox',{name:/voiceover · Narration/}),musicNarration=music.getByRole('checkbox',{name:/voiceover · Narration/});
  assert.equal(await musicNarration.isChecked(),true);assert.equal(await voiceNarration.isChecked(),false);
  await voicePage.getByRole('button',{name:'Clear voice selection'}).click();
+ await voice.getByText('0 voice clips selected',{exact:true}).waitFor();
  await voiceNarration.check();assert.equal(await musicNarration.isChecked(),false);
+ await voice.getByText('1 voice clip selected',{exact:true}).waitFor();await music.getByText('1 music clip selected',{exact:true}).waitFor();
  await voicePage.getByRole('button',{name:'Select all music clips'}).click();assert.equal(await musicNarration.isChecked(),false);
  await musicNarration.check();assert.equal(await voiceNarration.isChecked(),false);
+ await voice.getByText('0 voice clips selected',{exact:true}).waitFor();await music.getByText('2 music clips selected',{exact:true}).waitFor();
  await voiceNarration.check();assert.equal(await musicNarration.isChecked(),false);
  await voicePage.getByRole('checkbox',{name:'Normalize music from source audio levels'}).uncheck();
  await voicePage.getByRole('button',{name:'Build review plan'}).click();
  await voicePage.getByRole('button',{name:'Change settings'}).waitFor();
+ const reviewedVoice=voicePage.getByLabel('Voice clips used for ducking');
+ assert.match(await reviewedVoice.innerText(),/voiceover · Narration/);
+ assert.doesNotMatch(await reviewedVoice.innerText(),/music · Music/);
+ const reviewedMusic=voicePage.getByLabel('Music clips in mix plan');
+ assert.match(await reviewedMusic.innerText(),/music · Music/);
+ assert.doesNotMatch(await reviewedMusic.innerText(),/voiceover · Narration/);
  assert.ok(voicePlan.operations.every(({operation})=>operation.payload.item_id==='music'));
  assert.deepEqual(voicePlan.operations.map(({operation})=>operation.payload.keyframe.offset.value),[0,83,90,180,203]);
 } finally {await voicePage.close();}

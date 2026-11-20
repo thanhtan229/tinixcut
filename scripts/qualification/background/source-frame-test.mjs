@@ -18,6 +18,11 @@ try {
  assert.equal(await page.getByRole('dialog',{name:'Source viewer'}).evaluate(el=>document.activeElement===el),true,'viewer receives keyboard focus on open');
  const next=page.getByRole('button',{name:'Next project frame'});const prev=page.getByRole('button',{name:'Previous project frame'});
  assert.equal(await prev.isDisabled(),true);
+ const viewer=page.getByRole('dialog',{name:'Source viewer'});
+ await viewer.focus();await page.keyboard.press('ArrowRight');await page.waitForFunction(()=>Math.abs(document.querySelector('video').currentTime-1001/30000)<0.00001);
+ await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('video').currentTime===0);
+ await page.getByLabel('Source In seconds').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.evaluate(()=>document.querySelector('video').currentTime),0,'arrow in editable input does not seek');
+ await next.focus();await page.keyboard.press('ArrowRight');assert.equal(await page.evaluate(()=>document.querySelector('video').currentTime),0,'focused button retains arrow behavior');
  for(let i=1;i<=12;i++){await next.click();await page.waitForFunction(t=>Math.abs(document.querySelector('video').currentTime-t)<0.00001,i*1001/30000);}
  await prev.click();await page.waitForFunction(()=>Math.abs(document.querySelector('video').currentTime-11*1001/30000)<0.00001);
  assert.equal(await page.evaluate(()=>document.querySelector('video').paused),true);
@@ -41,6 +46,9 @@ try {
  await page.getByLabel('Source In seconds').fill('1');await page.getByLabel('Source Out seconds').fill('1.001');
  assert.equal(await page.getByRole('button',{name:'Add range to timeline'}).isDisabled(),true);await page.getByText('Select at least one project frame').waitFor();
  await page.getByLabel('Source Out seconds').fill('1.1');assert.equal(await page.getByRole('button',{name:'Add range to timeline'}).isEnabled(),true);await page.getByText(/3 project frames/).waitFor();
+ assert.equal(await page.getByLabel('Frame-aligned source range').textContent(),'Source frames 30–33 (end exclusive)');
+ await page.getByLabel('Source Out seconds').fill('1.001');assert.equal(await page.getByLabel('Frame-aligned source range').count(),0);
+ await page.getByLabel('Source Out seconds').fill('1.1');
  await page.getByRole('button',{name:'Reset source range'}).click();
  await page.getByRole('button',{name:'Go to source In'}).click();assert.equal(await prev.isDisabled(),true);
  await next.click();await page.waitForFunction(()=>Math.abs(document.querySelector('video').currentTime-1001/30000)<0.00001);
