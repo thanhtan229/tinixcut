@@ -12,6 +12,8 @@ export function SilenceCutDialog({ asset, projectId, revision, rate, onClose, on
   const [config, setConfig] = useState<SilenceConfig>({ thresholdDbfs: -40, minimumSilenceMs: 600, paddingMs: 150 });
   const [report, setReport] = useState<SilenceJobReport | null>(null);
   const [selected, setSelected] = useState(new Set<number>());
+  const [cutFilter, setCutFilter] = useState<"all" | "cut" | "keep">("all");
+  const cutFilterRef = useRef<HTMLSelectElement>(null);
   const [reviewFrame, setReviewFrame] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [activeCut, setActiveCut] = useState<number | null>(null);
@@ -32,6 +34,7 @@ export function SilenceCutDialog({ asset, projectId, revision, rate, onClose, on
   const changed = report?.analysis && JSON.stringify(config) !== JSON.stringify(report.analysis.config);
   let draft: ReturnType<typeof silenceKeepRanges> | null = null;
   if (report?.analysis) draft = silenceKeepRanges(report.analysis, selected, rate);
+  const visibleCutCount = report?.analysis?.cuts.filter((_, i) => cutFilter === "all" || selected.has(i) === (cutFilter === "cut")).length ?? 0;
   useEffect(() => {alive.current=true;return () => {alive.current=false;if(job.current)void editorApi.cancelSilenceAnalysis(job.current).catch(console.error);};}, []);
   useEffect(() => {
     if (report?.state !== "running") return;
@@ -50,7 +53,7 @@ export function SilenceCutDialog({ asset, projectId, revision, rate, onClose, on
     };void poll();return()=>{disposed=true;clearTimeout(timer);};
   }, [report?.jobId, report?.state]);
   const analyze=async()=>{
-    setStarting(true);setError(null);setReport(null);setSelected(new Set());setReviewFrame(0);setActiveCut(null);
+    setStarting(true);setError(null);setReport(null);setSelected(new Set());setCutFilter("all");setReviewFrame(0);setActiveCut(null);
     try{const next=await editorApi.startSilenceAnalysis(asset.asset_id,config);if(!alive.current){await editorApi.cancelSilenceAnalysis(next.jobId);return;}job.current=next.jobId;setReport(next);}
     catch(e){if(alive.current)setError(String(e));}finally{if(alive.current)setStarting(false);}
   };
@@ -87,8 +90,13 @@ export function SilenceCutDialog({ asset, projectId, revision, rate, onClose, on
       <button type="button" className="btn-action" disabled={busy||!!stale||!!changed||activeCut===null||activeCut===0} onClick={()=>locate(activeCut!-1)}>Previous proposal</button>{" "}
       <button type="button" className="btn-action" disabled={busy||!!stale||!!changed||!report.analysis.cuts.length||activeCut===report.analysis.cuts.length-1} onClick={()=>locate(activeCut===null?0:activeCut+1)}>Next proposal</button>
       <button type="button" className="btn-action" disabled={busy || !report.analysis.cuts.length} onClick={()=>setSelected(new Set(report.analysis!.cuts.map((_,i)=>i)))}>Select all cuts</button>{" "}
-      <button type="button" className="btn-action" disabled={busy || !selected.size} onClick={()=>setSelected(new Set())}>Clear selected cuts</button>
-      <ul>{report.analysis.cuts.map((cut,i)=><li key={i} id={`silence-cut-${i}`} aria-current={activeCut===i?"true":undefined}><label><input type="checkbox" aria-label={`Remove silence interval ${i+1}`} checked={selected.has(i)} disabled={busy} onChange={e=>setSelected(current=>{const next=new Set(current);if(e.target.checked)next.add(i);else next.delete(i);return next;})}/><strong>{selected.has(i)?"Cut":"Keep"}</strong>{" · "}{(cut.startMicros/1e6).toFixed(2)}–{(cut.endMicros/1e6).toFixed(2)} s · {((cut.endMicros-cut.startMicros)/1e6).toFixed(2)} s proposed</label>{" "}<button type="button" className="btn-action" aria-label={`Review silence interval ${i+1}`} disabled={busy||!!stale||!!changed} onClick={()=>locate(i)}>Locate</button>{activeCut===i&&<span> · Reviewing</span>}</li>)}</ul>
+      <button type="button" className="btn-action" disabled={busy || !selected.size} onClick={()=>setSelected(new Set())}>Clear selected cuts</button>{" "}
+      <button type="button" className="btn-action" disabled={busy || !report.analysis.cuts.length} onClick={()=>setSelected(current=>new Set(report.analysis!.cuts.map((_,i)=>i).filter(i=>!current.has(i))))}>Invert cut selection</button>
+      <label>Show proposals <select ref={cutFilterRef} aria-label="Filter silence proposals" value={cutFilter} onChange={e=>setCutFilter(e.target.value as typeof cutFilter)}><option value="all">All ({report.analysis.cuts.length})</option><option value="cut">Cut ({selected.size})</option><option value="keep">Keep ({report.analysis.cuts.length - selected.size})</option></select></label>
+      {cutFilter !== "all" && <p>Bulk selection and previous/next review cover all proposals, including hidden ones.</p>}
+      {activeCut !== null && cutFilter !== "all" && selected.has(activeCut) !== (cutFilter === "cut") && <p role="status">Reviewing proposal {activeCut + 1} is hidden by the current filter. <button type="button" onClick={()=>setCutFilter("all")}>Show reviewing proposal</button></p>}
+      {cutFilter !== "all" && visibleCutCount === 0 && <p role="status">No {cutFilter === "cut" ? "Cut" : "Keep"} proposals. <button type="button" onClick={()=>setCutFilter("all")}>Show all proposals</button></p>}
+      <ul>{report.analysis.cuts.map((cut,i)=>({cut,i})).filter(({i})=>cutFilter === "all" || selected.has(i) === (cutFilter === "cut")).map(({cut,i})=><li key={i} id={`silence-cut-${i}`} aria-current={activeCut===i?"true":undefined}><label><input type="checkbox" aria-label={`Remove silence interval ${i+1}`} checked={selected.has(i)} disabled={busy} onChange={e=>{const checked=e.currentTarget.checked;if(cutFilter !== "all" && checked !== (cutFilter === "cut")) cutFilterRef.current?.focus();setSelected(current=>{const next=new Set(current);if(checked)next.add(i);else next.delete(i);return next;});}}/><strong>{selected.has(i)?"Cut":"Keep"}</strong>{" · "}{(cut.startMicros/1e6).toFixed(2)}–{(cut.endMicros/1e6).toFixed(2)} s · {((cut.endMicros-cut.startMicros)/1e6).toFixed(2)} s proposed</label>{" "}<button type="button" className="btn-action" aria-label={`Review silence interval ${i+1}`} disabled={busy||!!stale||!!changed} onClick={()=>locate(i)}>Locate</button>{activeCut===i&&<span> · Reviewing</span>}</li>)}</ul>
       {draft && <div aria-label="Kept source ranges"><strong>Kept source ranges after frame alignment</strong>{draft.ranges.length ? <ol>{draft.ranges.map((range,i)=><li key={i}>{range.sourceInSeconds.toFixed(2)}–{range.sourceOutSeconds.toFixed(2)} s · {(range.sourceOutSeconds-range.sourceInSeconds).toFixed(2)} s</li>)}</ol> : <p>No source frames retained.</p>}</div>}
       {draft?.ranges.length===0&&<p role="alert">These cuts remove the entire source. Deselect a cut to retain content.</p>}
       <button className="btn-primary" disabled={busy||running||!!stale||!!changed||!draft?.removedFrames||!draft.ranges.length} onClick={async()=>{setBusy(true);setError(null);try{await onApply(report,new Set(selected));onClose();}catch(e){setError(String(e));}finally{setBusy(false);}}}>{busy?"Applying…":"Create silence rough cut"}</button>

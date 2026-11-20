@@ -351,7 +351,8 @@ fn mock_tauri_ipc_silence_job_scope_staleness_apply_history_and_persistence() {
     if let Ok(report_path) = std::env::var("TINIX_MULTI_CUT_REPORT") {
         let report: serde_json::Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
         assert_eq!(report["status"], "passed");
-        let operations = report["multiOperations"].as_array().unwrap();
+        let long_selection = std::env::var_os("TINIX_LONG_CUT_SELECTION").is_some();
+        let operations = report[if long_selection { "longOperations" } else { "multiOperations" }].as_array().unwrap();
         assert_eq!(operations.len(), 4);
         let baseline = invoke("project_get_current", json!({})).unwrap();
         invoke("project_execute_command", json!({"envelope":{"schema_version":baseline["schema_version"],"project_id":baseline["project_id"],"base_revision":baseline["revision"],"transaction_id":"multi-silence-cut","operations":operations}})).unwrap();
@@ -360,6 +361,15 @@ fn mock_tauri_ipc_silence_job_scope_staleness_apply_history_and_persistence() {
         assert_eq!(applied["tracks"][0], before["tracks"][0]);
         let items = applied["tracks"][2]["items"].as_array().unwrap();
         assert_eq!(items.len(), 3);
+        if long_selection {
+            for operation in &operations[1..] {
+                let payload = &operation["operation"]["payload"];
+                let item = items.iter().find(|item| item["item_id"] == payload["item_id"]).unwrap();
+                assert_eq!(item["timeline_range"]["start"], payload["timeline_start"]);
+                assert_eq!(item["timeline_range"]["duration"], payload["duration"]);
+                assert_eq!(item["source_range"]["start"], payload["source_start"]);
+            }
+        }
         invoke("project_undo", json!({})).unwrap();
         assert_eq!(invoke("project_get_current", json!({})).unwrap()["tracks"], baseline["tracks"]);
         invoke("project_redo", json!({})).unwrap();
@@ -391,6 +401,35 @@ fn mock_tauri_ipc_silence_job_scope_staleness_apply_history_and_persistence() {
         invoke("project_save", json!({"path":saved})).unwrap();
         assert_eq!(invoke("project_open", json!({"path":saved})).unwrap()["tracks"], applied["tracks"]);
         println!("TRANSCRIPT_SELECTION_UI_COMMAND_HISTORY_PERSISTENCE_PASS");
+    }
+    if let Ok(report_path) = std::env::var("TINIX_TRANSCRIPT_REVEAL_REPORT") {
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        assert_eq!(report["ranges"], json!([{"sourceInSeconds":0,"sourceOutSeconds":1},{"sourceInSeconds":2,"sourceOutSeconds":3}]));
+        assert_eq!(report["labels"], json!(["voice.wav · 0.00–1.00 s", "voice.wav · 2.00–3.00 s"]));
+        assert!(report["hiddenSummary"].as_str().unwrap().contains("source: voice.wav"));
+        assert_eq!(report["assetId"], "source");
+        let operations = report["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 3);
+        let baseline = invoke("project_get_current", json!({})).unwrap();
+        invoke("project_execute_command", json!({"envelope":{"schema_version":baseline["schema_version"],"project_id":baseline["project_id"],"base_revision":baseline["revision"],"transaction_id":"transcript-revealed","operations":operations}})).unwrap();
+        let applied = invoke("project_get_current", json!({})).unwrap();
+        let track = applied["tracks"].as_array().unwrap().iter().find(|track| track["track_id"] == "trk_transcript_cut_42").unwrap();
+        let items = track["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        for operation in &operations[1..] {
+            let payload = &operation["operation"]["payload"];
+            let item = items.iter().find(|item| item["item_id"] == payload["item_id"]).unwrap();
+            assert_eq!(item["source_range"]["start"], payload["source_start"]);
+            assert_eq!(item["timeline_range"]["start"], payload["timeline_start"]);
+            assert_eq!(item["timeline_range"]["duration"], payload["duration"]);
+        }
+        invoke("project_undo", json!({})).unwrap();
+        assert_eq!(invoke("project_get_current", json!({})).unwrap()["tracks"], baseline["tracks"]);
+        invoke("project_redo", json!({})).unwrap();
+        assert_eq!(invoke("project_get_current", json!({})).unwrap()["tracks"], applied["tracks"]);
+        invoke("project_save", json!({"path":saved})).unwrap();
+        assert_eq!(invoke("project_open", json!({"path":saved})).unwrap()["tracks"], applied["tracks"]);
+        println!("TRANSCRIPT_REVEAL_UI_COMMAND_HISTORY_PERSISTENCE_PASS");
     }
     fs::remove_dir_all(dir).unwrap();
 }

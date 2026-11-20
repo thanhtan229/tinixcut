@@ -11,9 +11,13 @@ const run = (command, args, env = process.env) => {
 };
 run(process.execPath, ['scripts/qualification/background/headless-silence.mjs']);
 const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-if (statSync(reportPath).mtimeMs < started - 1000 || Date.parse(report.startedAt) < started - 1000 || report.status !== 'passed' || report.multiOperations?.length !== 4) throw new Error('Missing, stale or incomplete review evidence');
-const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', 'scripts/qualification/background/run-mock-ipc.ps1', '-TestFilter', 'silence'], { ...process.env, TINIX_MULTI_CUT_REPORT: reportPath });
+if (statSync(reportPath).mtimeMs < started - 1000 || Date.parse(report.startedAt) < started - 1000 || report.status !== 'passed' || report.multiOperations?.length !== 4 || report.longOperations?.length !== 4) throw new Error('Missing, stale or incomplete review evidence');
+const args = ['-NoProfile', '-NonInteractive', '-File', 'scripts/qualification/background/run-mock-ipc.ps1', '-TestFilter', 'silence'];
+const baseEnv = { ...process.env, TINIX_MULTI_CUT_REPORT: reportPath };
+delete baseEnv.TINIX_LONG_CUT_SELECTION;
+const standard = run('powershell.exe', args, baseEnv);
+const output = run('powershell.exe', args, { ...baseEnv, TINIX_LONG_CUT_SELECTION: '1' });
 writeFileSync('artifacts/background/silence-chain-native.log', output);
-if (!output.includes('MULTI_CUT_UI_COMMAND_HISTORY_PERSISTENCE_PASS')) throw new Error('Multi-cut history verification did not run');
+if (!standard.includes('MULTI_CUT_UI_COMMAND_HISTORY_PERSISTENCE_PASS') || !output.includes('MULTI_CUT_UI_COMMAND_HISTORY_PERSISTENCE_PASS')) throw new Error('Both multi-cut history verifications must run');
 writeFileSync('artifacts/background/silence-chain-latest.json', JSON.stringify({ status: 'passed', startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(), review: reportPath, nativeLog: resolve('artifacts/background/silence-chain-native.log'), scope: 'Muted headless review and separate MockRuntime Command Service; not installed WebView' }, null, 2));
 console.log('PASS: silence review to Command Service history and persistence');

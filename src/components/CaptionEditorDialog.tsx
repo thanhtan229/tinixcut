@@ -197,6 +197,7 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
             <option value="invalid">Invalid timing</option>
           </select>
           <input aria-label="Search captions" placeholder="Find caption text" value={query} onChange={(event) => setQuery(event.currentTarget.value)} style={{ flex: "1 1 180px" }} />
+          {query && <button type="button" onClick={() => setQuery("")}>Clear caption search</button>}
           {(query !== "" || trackFilter !== "" || timingFilter !== "all") && <button type="button" onClick={() => {
             setQuery(""); setTrackFilter(""); setTimingFilter("all"); setFocusedCaptionId(null); setMergeSelection([]);
           }} title="Clear search, track and timing filters; keep pending edits">Clear filters</button>}
@@ -216,7 +217,9 @@ export const CaptionEditorDialog: React.FC<CaptionEditorDialogProps> = ({
           <button type="button" onClick={() => { setConfirmClose(false); resetDrafts(incomingProject); onClose(); }}>Discard and close</button>
         </div>}
         <p style={{fontSize:12,color:"var(--text-muted)"}}>{filtered.length} shown · Replace affects {trackFilter ? "the selected track" : "all tracks"}, including captions hidden by search or timing filters. Apply includes pending edits from every track.</p>
+        {pendingIds.size > 0 && <p aria-live="polite" style={{fontSize:12,color:"var(--text-muted)"}}>{pendingIds.size} {pendingIds.size === 1 ? "caption has" : "captions have"} pending edits across all tracks.</p>}
         {hiddenPendingCount > 0 && <p aria-live="polite" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>{hiddenPendingCount} {hiddenPendingCount === 1 ? "caption has" : "captions have"} pending edits hidden by filters.</p>}
+        {hiddenPendingCount > 0 && <button type="button" onClick={() => { setQuery(""); setTrackFilter(""); setTimingFilter("edited"); setFocusedCaptionId(null); setMergeSelection([]); }}>Show all pending edits</button>}
         <p style={{fontSize:12,color:"var(--text-muted)"}}>Timing notices compare captions within each track, including rows hidden by search and valid pending edits. Gaps can be intentional.</p>
         {invalidTimingTracks.length > 0 && <p role="status" style={{fontSize:12,color:"var(--text-warning, #f59e0b)"}}>Timing notices unavailable for {invalidTimingTracks.join(", ")}: enter valid start and duration frames for every caption on that track. Select Invalid timing to find invalid entries.</p>}
 

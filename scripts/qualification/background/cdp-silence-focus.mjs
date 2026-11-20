@@ -1,0 +1,60 @@
+import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import assert from 'node:assert/strict';
+
+const wav = process.env.TINIXCUT_CDP_PROJECT + '.silence-focus.wav';
+execFileSync(resolve('src-tauri/resources/bin/ffmpeg.exe'), ['-v','error','-y','-f','lavfi','-i',String.raw`aevalsrc=if(lt(mod(t\,2)\,1)\,0.2*sin(2*PI*440*t)\,0):s=16000:d=6`,'-c:a','pcm_s16le',wav], { windowsHide:true, timeout:30000 });
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9445', { timeout:10000 });
+const report = { scope:'Silence filter keyboard focus and Command Service history in isolated WebView', steps:[] };
+const timer = setTimeout(() => process.exit(124), 90000);
+try {
+  const page = browser.contexts().flatMap(c => c.pages()).find(p => /tauri|localhost/.test(p.url()));
+  const invoke = (command,args={}) => page.evaluate(({command,args}) => window.__TAURI_INTERNALS__.invoke(command,args), {command,args});
+  const get = () => invoke('project_get_current');
+  await invoke('media_import',{filePath:wav});
+  await page.reload();
+  const later = page.getByRole('button',{name:'Later',exact:true});
+  try { await later.waitFor({timeout:2000}); await later.click(); } catch (e) { if (e.name !== 'TimeoutError') throw e; }
+  await page.getByRole('button',{name:'Silence cuts…',exact:true}).click();
+  const dialog = page.getByRole('dialog',{name:'Audio silence cuts'});
+  await dialog.getByLabel('Minimum silence ms').fill('400');
+  await dialog.getByLabel('Silence padding ms').fill('100');
+  await dialog.getByRole('button',{name:'Analyze source audio'}).click();
+  const first = dialog.getByLabel('Remove silence interval 1',{exact:true});
+  await first.waitFor({timeout:30000});
+  assert.ok(await dialog.locator('input[aria-label^="Remove silence interval"]').count() >= 2);
+  const filter = dialog.getByLabel('Filter silence proposals');
+  await filter.selectOption('cut');
+  await first.focus(); await first.press('Space');
+  assert.equal(await filter.evaluate(e => document.activeElement === e),true,'Cut to Keep returns focus to filter');
+  assert.equal(await first.count(),0);
+  await filter.selectOption('keep');
+  await first.focus(); await first.press('Space');
+  assert.equal(await filter.evaluate(e => document.activeElement === e),true,'Keep to Cut returns focus to filter');
+  assert.equal(await first.count(),0);
+  await filter.selectOption('cut');
+  const second = dialog.getByLabel('Remove silence interval 2',{exact:true});
+  await second.focus(); await second.press('Space');
+  assert.equal(await filter.evaluate(e => document.activeElement === e),true);
+  await filter.selectOption('all');
+  assert.equal(await first.isChecked(),true); assert.equal(await second.isChecked(),false);
+  const expected = await dialog.getByLabel('Kept source ranges').locator('li').allTextContents();
+  assert.deepEqual(expected,['0.00–1.10 s · 1.10 s','1.90–5.10 s · 3.20 s','5.90–6.00 s · 0.10 s']);
+  const before = await get();
+  await dialog.getByRole('button',{name:'Create silence rough cut'}).click();
+  await dialog.waitFor({state:'detached',timeout:30000});
+  const poll = async predicate => { for(let n=0;n<100;n++){const p=await get();if(predicate(p))return p;await new Promise(r=>setTimeout(r,100));}throw Error('project state timeout'); };
+  const applied = await poll(p=>p.tracks.length>before.tracks.length);
+  const added = applied.tracks.filter(t=>!before.tracks.some(b=>b.track_id===t.track_id));
+  assert.equal(added.length,1); assert.equal(added[0].items.length,expected.length);
+  assert.deepEqual(added[0].items.map(i=>[i.source_range.start.value,i.source_range.duration.value,i.timeline_range.start.value]),[[0,33,0],[57,96,33],[177,3,129]]);
+  await page.getByRole('button',{name:/Undo/}).first().click();
+  const undone = await poll(p=>p.tracks.length===before.tracks.length); assert.deepEqual(undone.tracks,before.tracks);
+  await page.getByRole('button',{name:/Redo/}).first().click();
+  const redone = await poll(p=>p.tracks.length===applied.tracks.length); assert.deepEqual(redone.tracks,applied.tracks);
+  report.steps.push({focus:'Cut to Keep and Keep to Cut return to filter', selected:'first selected, second kept', keptRanges:expected, createdItems:added[0].items, history:'Apply/Undo/Redo'});
+  report.status='passed'; console.log('PASS: silence filter keyboard focus and history');
+} catch(e) { report.status='failed'; report.error=String(e); throw e; }
+finally { clearTimeout(timer); writeFileSync('artifacts/background/cdp-silence-focus.json',JSON.stringify(report,null,2)); await browser.close(); }

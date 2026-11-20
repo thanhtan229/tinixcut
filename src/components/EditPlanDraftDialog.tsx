@@ -145,6 +145,7 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
   })) ?? [];
   const plannedClips = countPlannedVideoClips(planOperations);
   const plannedVideos = planOperations.flatMap(({operation})=>operation.type === "ClipCreate" && operation.payload.kind === "Video" ? [operation.payload] : []);
+  const plannedAudio = planOperations.flatMap(({operation})=>operation.type === "ClipCreate" && operation.payload.kind === "Audio" ? [operation.payload] : []);
   const evaluatedCount = receipt?.validation.diff?.operationsEvaluated ?? planOperations.length;
 
   return (
@@ -225,9 +226,9 @@ export function EditPlanDraftDialog({ isOpen, project, offlineMedia, onClose, on
               <h3>Review changes</h3>
               <p>{plannedClips} video clips · {evaluatedCount} validated operations</p>
               <h4>Planned video order</h4>
-              <ol>{plannedVideos.map((clip,index)=><li key={clip.item_id ?? index}>{clip.name} · start {formatDraftTime(clip.timeline_start)} · duration {formatDraftTime(clip.duration)}</li>)}</ol>
+              <ol>{plannedVideos.map((clip,index)=><li key={clip.item_id ?? index}>{clip.name} · timeline start {formatDraftTime(clip.timeline_start)} · duration {formatDraftTime(clip.duration)}{clip.source_start && <> · source start {formatDraftTime(clip.source_start)}</>}</li>)}</ol>
               <p className="draft-muted">Seconds are rounded; frame values and their rates are exact. Check the plan before applying.</p>
-              {receipt.plan.referencedMediaIds.length > plannedClips && <p>Includes selected audio bed.</p>}
+              {plannedAudio.length > 0 && <><p>Includes audio clips.</p><h4>Planned audio</h4><ol aria-label="Planned audio clips">{plannedAudio.map((clip,index)=><li key={clip.item_id ?? index}>{clip.name} · timeline start {formatDraftTime(clip.timeline_start)} · duration {formatDraftTime(clip.duration)}{clip.source_start && <> · source start {formatDraftTime(clip.source_start)}</>}</li>)}</ol></>}
               {planOperations.filter((operation) => operation.operation.type === "ClipTextSet").length > 0 && <p>{planOperations.filter((operation) => operation.operation.type === "ClipTextSet").length} subtitle cues included.</p>}
               <p className="draft-muted">Provider: {receipt.provider}. Nothing has changed in the project yet.</p>
               <h4>Assumptions</h4>

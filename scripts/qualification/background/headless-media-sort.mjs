@@ -63,5 +63,13 @@ try {
  const sourcePath=page.getByLabel('Source path for interview.mp4');assert.equal(await sourcePath.textContent(),'D:\\Day Two\\interview.mp4');assert.equal(await sourcePath.getAttribute('title'),'D:\\Day Two\\interview.mp4');
  await page.getByLabel('Filter media type').selectOption('Video');assert.equal(await page.getByLabel('Media results').textContent(),'0 of 120 sources shown');
  await page.getByRole('button',{name:'Clear filters',exact:true}).click();assert.equal(await page.getByLabel('Media results').textContent(),'120 of 120 sources shown');
+ await page.goto(`http://127.0.0.1:${server.address().port}/scripts/qualification/background/headless-media-sort.html?missing-duration`);
+ await page.getByLabel('Missing audio/video duration').check();assert.equal(await page.getByLabel('Media results').textContent(),'2 of 120 sources shown');
+ rows=await names();assert.match(rows[0],/Source 001/);assert.match(rows[1],/Source 003/);
+ assert.doesNotMatch(rows[1],/Infinity|NaN/);
+ await page.getByLabel('Filter media type').selectOption('Audio');assert.equal(await page.getByLabel('Media results').textContent(),'1 of 120 sources shown');
+ await page.getByLabel('Search media').fill('003');assert.equal(await page.getByLabel('Media results').textContent(),'0 of 120 sources shown');
+ await page.getByRole('button',{name:'Clear media search'}).click();assert.equal(await page.getByLabel('Search media').inputValue(),'');assert.equal(await page.getByLabel('Filter media type').inputValue(),'Audio');assert.equal(await page.getByLabel('Missing audio/video duration').isChecked(),true);assert.equal(await page.getByLabel('Media results').textContent(),'1 of 120 sources shown');
+ await page.getByRole('button',{name:'Clear filters',exact:true}).click();assert.equal(await page.getByLabel('Missing audio/video duration').isChecked(),false);assert.equal(await page.getByLabel('Media results').textContent(),'120 of 120 sources shown');
  console.log('PASS: mixed library sort, filters, search and bidirectional locate');
 } finally {if(browser)await browser.close();if(server)await new Promise(r=>server.close(r));rmSync(site,{recursive:true,force:true});}
